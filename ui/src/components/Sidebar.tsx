@@ -55,7 +55,7 @@ export function Sidebar() {
           {sessions.map(s=>(
             <button key={s.id} onClick={()=>setActiveSession(s.id)} className={cn('w-full text-left rounded-xl px-3 py-2.5 border text-sm cursor-pointer transition-colors', s.id===activeSession ? 'bg-white/[0.06] border-white/10 text-white' : 'border-transparent text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-300')}>
               <div className="font-medium truncate">{s.title}</div>
-              <div className="text-xs text-zinc-500 truncate">{s.id} · 12 mensajes · FTS</div>
+              <div className="text-xs text-zinc-500 truncate">{s.project || s.source || 'local'} · {s.id} · FTS</div>
             </button>
           ))}
         </div>

@@ -118,3 +118,17 @@ export async function execCmd(command: string, cwd = "./workspace", timeout = 15
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export type SessionInfo = { id: string; project?: string; parent_id?: string | null; summary?: string; compact_count?: number; total_tokens?: number; created_at?: string; last_active?: string }
+
+export async function sessionsApi(): Promise<{ sessions: SessionInfo[] }> {
+  const res = await apiFetch("/api/sessions");
+  if (!res.ok) throw new Error(`sessions ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function createSessionApi(project = "default"): Promise<SessionInfo> {
+  const res = await apiFetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project }) });
+  if (!res.ok) throw new Error(`sessions POST ${res.status}: ${await res.text()}`);
+  return res.json();
+}

@@ -17,14 +17,16 @@ const viewLabels: Record<string, string> = {
 }
 
 export default function App() {
-  const { view, setView, activeSession, refreshProviders } = useAppStore()
+  const { view, setView, activeSession, refreshProviders, loadSessions } = useAppStore()
   const [search, setSearch] = useState('')
   const [showNotifications, setShowNotifications] = useState(false)
 
   useEffect(() => {
     // Kick off dynamic provider detection at app start
     refreshProviders()
-  }, [refreshProviders])
+    // Hidratar sesiones reales del server (SessionLog WAL+FTS)
+    loadSessions()
+  }, [refreshProviders, loadSessions])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { providersApi } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
@@ -7,6 +7,8 @@ export type ModelOption = { id: string; provider: string; label: string; ctx: nu
 type View = 'chat' | 'graph' | 'editor' | 'terminal'
 
 export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string }
+
+export type SessionMeta = { id: string; title: string; project?: string; summary?: string; source?: 'server' | 'local' }
 
 type FileTab = { path: string; content: string; dirty: boolean; language: string }
 
@@ -24,9 +26,10 @@ type AppState = {
   setModels: (m: ModelOption[]) => void
   setProviderHealth: (h: Record<string, ProviderStatus>) => void
   // chat
-  sessions: { id: string; title: string }[]
+  sessions: SessionMeta[]
   activeSession: string
   setActiveSession: (id: string) => void
+  loadSessions: () => Promise<void>
   createSession: () => void
   messages: ChatMessage[]
   addMessage: (m: ChatMessage) => void
@@ -81,13 +84,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   setModels: (models: ModelOption[]) => set({ models }),
   setProviderHealth: (providerHealth: Record<string, ProviderStatus>) => set({ providerHealth }),
-  sessions: [] as { id: string; title: string }[],
+  sessions: [] as SessionMeta[],
   activeSession: '',
   setActiveSession: (activeSession) => set({ activeSession }),
-  createSession: () => set((s) => {
-    const id = `s${Date.now()}`
-    return { sessions: [...s.sessions, { id, title: `Sesión ${s.sessions.length + 1}` }], activeSession: id }
-  }),
+  loadSessions: async () => {
+    try {
+      const data = await sessionsApi()
+      const sessions: SessionMeta[] = (data.sessions ?? []).map((s, i) => ({
+        id: s.id,
+        title: s.summary || s.project || `Sesión ${i + 1}`,
+        project: s.project,
+        summary: s.summary,
+        source: 'server',
+      }))
+      set({ sessions, activeSession: get().activeSession || sessions[0]?.id || '' })
+    } catch {
+      // server caido — conservar sesiones locales cargadas
+    }
+  },
+  createSession: () => {
+    void (async () => {
+      try {
+        const s = await createSessionApi()
+        set((st) => ({
+          sessions: [...st.sessions, { id: s.id, title: s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
+          activeSession: s.id,
+        }))
+      } catch {
+        // fallback local sin server
+        set((st) => {
+          const id = `s${Date.now()}`
+          return { sessions: [...st.sessions, { id, title: `Sesión ${st.sessions.length + 1}`, source: 'local' as const }], activeSession: id }
+        })
+      }
+    })()
+  },
   messages: [] as ChatMessage[],
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   tabs: [] as FileTab[],
