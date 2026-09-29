@@ -22,9 +22,9 @@ class OllamaClient:
     Modo dual: si el endpoint es OpenAI-compatible (llama.cpp /v1), usa ese formato.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8080"):
-        # Ya no usamos Ollama: por defecto llama.cpp (OpenAI-compatible). Si el env
-        # apunta a un endpoint (llama.cpp o Ollama), se respeta (cliente dual-mode).
+    def __init__(self, base_url: str = "http://localhost:11434"):
+        # Por defecto Ollama local (llama.cpp descartado 2026-09-28). Si el env
+        # apunta a un endpoint (OLLAMA_HOST / OLLAMA_URL / LLAMACPP_URL), se respeta.
         import os
         _env = os.environ.get("LLAMACPP_URL", os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_URL", "")))
         if _env:

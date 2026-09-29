@@ -110,12 +110,13 @@ async def _startup():
         logger.info(f"SessionLog ready: {_state['brain'].get('brain_path')}")
     except Exception as e:
         logger.warning(f"SessionLog startup warning: {e}")
-    # Auto-arranque llama.cpp autocontenido (vendor/ + models/ del proyecto)
+    # llama.cpp DESCARTADO (2026-09-28): autostart solo si config lo pide explicito.
+    # Sin bloque llamacpp en config -> ni se intenta.
     try:
         import os as _os
         _os.environ.setdefault("NEXUS_ROOT", str(_PROJECT_ROOT))
         lc = (_state["config"].get("providers", {}) or {}).get("llamacpp", {}) or {}
-        if lc.get("autostart", True):
+        if lc and lc.get("autostart", False):
             from src.providers import llama_manager as _lm
             res = _lm.ensure_residents()
             logger.info(f"llama.cpp residentes: {res}")
@@ -176,7 +177,7 @@ def _build_router_from_config(cfg: dict):
             _vram = 12
     router = ProviderRouter(
         vram_budget_gb=_vram,
-        fallback_order=cfg.get("router", {}).get("fallback_order", ["llamacpp", "ollama", "cloud"]) if isinstance(cfg, dict) else ["llamacpp", "ollama", "cloud"],
+        fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]) if isinstance(cfg, dict) else ["ollama", "cloud"],
     )
     if "ollama" in prov_cfg:
         oc = prov_cfg["ollama"]
@@ -1223,7 +1224,7 @@ async def chat(request: Request):
                 _vram2 = 12
         router = ProviderRouter(
             vram_budget_gb=_vram2,
-            fallback_order=cfg.get("router", {}).get("fallback_order", ["llamacpp", "ollama", "cloud"]),
+            fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]),
         )
         if "ollama" in prov_cfg:
             oc = prov_cfg["ollama"]
@@ -1396,7 +1397,7 @@ async def chat(request: Request):
         logger.warning(f"chat fallback (echo): {e}", exc_info=True)
         # Echo fallback — still persist so UI works even without models
         from src.core.session_log import Message
-        fallback = f"[offline echo] Recibido: {message}\n\n(Providers no disponibles o error: {e}. El arnés está en modo offline. Configura Ollama :11434 o llama.cpp :8080 y reintenta.)"
+        fallback = f"[offline echo] Recibido: {message}\n\n(Providers no disponibles o error: {e}. El arnés está en modo offline. Configura Ollama :11434 y reintenta.)"
         slog.append(session_id, Message(role="assistant", content=fallback))
         return {"session_id": session_id, "reply": fallback, "success": True, "mode": "echo_fallback", "error": str(e)}
 

@@ -58,38 +58,29 @@ providers:
   ollama:
     base_url: http://localhost:11434
     timeout_s: 300
-    models:
-    - qwen2.5-coder:7b
-    - deepseek-r1:8b
-    - nomic-embed-text
-  llamacpp:
-    base_url: http://localhost:8080
-    fallback_url: http://localhost:8000
-    timeout_s: 300
-    # Autocontenido: vendor/llama.cpp + models/ dentro del proyecto, auto-arranque al iniciar.
-    autostart: true
-    vendor_dir: ./vendor/llama.cpp
-    models_file: ./config/models.yaml
-    embed_url: http://localhost:8001
+    # Embeddings (OpenAI-compat de Ollama): embed() postea a {base}/v1/embeddings
+    embed_url: http://localhost:11434
     models:
     - nexus-director-v6
     - qwen3.5-9b
     - qwen3-vl-8b
-    - qwen3-vl-4b
+    - qwen2.5-coder:7b
+    - deepseek-r1:8b
     - janus-pro-7b
-    - deepseek-r1-8b
-    - omnicoder-2-9b
-    - nemotron-3-nano-4b
-    ctx: 40960
+    - nemotron-3-nano:4b
+    - gemma4
+    - nomic-embed-text
+  # NOTA: llama.cpp DESCARTADO (2026-09-28) — vendor/ queda sin uso, todo via Ollama.
+  # El proveedor llamacpp se elimino; si lo re-agregas, autostart es opt-in explicito.
   cloud:
     base_url: https://opencode.ai/zen
     api_key: ${OPENCODE_API_KEY}
     auth_style: bearer
     auto_discover: true  # detecta gratis vivos (/v1/models → *free) cada 5 min, persiste en data/cloud_free_cache.json
     models:
-    - nemotron-3-ultra-free
-    - nemotron-3.5-lightning-free
-    - ling-3.0-flash-fin-free
+    # Solo space-bunny-free responde 200 (2026-09-28); nemotron/mimo/muse/jev/ling/longcat
+    # estan gated con 403 por plan en Zen. auto_discover + probe filtra 403.
+    - space-bunny-free
     enabled: true
 router:
   strategy: thompson
@@ -97,7 +88,6 @@ router:
   vram_budget_gb: 0
   prefer_speed: false
   fallback_order:
-  - llamacpp
   - ollama
   - cloud
 hooks:

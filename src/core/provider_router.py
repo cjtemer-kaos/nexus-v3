@@ -14,9 +14,11 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Any
 
 from .provider_base import BaseProvider, LLMMessage, LLMResponse
@@ -126,7 +128,7 @@ class ProviderRouter:
     """Tier-aware router with fallback and auto-detect.
 
     Example:
-        router = ProviderRouter(vram_budget_gb=12, fallback_order=["llamacpp","ollama","cloud"])
+        router = ProviderRouter(vram_budget_gb=12, fallback_order=["ollama","cloud"])
         router.register_provider("ollama", OllamaProvider())
         router.register_model(ModelRoute(id="qwen2.5-coder:7b", provider_name="ollama", tier=3))
         routed = router.resolve(task_hint="coding")
@@ -137,7 +139,7 @@ class ProviderRouter:
         self._providers: dict[str, BaseProvider] = {}
         self._models: list[ModelRoute] = []
         self.vram_budget_gb = vram_budget_gb
-        self.fallback_order = fallback_order or ["llamacpp", "ollama", "cloud"]
+        self.fallback_order = fallback_order or ["ollama", "cloud"]
         self.strategy = strategy  # thompson|vram|tier|manual
         # Thompson stats stub: {provider_name: {"success": int, "fail": int}}
         self._stats: dict[str, dict[str, int]] = {}
@@ -422,6 +424,18 @@ class ProviderRouter:
                     free = await p.list_free_models(force=False, verify=False)  # type: ignore[attr-defined]
                 except Exception:
                     free = []
+            if free and not verify:
+                # Sin verify: filtrar por la última lista verified en disco (la escribe
+                # list_free_models(verify=True) en boot). Evita registrar modelos gated
+                # con 403 (Zen: solo space-bunny free responde 200, 2026-09-28).
+                try:
+                    _cf = Path("data/cloud_free_cache.json")
+                    if _cf.exists():
+                        _v = json.loads(_cf.read_text()).get("verified")
+                        if isinstance(_v, list) and _v:
+                            free = [m for m in free if m in _v]
+                except Exception:
+                    pass
             for mid in free:
                 if not any(m.id == mid and m.provider_name == name for m in self._models):
                     tier = MODEL_TIER_OVERRIDES.get(mid, 4)

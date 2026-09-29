@@ -106,7 +106,7 @@ async def _probe_providers():
 
     cfg = load_config()
     prov_cfg = cfg.get("providers", {})
-    router = ProviderRouter(vram_budget_gb=cfg.get("router", {}).get("vram_budget_gb", 12), fallback_order=cfg.get("router", {}).get("fallback_order", ["llamacpp","ollama","cloud"]))
+    router = ProviderRouter(vram_budget_gb=cfg.get("router", {}).get("vram_budget_gb", 12), fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama","cloud"]))
     if "ollama" in prov_cfg:
         oc = prov_cfg["ollama"]
         router.register_provider("ollama", OllamaProvider(base_url=oc.get("base_url", "http://localhost:11434"), timeout_s=oc.get("timeout_s", 30)))

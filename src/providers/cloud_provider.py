@@ -151,6 +151,10 @@ class CloudProvider(BaseProvider):
                             elif r.status_code in (429, 500, 502, 503):
                                 # transitorio: existe, solo saturado — NO filtrar
                                 res = {"ok": True, "status": r.status_code, "error": f"transient {r.status_code}: {r.text[:120]}"}
+                            elif r.status_code == 403:
+                                # gating por modelo/plan de Zen: persistente (verificado 2026-09-28:
+                                # nemotron/mimo/muse/jev/ling/longcat dan 403 fijo; space-bunny 200)
+                                res = {"ok": False, "status": 403, "error": f"forbidden (model/plan gating): {r.text[:150] or 'empty body'}"}
                             else:
                                 try:
                                     j = r.json()
@@ -192,7 +196,17 @@ class CloudProvider(BaseProvider):
                 self._free_cache_ts = now
                 try:
                     cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    cache_file.write_text(json.dumps({"ts": time.time(), "models": free_raw, "raw": free_raw}, ensure_ascii=False))
+                    # preservar verified/verified_ts si existen (el raw write NO debe pisarlos)
+                    _prev: dict = {}
+                    if cache_file.exists():
+                        try:
+                            _prev = json.loads(cache_file.read_text())
+                            if not isinstance(_prev, dict):
+                                _prev = {}
+                        except Exception:
+                            _prev = {}
+                    _prev.update({"ts": time.time(), "models": free_raw, "raw": free_raw})
+                    cache_file.write_text(json.dumps(_prev, ensure_ascii=False))
                 except Exception:
                     pass
                 logger.info(f"Zen free discovery raw: {free_raw}")
@@ -213,6 +227,14 @@ class CloudProvider(BaseProvider):
                     if dropped:
                         logger.info(f"Zen free dropped permanentes: {dropped} health={ {k:health[k] for k in dropped}}")
                     logger.info(f"Zen free verified (solo 400 filtrado): {free} / raw {sorted(health.keys())}")
+                    # persistir verified en disco para filtrar registros sin verify
+                    try:
+                        _d = json.loads(cache_file.read_text())
+                        _d["verified"] = list(free)
+                        _d["verified_ts"] = time.time()
+                        cache_file.write_text(json.dumps(_d, ensure_ascii=False))
+                    except Exception:
+                        pass
                 # NO pisar cache RAW con verified; retornar verified directo (next call sin verify vuelve a raw)
                 logger.info(f"Zen free discovery verified: {free}")
                 return list(free)

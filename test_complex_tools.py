@@ -1,7 +1,12 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Batería compleja de pruebas de herramientas — Zen (cloud) vs local (llamacpp)"""
+"""BaterÃ­a compleja de pruebas de herramientas â€” Zen (cloud) vs local (Ollama)"""
 import json, time, urllib.request, urllib.error, sys, pathlib, os
+
+# consola Windows cp1252: imprime flechas/etc de respuestas LLM sin crashear
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = "http://127.0.0.1:8765"
 PROJECT = pathlib.Path(r"D:\ias\proyectos\nexus-v3")
@@ -36,7 +41,7 @@ def pp(label, r, clip=1200):
 pp("0 health", req("GET","/api/health"))
 pp("0 providers", req("GET","/api/providers"))
 
-# 1. FS directo — registrar batería en workspace para validar roundtrip real
+# 1. FS directo â€” registrar baterÃ­a en workspace para validar roundtrip real
 uniq = str(int(time.time()))
 tests = []
 
@@ -50,15 +55,15 @@ pp("1c GET /api/fs/list workspace", req("GET","/api/fs/list?path=workspace"))
 pp("1d POST /api/exec ls", req("POST","/api/exec", {"command":"ls -la", "cwd":"workspace"}, timeout=10))
 # 1e exec python
 pp("1e POST /api/exec python sum", req("POST","/api/exec", {"command":"python -c \"print(sum(range(101)))\"", "cwd":"workspace"}, timeout=10))
-# 1f scope deny — .env
+# 1f scope deny â€” .env
 pp("1f DENY .env (expect 403)", req("GET","/api/fs/read?path=.env"))
-# 1g scope deny — traversal
+# 1g scope deny â€” traversal
 pp("1g DENY traversal ../../ (expect 403)", req("GET","/api/fs/read?path=../../etc/hosts"))
 # 1h exec destroy blocked
 pp("1h EXEC blocked rm -rf / (expect deny)", req("POST","/api/exec", {"command":"rm -rf / --no-preserve-root", "cwd":"workspace"}))
 
-# 2. Chat via Zen — force_tools, debe usar write_file/read_file/exec reales
-# Mensajes diseñados para forzar dispatch (herramientas registradas: write_file, read_file, list_dir, exec, echo)
+# 2. Chat via Zen â€” force_tools, debe usar write_file/read_file/exec reales
+# Mensajes diseÃ±ados para forzar dispatch (herramientas registradas: write_file, read_file, list_dir, exec, echo)
 
 def chat_test(label, body, expect_tool=None):
     r = req("POST","/api/chat", body, timeout=90)
@@ -69,7 +74,7 @@ def chat_test(label, body, expect_tool=None):
         steps = b.get("steps",[])
         iters = b.get("iterations",0)
         mode = b.get("mode","")
-        # verificar si usó herramienta
+        # verificar si usÃ³ herramienta
         tools_used = [s.get("tool_used") for s in steps if s.get("tool_used")]
         print(f"  -> mode={mode} iterations={iters} tools_used={tools_used}")
         if expect_tool:
@@ -88,24 +93,24 @@ def chat_test(label, body, expect_tool=None):
         tests.append((label, False))
     return r
 
-# 2a Zen — crear archivo
-chat_test("2a CHAT ZEN write_file (nemotron-3-ultra-free)",
-    {"message":"Usa la herramienta write_file para crear el archivo workspace/prueba_zen.txt con contenido exactamente 'zen-ok 9876'. No inventes, usa write_file. Luego confirma.", "model":"nemotron-3-ultra-free", "force_tools": True},
+# 2a Zen â€” crear archivo
+chat_test("2a CHAT ZEN write_file (space-bunny-free)",
+    {"message":"Usa la herramienta write_file para crear el archivo workspace/prueba_zen.txt con contenido exactamente 'zen-ok 9876'. No inventes, usa write_file. Luego confirma.", "model":"space-bunny-free", "force_tools": True},
     expect_tool="write_file")
 
-# 2b Zen — leerlo de vuelta
+# 2b Zen â€” leerlo de vuelta
 chat_test("2b CHAT ZEN read_file",
-    {"message":"Usa la herramienta read_file para leer workspace/prueba_zen.txt y dime su contenido exacto. Usa read_file.", "model":"nemotron-3-ultra-free", "force_tools": True},
+    {"message":"Usa la herramienta read_file para leer workspace/prueba_zen.txt y dime su contenido exacto. Usa read_file.", "model":"space-bunny-free", "force_tools": True},
     expect_tool="read_file")
 
-# 2c Zen — list_dir
+# 2c Zen â€” list_dir
 chat_test("2c CHAT ZEN list_dir",
-    {"message":"Usa la herramienta list_dir para listar workspace y dime cuantos archivos hay. Usa list_dir con path=workspace.", "model":"nemotron-3-ultra-free", "force_tools": True},
+    {"message":"Usa la herramienta list_dir para listar workspace y dime cuantos archivos hay. Usa list_dir con path=workspace.", "model":"space-bunny-free", "force_tools": True},
     expect_tool="list_dir")
 
-# 2d Zen — exec
+# 2d Zen â€” exec
 chat_test("2d CHAT ZEN exec",
-    {"message":"Usa la herramienta exec para ejecutar el comando 'python -c \"print(40+2)\"' en cwd workspace y dime el resultado. Usa exec.", "model":"nemotron-3-ultra-free", "force_tools": True},
+    {"message":"Usa la herramienta exec para ejecutar el comando 'python -c \"print(40+2)\"' en cwd workspace y dime el resultado. Usa exec.", "model":"space-bunny-free", "force_tools": True},
     expect_tool="exec")
 
 # 3. Mismos 4 pero via local (nexus-director-v6) para comparar latencia/calidad
@@ -119,7 +124,7 @@ chat_test("3b CHAT LOCAL read_file",
 
 # 4. Multi-step: Zen debe encadenar write -> exec -> read
 chat_test("4 MULTI-STEP ZEN (write+exec+read)",
-    {"message":"Haz esto en orden usando herramientas: 1) write_file workspace/multi_zen.txt con contenido 'multi-42', 2) exec 'cat multi_zen.txt' en workspace, 3) read_file workspace/multi_zen.txt. Usa cada herramienta y reporta resultados.", "model":"nemotron-3-ultra-free", "force_tools": True},
+    {"message":"Haz esto en orden usando herramientas: 1) write_file workspace/multi_zen.txt con contenido 'multi-42', 2) exec 'cat multi_zen.txt' en workspace, 3) read_file workspace/multi_zen.txt. Usa cada herramienta y reporta resultados.", "model":"space-bunny-free", "force_tools": True},
     expect_tool="write_file")
 
 # resumen

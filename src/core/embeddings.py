@@ -1,6 +1,6 @@
-"""Cliente de embeddings — apunta al servidor :8001 (llama.cpp autocontenido).
+"""Cliente de embeddings — Ollama local (OpenAI-compat /v1/embeddings).
 
-URL desde config providers.llamacpp.embed_url (default http://127.0.0.1:8001).
+URL desde config providers.ollama.embed_url (default http://localhost:11434).
 API OpenAI-compatible: POST /v1/embeddings {model, input} -> data[0].embedding.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ def _cfg_embed_url() -> str:
             return m.group(1).strip()
     except Exception:
         pass
-    return "http://127.0.0.1:8001"
+    return "http://localhost:11434"
 
 
 def embed_url() -> str:
