@@ -1,0 +1,104 @@
+{
+  "name": "nexus-v3",
+  "version": "3.0.0-alpha",
+  "description": "Nexus v3 — Harnés profesional (Electron + Python harness). Like Hermes/Goose: Electron main spawns Python backend and kills on window-all-closed.",
+  "author": "Nexus",
+  "license": "MIT",
+  "private": true,
+  "main": "electron/dist/main.js",
+  "homepage": "./",
+  "scripts": {
+    "dev": "concurrently -k -n py,vite,electron -c cyan,magenta,yellow \"python -m src.api.server --port 8765\" \"npm run dev --prefix ui\" \"wait-on http://127.0.0.1:8765/api/health && wait-on http://localhost:5174 && cross-env ELECTRON_IS_DEV=1 electron electron/dist/main.js\"",
+    "dev:vite": "npm run dev --prefix ui",
+    "dev:backend": "python -m src.api.server --port 8765",
+    "electron": "electron electron/dist/main.js",
+    "electron:ts": "tsc -p electron/tsconfig.json && electron electron/dist/main.js",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "build:ui": "npm run build --prefix ui",
+    "build": "npm run build:electron && npm run build:ui",
+    "start": "npm run build && electron electron/dist/main.js",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "pack": "electron-builder --dir",
+    "test:backend": "python -m src.api.server --help",
+    "lint:electron": "tsc -p electron/tsconfig.json --noEmit"
+  },
+  "build": {
+    "appId": "com.nexus.v3",
+    "productName": "Nexus v3",
+    "artifactName": "Nexus-v3-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/dist/**/*",
+      "ui/dist/**/*",
+      "src/**/*",
+      "config/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "src/**/*",
+      "config/**/*",
+      "ui/dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "ui/dist",
+        "to": "ui/dist"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nexus v3"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "zip"
+      ]
+    },
+    "publish": null
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "chrome-remote-interface": "^0.34.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^32.3.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.3",
+    "wait-on": "^8.0.3"
+  }
+}

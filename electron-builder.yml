@@ -1,0 +1,39 @@
+appId: com.nexus.v3
+productName: Nexus v3
+artifactName: Nexus-v3-${version}-${arch}.${ext}
+directories:
+  output: release
+  buildResources: build
+files:
+  - electron/dist/**/*
+  - ui/dist/**/*
+  - src/**/*
+  - config/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - src/**/*
+  - config/**/*
+  - ui/dist/**/*
+extraResources:
+  - from: ui/dist
+    to: ui/dist
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Nexus v3
+mac:
+  target: [dmg, zip]
+linux:
+  target: [AppImage, zip]
+publish: null

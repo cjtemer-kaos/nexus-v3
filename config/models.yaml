@@ -1,0 +1,98 @@
+# Nexus v3 — catálogo de modelos locales (rutas RELATIVAS al proyecto, nada hardcodeado).
+# Todos los GGUF viven en ./models/. Para distribuir: copiar vendor/ + models/ con el proyecto.
+
+vendor:
+  dir: ./vendor/llama.cpp
+  server_exe: llama-server.exe
+
+servers:
+  chat:
+    port: 8080
+    default_model: nexus-director-v6
+    ctx_default: 32768
+  embed:
+    port: 8001
+    default_model: nomic-embed-text
+    ctx_default: 2048
+
+models:
+  # Bundle base (se distribuye con Nexus v3): director + omnicoder + RAG.
+  # El resto son opcionales: el usuario los agrega a ./models/ y ya funcionan.
+  nexus-director-v6:
+    path: ./models/nexus-director-v6/nexus-director-v6-Q8_0.gguf
+    ctx: 40960
+    server: chat
+    resident: true
+    bundled: true
+    description: Director/orquestador residente
+  nomic-embed-text:
+    path: ./models/nomic-embed-text/nomic-embed-text.gguf
+    ctx: 2048
+    server: embed
+    resident: true
+    embedding: true
+    bundled: true
+    description: Embeddings para RAG (768d)
+  omnicoder-2-9b:
+    path: ./models/omnicoder-2-9b/omnicoder-2-9b.gguf
+    ctx: 32768
+    server: chat
+    resident: false
+    bundled: true
+    description: Código especializado con tool-calling
+  qwen3.5-9b:
+    path: ./models/qwen3.5-9b/Qwen3.5-9B-Q4_K_M.gguf
+    ctx: 65536
+    server: chat
+    resident: false
+    description: Chat general y tool-calling
+  qwen3-vl-8b:
+    path: ./models/qwen3-vl-8b/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+    mmproj: ./models/qwen3-vl-8b/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+    ctx: 32768
+    server: chat
+    resident: false
+    vision: true
+    description: Visión principal (8B + mmproj)
+  deepseek-r1-8b:
+    path: ./models/deepseek-r1-8b/deepseek-r1-8b.gguf
+    ctx: 32768
+    server: chat
+    resident: false
+    description: Razonamiento profundo
+  nemotron-3-nano-4b:
+    path: ./models/nemotron-3-nano-4b/nemotron-3-nano-4b.gguf
+    ctx: 8192
+    server: chat
+    resident: false
+    description: Rápido y liviano
+  janus-pro-7b:
+    path: ./models/janus-pro-7b/Janus-Pro-7B.Q4_K_M.gguf
+    mmproj: ./models/janus-pro-7b/mmproj-janus-pro-7b-f16.gguf
+    ctx: 32768
+    server: chat
+    resident: false
+    vision: true
+    description: Visión alternativa DeepSeek Janus
+  qwen3-vl-4b:
+    path: ./models/qwen3-vl-4b/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+    mmproj: ./models/qwen3-vl-4b/mmproj-Qwen3VL-4B-Instruct-F16.gguf
+    ctx: 32768
+    server: chat
+    resident: false
+    vision: true
+    description: Visión liviana (reserva)
+
+swap:
+  idle_timeout_s: 900
+  # n_gpu_layers: auto = 99 con CUDA, 0 sin GPU. Fijalo (ej. 32) si tu PC lo necesita.
+  n_gpu_layers: auto
+  extra_args:
+    - --parallel
+    - "1"
+    - --cache-type-k
+    - q4_0
+    - --cache-type-v
+    - q4_0
+    - --flash-attn
+    - "on"

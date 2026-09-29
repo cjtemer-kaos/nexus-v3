@@ -1,0 +1,111 @@
+project: nexus-v3
+brain:
+  path: ${NEXUS_BRAIN:-./brain}
+  hierarchical_tiers:
+    working:
+      capacity: 100
+      ttl_h: 1
+    episodic:
+      capacity: 500
+      ttl_h: 72
+    semantic:
+      capacity: 0
+      ttl_h: 8760
+session:
+  db_path: ./data/session.db
+  wal: true
+  fts: true
+  max_tokens: 32000
+  compact_threshold: 0.75
+  keep_recent: 4
+agent_loop:
+  max_iterations: 25
+  max_tokens_per_turn: 8192
+  error_policy:
+    retry: 3
+    replan: 2
+  heartbeat_ms: 2000
+scope:
+  allowed_roots:
+  - ./workspace
+  - ./data
+  deny_patterns:
+  - '**/.env'
+  - '**/*.key'
+  - '**/brain/*.db-shm'
+  - '**/brain/*.db-wal'
+  max_read_bytes: 1048576
+  allow_network: true  # web_fetch harness parity (permission read_only still blocks writes)
+  allow_mutating_without_confirm: false
+  permission: workspace_write  # read_only | workspace_write | full (harness parity)
+compaction:
+  layers:
+  - snip
+  - micro
+  - budget
+  - summary
+  snip:
+    keep_recent: 4
+  micro:
+    placeholder: '[tool_result collapsed — see ./data/spill/]'
+  budget:
+    max_tool_result_chars: 2000
+    persist_dir: ./data/spill
+  summary:
+    model_hint: simple
+    max_summary_tokens: 800
+providers:
+  ollama:
+    base_url: http://localhost:11434
+    timeout_s: 300
+    models:
+    - qwen2.5-coder:7b
+    - deepseek-r1:8b
+    - nomic-embed-text
+  llamacpp:
+    base_url: http://localhost:8080
+    fallback_url: http://localhost:8000
+    timeout_s: 300
+    # Autocontenido: vendor/llama.cpp + models/ dentro del proyecto, auto-arranque al iniciar.
+    autostart: true
+    vendor_dir: ./vendor/llama.cpp
+    models_file: ./config/models.yaml
+    embed_url: http://localhost:8001
+    models:
+    - nexus-director-v6
+    - qwen3.5-9b
+    - qwen3-vl-8b
+    - qwen3-vl-4b
+    - janus-pro-7b
+    - deepseek-r1-8b
+    - omnicoder-2-9b
+    - nemotron-3-nano-4b
+    ctx: 40960
+  cloud:
+    base_url: https://opencode.ai/zen
+    api_key: ${OPENCODE_API_KEY}
+    auth_style: bearer
+    auto_discover: true  # detecta gratis vivos (/v1/models → *free) cada 5 min, persiste en data/cloud_free_cache.json
+    models:
+    - nemotron-3-ultra-free
+    - nemotron-3.5-lightning-free
+    - ling-3.0-flash-fin-free
+    enabled: true
+router:
+  strategy: thompson
+  # 0 = auto-detectar VRAM de la PC (nvidia-smi) o RAM/4 sin GPU. Fijalo si lo necesitas.
+  vram_budget_gb: 0
+  prefer_speed: false
+  fallback_order:
+  - llamacpp
+  - ollama
+  - cloud
+hooks:
+  phases:
+  - pre_tool_use
+  - post_tool_use
+  - on_error
+  - on_compact
+  - session_start
+  - session_end
+  security_gate: true
