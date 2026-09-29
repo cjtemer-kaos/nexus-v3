@@ -149,8 +149,12 @@ def connect_db(db_name: str, read_only: bool = False) -> sqlite3.Connection:
     """Open a brain DB with WAL-friendly pragmas."""
     bp = brain_path()
     db_path = bp / db_name
-    uri = f"file:{db_path}?mode=ro" if read_only else str(db_path)
-    conn = sqlite3.connect(uri, check_same_thread=False, timeout=30.0)
+    if read_only:
+        # sqlite URI mode=ro REQUIERE uri=True; as_posix() evita backslashes
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True,
+                               check_same_thread=False, timeout=30.0)
+    else:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
     try:
         conn.execute("PRAGMA busy_timeout=5000;")
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -187,7 +191,7 @@ def check_brain_health() -> dict[str, Any]:
             health[name] = {"exists": False, "readable": False}
             continue
         try:
-            conn = sqlite3.connect(f"file:{fp}?mode=ro", timeout=5.0)
+            conn = sqlite3.connect(f"file:{fp.as_posix()}?mode=ro", uri=True, timeout=5.0)
             conn.execute("SELECT 1").fetchone()
             conn.close()
             health[name] = {"exists": True, "readable": True}
