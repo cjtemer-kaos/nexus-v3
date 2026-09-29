@@ -1,5 +1,9 @@
 # Nexus v3 — catálogo de modelos locales (rutas RELATIVAS al proyecto, nada hardcodeado).
 # Todos los GGUF viven en ./models/. Para distribuir: copiar vendor/ + models/ con el proyecto.
+#
+# SIN USO desde la migración Ollama (2026-09-28): llama.cpp descartado, los modelos
+# viven como tags de Ollama (:11434) y la config canónica es config/config.yaml.
+# Este archivo queda como referencia para un hipotético re-habilitar de llama.cpp.
 
 vendor:
   dir: ./vendor/llama.cpp

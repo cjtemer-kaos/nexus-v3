@@ -667,7 +667,7 @@ async def select_model(task_type: str, complexity: str = "medium") -> str:
         ("research", "deep"): {"model": "opus", "cost": "$15/1M", "reason": "Deep research needs max capability"},
         ("reasoning", "complex"): {"model": "opus", "cost": "$15/1M", "reason": "Complex reasoning"},
         ("local", "low"): {"model": "ollama/nemotron", "cost": "FREE", "reason": "Use local model, zero cost"},
-        ("local", "medium"): {"model": "llama/qwen3.5-9b", "cost": "FREE", "reason": "Local coder llama.cpp Q4 <8GB"},
+        ("local", "medium"): {"model": "ollama/qwen3.5-9b", "cost": "FREE", "reason": "Local coder via Ollama Q4 <8GB"},
     }
     key = (task_type, complexity)
     result = models.get(key, {"model": "sonnet", "cost": "$3/1M", "reason": "Default balanced choice"})
