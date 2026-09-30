@@ -2940,11 +2940,9 @@ async def dag_decompose(goal: str, use_llm: bool = True) -> str:
 
 
 @mcp.tool()
-async def optimize_prompt(prompt: str) -> str:
-    """Optimize a prompt: compress filler words, score quality, suggest improvements.
-
-    FASE 2.3: Prompt optimization pipeline (DSPy-inspired).
-    Returns optimized text, savings %, quality score (0-100), issues, and suggestions.
+async def prompt_review(prompt: str) -> str:
+    """Review a prompt (FASE 2.3, DSPy-inspired): quality score (0-100), savings %, issues and suggestions.
+    Returns a preview of the optimized text (first 500 chars). For the compressed full text use optimize_prompt.
     """
     try:
         from src.core.prompt_assembler import PromptAssembler
