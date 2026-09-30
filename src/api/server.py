@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse as _urlparse
 
 # Ensure project root on sys.path so `import src.*` works when spawned from Electron
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +55,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Fase 8 (hardening): los endpoints POST no llevan token; con CORS `*` sin
+# mas, cualquier pagina web podria invocar /api/exec desde el navegador del
+# usuario (CSRF -> ejecucion de comandos). Guardia de Origin para escrituras:
+# se permiten llamadas sin Origin (curl/scripts/MCP) y origenes locales.
+# Electron file:// envia Origin: null y NO esta permitido aun — si se cablea
+# Electron, anadir "null" aqui deliberadamente.
+_LOCAL_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+
+
+@app.middleware("http")
+async def _origin_guard(request: Request, call_next):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin")
+        if origin:
+            try:
+                host = _urlparse(origin).hostname or ""
+            except Exception:
+                host = ""
+            if host not in _LOCAL_ORIGIN_HOSTS:
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": f"origen no permitido para escritura: {origin}"},
+                )
+    return await call_next(request)
 
 # Lazy singletons populated on startup
 _state: dict[str, Any] = {}
@@ -971,16 +998,9 @@ async def search_session(session_id: str, q: str, limit: int = 20):
 # ---- FS (Scope-guarded) ----
 def _get_scope():
     from src.core.config import load_config
-    from src.core.scope import Scope, ScopeConfig
-    cfg = load_config()
-    sc = cfg.get("scope", {}) or {}
-    return Scope(ScopeConfig(
-        allowed_roots=tuple(sc.get("allowed_roots", ["./workspace", "./data"])),
-        deny_patterns=tuple(sc.get("deny_patterns", ["**/.env"])),
-        max_read_bytes=int(sc.get("max_read_bytes", 1_048_576)),
-        allow_network=bool(sc.get("allow_network", False)),
-        allow_mutating_without_confirm=bool(sc.get("allow_mutating_without_confirm", False)),
-    ), project_root=_PROJECT_ROOT)
+    # Fase 8: delega en _build_scope (canonico) — antes habia dos copias de la
+    # construccion de Scope que podian divergir.
+    return _build_scope(load_config())
 
 @app.get("/api/fs/list")
 async def fs_list(path: str = "./workspace"):
@@ -1064,6 +1084,32 @@ async def fs_write(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Fase 8: blocklist unica para los dos caminos de exec (endpoint /api/exec y
+# tool exec del AgentLoop). Antes eran dos copias divergentes y solo POSIX;
+# aqui se anade la superficie Windows (el harness corre en Windows por defecto)
+# y se evitan falsos positivos tipo "docker --format json".
+_CMD_BLOCKLIST = (
+    re.compile(r"rm\s+-rf\s+(/|~|\$home|\$env:userprofile)", re.I),
+    re.compile(r"mkfs", re.I),
+    re.compile(r":\(\)\s*\{", re.I),
+    re.compile(r"\b(shutdown|reboot|deltree|diskpart|bcdedit)\b", re.I),
+    re.compile(r"\bformat\s+[a-z]:", re.I),
+    re.compile(r"\breg\s+delete\b", re.I),
+    re.compile(r"\brd\s+/s(\s+/q)?", re.I),
+    re.compile(r"\brmdir\s+/s", re.I),
+    re.compile(r"remove-item\b[^\n]*-recurse", re.I),
+    re.compile(r"\bdel\s+/[fs]\s+/[sq]\b", re.I),
+)
+
+
+def _blocked_command(cmd: str) -> str | None:
+    """Devuelve el patron bloqueado si el comando es destructivo, o None."""
+    for pat in _CMD_BLOCKLIST:
+        if pat.search(cmd or ""):
+            return pat.pattern
+    return None
+
+
 @app.post("/api/exec")
 async def exec_cmd(request: Request):
     from src.core.scope import ScopeDenied
@@ -1078,10 +1124,9 @@ async def exec_cmd(request: Request):
     timeout_s = max(1, min(60, timeout_s))
     if not command:
         raise HTTPException(status_code=400, detail="command required")
-    # bloqueos básicos (no rm -rf /)
-    lower = command.lower()
-    if any(pat in lower for pat in ["rm -rf /", "mkfs", ":(){", "shutdown", "reboot"]):
-        raise HTTPException(status_code=403, detail="comando bloqueado por política")
+    _blk = _blocked_command(command)
+    if _blk is not None:
+        raise HTTPException(status_code=403, detail=f"comando bloqueado por política ({_blk})")
     scope = _get_scope()
     try:
         cwd_p = scope.check_path(cwd)
@@ -1192,6 +1237,153 @@ async def plan_get():
     perm = cfg.get("scope", {}).get("permission", "workspace_write")
     return {"active": perm == "read_only", "permission": perm}
 
+# ---- Construccion de harness (compartida: /api/chat, /v1, /ws, /stream) ----
+# Fase 8: antes /v1/chat/completions, /ws/chat y /api/chat/stream construian su
+# propio loop con APIs inexistentes (ProviderRouter.from_config, Scope(permission=),
+# loop.run() sin session_id, result.get() sobre dataclass) y siempre terminaban
+# en error/echo. Ahora todos usan esta via — la misma que /api/chat ya probaba.
+
+def _build_router(cfg: dict):
+    """Router de providers desde config.
+
+    Fase 8: delega en _build_router_from_config (ya existia y además adapta la
+    lista de modelos Ollama a los realmente disponibles) — no duplicar wiring.
+    """
+    return _build_router_from_config(cfg)
+
+
+def _build_scope(cfg: dict):
+    """Scope jail desde config.scope (allowed_roots + deny_patterns)."""
+    from src.core.scope import Scope, ScopeConfig
+    scope_cfg = cfg.get("scope", {})
+    return Scope(ScopeConfig(
+        allowed_roots=tuple(scope_cfg.get("allowed_roots", ["./workspace", "./data"])),
+        deny_patterns=tuple(scope_cfg.get("deny_patterns", ["**/.env"])),
+        max_read_bytes=int(scope_cfg.get("max_read_bytes", 1_048_576)),
+        allow_network=bool(scope_cfg.get("allow_network", False)),
+        allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)),
+    ), project_root=_PROJECT_ROOT)
+
+
+def _build_registry(scope, session_id: str):
+    """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
+    from src.core.tool_registry import ToolRegistry
+    registry = ToolRegistry()
+    # --- Real tools for AgentLoop (Scope-guarded, no mock) ---
+    def echo_tool(text: str) -> str:
+        return text
+    registry.register_function(echo_tool, name="echo", description="Echo text back (debug)", category="local")
+
+    def read_file_tool(path: str) -> str:
+        """Lee un archivo dentro de allowed_roots (./workspace, ./data)."""
+        import pathlib
+        p = scope.check_path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"no existe o no es archivo: {path}")
+        size = p.stat().st_size
+        if size > scope.cfg.effective_max_bytes():
+            raise ValueError(f"archivo excede limite {scope.cfg.effective_max_bytes()} bytes (tiene {size})")
+        return p.read_text(encoding="utf-8", errors="replace")
+
+    def write_file_tool(path: str, content: str) -> str:
+        """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
+        p = scope.check_path(path)
+        # scope guard for mutating op
+        scope.check_tool("write_file", {"path": path, "content": content})
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
+
+    def list_dir_tool(path: str = "./workspace") -> str:
+        """Lista un directorio dentro de allowed_roots. Devuelve JSON."""
+        import json as _json
+        p = scope.check_path(path or "./workspace")
+        if not p.exists():
+            raise FileNotFoundError(f"no existe: {path}")
+        if p.is_file():
+            return _json.dumps({"path": path, "type": "file", "size": p.stat().st_size}, ensure_ascii=False)
+        entries = []
+        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            try:
+                scope.check_path(str(child))
+            except Exception:
+                continue
+            entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": str(child.relative_to(_PROJECT_ROOT)).replace("\\", "/")})
+        return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
+
+    def exec_tool(command: str, cwd: str = "./workspace", timeout: int = 15) -> str:
+        """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
+        import subprocess as _sp
+        cmd = (command or "").strip()
+        if not cmd:
+            raise ValueError("command requerido")
+        _blk = _blocked_command(cmd)
+        if _blk is not None:
+            raise PermissionError(f"comando bloqueado por politica ({_blk})")
+        cwd_p = scope.check_path(cwd or "./workspace")
+        if not cwd_p.exists():
+            cwd_p.mkdir(parents=True, exist_ok=True)
+        if not cwd_p.is_dir():
+            raise NotADirectoryError("cwd debe ser directorio dentro de allowed_roots")
+        timeout = max(1, min(60, int(timeout)))
+        proc = _sp.run(cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if len(out) > 20000:
+            out = out[:20000] + "\n... [truncado]"
+        if proc.returncode != 0 and not out.strip():
+            out = f"[exit {proc.returncode}]"
+        return out or f"[exit {proc.returncode} sin salida]"
+
+    registry.register_function(read_file_tool, name="read_file", description="Lee un archivo dentro de ./workspace o ./data (Scope jail)", category="local")
+    registry.register_function(write_file_tool, name="write_file", description="Escribe un archivo dentro de ./workspace o ./data (crea dirs)", category="local")
+    registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
+    registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado en ./workspace (bloquea destructivos)", category="local")
+
+    # --- todo_write (harness parity whole-list replacement) ---
+    _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)
+    def todo_write(todos):
+        """Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed."""
+        if not isinstance(todos, list):
+            raise ValueError("todos must be array")
+        res = _todo_store.write(session_id, todos)
+        return _json2.dumps(res, ensure_ascii=False)
+    registry.register_function(todo_write, name="todo_write", description="Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed", category="local", parameters={"type":"object","properties":{"todos":{"type":"array","description":"The COMPLETE task list, replacing any previous list.","items":{"type":"object","additionalProperties":False,"properties":{"content":{"type":"string","description":"What the task is — short imperative line."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"pending|in_progress|completed"}}}}},"required":["todos"],"additionalProperties":False})
+
+    def web_fetch(url: str, timeout: int = 12) -> str:
+        """Fetch URL and return text (Scope network gate applies). Truncates to 15k."""
+        scope.check_tool("web_fetch", {"url": url})
+        import urllib.request, re
+        timeout = max(2, min(30, int(timeout)))
+        req = urllib.request.Request(url, headers={"User-Agent": "Nexus-v3/1.0 web_fetch"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read(15000)
+                ctype = r.headers.get("content-type","")
+                text = data.decode("utf-8", errors="replace")
+                if "text/html" in ctype:
+                    text = re.sub(r"<[^>]+>", " ", text)
+                    text = re.sub(r"\s+", " ", text)
+                return text[:15000]
+        except Exception as e:
+            raise RuntimeError(f"web_fetch failed: {e}")
+    registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
+    return registry
+
+
+async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
+                          model: str | None = None, force_tools: bool = False):
+    """Un run de AgentLoop con la construccion estandar (config segura)."""
+    from src.core.config import load_config
+    from src.core.agent_loop import AgentLoop
+    cfg = _load_config_safe()
+    router = _build_router(cfg)
+    scope = _build_scope(cfg)
+    registry = _build_registry(scope, session_id)
+    loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log())
+    return await loop.run(task=message, session_id=session_id, hint=hint,
+                          force_tools=force_tools, model=model)
+
+
 @app.post("/api/chat")
 
 async def chat(request: Request):
@@ -1230,43 +1422,10 @@ async def chat(request: Request):
     # Try to run AgentLoop if providers are configured
     try:
         from src.core.config import load_config
-        from src.core.provider_router import ProviderRouter, ModelRoute
-        from src.providers.ollama_provider import OllamaProvider
-        from src.providers.llamacpp_provider import LlamaCppProvider
-        from src.providers.cloud_provider import CloudProvider
-        from src.core.scope import Scope, ScopeConfig
-        from src.core.tool_registry import ToolRegistry
         from src.core.agent_loop import AgentLoop
 
         cfg = load_config()
-        prov_cfg = cfg.get("providers", {})
-        _vram2 = cfg.get("router", {}).get("vram_budget_gb", 0)
-        if not _vram2:
-            try:
-                from src.core.hardware import auto_vram_budget
-                _vram2 = auto_vram_budget()
-            except Exception:
-                _vram2 = 12
-        router = ProviderRouter(
-            vram_budget_gb=_vram2,
-            fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]),
-        )
-        if "ollama" in prov_cfg:
-            oc = prov_cfg["ollama"]
-            router.register_provider("ollama", OllamaProvider(base_url=oc.get("base_url", "http://localhost:11434"), timeout_s=oc.get("timeout_s", 300)))
-            for m in oc.get("models", []):
-                router.register_model(ModelRoute(id=m, provider_name="ollama"))
-        if "llamacpp" in prov_cfg:
-            lc = prov_cfg["llamacpp"]
-            router.register_provider("llamacpp", LlamaCppProvider(base_url=lc.get("base_url", "http://localhost:8080"), fallback_url=lc.get("fallback_url"), timeout_s=lc.get("timeout_s", 300)))
-            for m in lc.get("models", []):
-                router.register_model(ModelRoute(id=m, provider_name="llamacpp"))
-        if "cloud" in prov_cfg:
-            cc = prov_cfg["cloud"]
-            if cc.get("enabled"):
-                router.register_provider("cloud", CloudProvider(base_url=cc.get("base_url"), api_key=cc.get("api_key"), auth_style=cc.get("auth_style", "bearer")))
-                for m in cc.get("models", []):
-                    router.register_model(ModelRoute(id=m, provider_name="cloud"))
+        router = _build_router(cfg)
 
         # Quick health probe with short timeout — don't block chat if providers offline
         health = {}
@@ -1281,116 +1440,9 @@ async def chat(request: Request):
         if not router.resolve(task_hint=hint or message) and not any_healthy:
             raise RuntimeError("no healthy provider — echo fallback")
 
-        # Scope + tools (minimal)
-        from pathlib import Path
-        scope_cfg = cfg.get("scope", {})
-        scope = Scope(ScopeConfig(
-            allowed_roots=scope_cfg.get("allowed_roots", ["./workspace", "./data"]),
-            deny_patterns=scope_cfg.get("deny_patterns", ["**/.env"]),
-            max_read_bytes=scope_cfg.get("max_read_bytes", 1_048_576),
-            allow_network=scope_cfg.get("allow_network", False),
-            allow_mutating_without_confirm=scope_cfg.get("allow_mutating_without_confirm", False),
-        ), project_root=_PROJECT_ROOT)
-
-        registry = ToolRegistry()
-        # --- Real tools for AgentLoop (Scope-guarded, no mock) ---
-        def echo_tool(text: str) -> str:
-            return text
-        registry.register_function(echo_tool, name="echo", description="Echo text back (debug)", category="local")
-
-        def read_file_tool(path: str) -> str:
-            """Lee un archivo dentro de allowed_roots (./workspace, ./data)."""
-            import pathlib
-            p = scope.check_path(path)
-            if not p.is_file():
-                raise FileNotFoundError(f"no existe o no es archivo: {path}")
-            size = p.stat().st_size
-            if size > scope.cfg.effective_max_bytes():
-                raise ValueError(f"archivo excede limite {scope.cfg.effective_max_bytes()} bytes (tiene {size})")
-            return p.read_text(encoding="utf-8", errors="replace")
-
-        def write_file_tool(path: str, content: str) -> str:
-            """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
-            p = scope.check_path(path)
-            # scope guard for mutating op
-            scope.check_tool("write_file", {"path": path, "content": content})
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
-
-        def list_dir_tool(path: str = "./workspace") -> str:
-            """Lista un directorio dentro de allowed_roots. Devuelve JSON."""
-            import json as _json
-            p = scope.check_path(path or "./workspace")
-            if not p.exists():
-                raise FileNotFoundError(f"no existe: {path}")
-            if p.is_file():
-                return _json.dumps({"path": path, "type": "file", "size": p.stat().st_size}, ensure_ascii=False)
-            entries = []
-            for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-                try:
-                    scope.check_path(str(child))
-                except Exception:
-                    continue
-                entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": str(child.relative_to(_PROJECT_ROOT)).replace("\\", "/")})
-            return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
-
-        def exec_tool(command: str, cwd: str = "./workspace", timeout: int = 15) -> str:
-            """Ejecuta un shell command jail-ado en cwd (strip + Scope). Bloquea rm -rf / etc. Devuelve stdout+stderr."""
-            import subprocess as _sp
-            cmd = (command or "").strip()
-            if not cmd:
-                raise ValueError("command requerido")
-            low = cmd.lower()
-            if any(pat in low for pat in ["rm -rf /", "mkfs", ":(){", "shutdown", "reboot"]):
-                raise PermissionError("comando bloqueado por politica")
-            cwd_p = scope.check_path(cwd or "./workspace")
-            if not cwd_p.exists():
-                cwd_p.mkdir(parents=True, exist_ok=True)
-            if not cwd_p.is_dir():
-                raise NotADirectoryError("cwd debe ser directorio dentro de allowed_roots")
-            timeout = max(1, min(60, int(timeout)))
-            proc = _sp.run(cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
-            out = (proc.stdout or "") + (proc.stderr or "")
-            if len(out) > 20000:
-                out = out[:20000] + "\n... [truncado]"
-            if proc.returncode != 0 and not out.strip():
-                out = f"[exit {proc.returncode}]"
-            return out or f"[exit {proc.returncode} sin salida]"
-
-        registry.register_function(read_file_tool, name="read_file", description="Lee un archivo dentro de ./workspace o ./data (Scope jail)", category="local")
-        registry.register_function(write_file_tool, name="write_file", description="Escribe un archivo dentro de ./workspace o ./data (crea dirs)", category="local")
-        registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
-        registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado en ./workspace (bloquea destructivos)", category="local")
-
-        # --- todo_write (harness parity whole-list replacement) ---
-        _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)
-        def todo_write(todos):
-            """Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed."""
-            if not isinstance(todos, list):
-                raise ValueError("todos must be array")
-            res = _todo_store.write(session_id, todos)
-            return _json2.dumps(res, ensure_ascii=False)
-        registry.register_function(todo_write, name="todo_write", description="Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed", category="local", parameters={"type":"object","properties":{"todos":{"type":"array","description":"The COMPLETE task list, replacing any previous list.","items":{"type":"object","additionalProperties":False,"properties":{"content":{"type":"string","description":"What the task is — short imperative line."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"pending|in_progress|completed"}}}}},"required":["todos"],"additionalProperties":False})
-
-        def web_fetch(url: str, timeout: int = 12) -> str:
-            """Fetch URL and return text (Scope network gate applies). Truncates to 15k."""
-            scope.check_tool("web_fetch", {"url": url})
-            import urllib.request, re
-            timeout = max(2, min(30, int(timeout)))
-            req = urllib.request.Request(url, headers={"User-Agent": "Nexus-v3/1.0 web_fetch"})
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    data = r.read(15000)
-                    ctype = r.headers.get("content-type","")
-                    text = data.decode("utf-8", errors="replace")
-                    if "text/html" in ctype:
-                        text = re.sub(r"<[^>]+>", " ", text)
-                        text = re.sub(r"\s+", " ", text)
-                    return text[:15000]
-            except Exception as e:
-                raise RuntimeError(f"web_fetch failed: {e}")
-        registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
+        # Scope + tools (mismo helper que /v1, /ws y /stream)
+        scope = _build_scope(cfg)
+        registry = _build_registry(scope, session_id)
 
 
         loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
@@ -1465,23 +1517,19 @@ async def openai_chat_completions(req: Request):
     model = body.get("model") or "auto"
     stream = bool(body.get("stream"))
     try:
-        from src.core.agent_loop import AgentLoop
-        from src.core.provider_router import ProviderRouter
-        from src.core.tool_registry import ToolRegistry
-        from src.core.scope import Scope
-        cfg = _load_config_safe()
-        router = ProviderRouter.from_config(cfg)
-        registry = ToolRegistry()
-        scope = Scope(permission=cfg.get("scope",{}).get("permission","workspace_write"))
-        # reuse session log for history (optional)
-        try:
-            from src.core.session_log import SessionLog
-            slog = SessionLog()
-        except Exception:
-            slog = None
-        loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
-        result = await loop.run(user_text, model=model)
-        reply = result.get("reply") or result.get("text") or ""
+        # Fase 8: esta via estaba rota (from_config inexistente, Scope(permission=),
+        # run() sin session_id, result.get() sobre dataclass) y devolvia "Error: ..."
+        # siempre. Ahora reutiliza los helpers estandar + sesion por request.
+        from src.core.provider_router import infer_hint
+        slog = _session_log()
+        sess = slog.create_session(project="openai-compat")
+        result = await _run_agent_once(
+            user_text,
+            session_id=sess.id,
+            hint=infer_hint(user_text),
+            model=None if model == "auto" else model,
+        )
+        reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
     except Exception as e:
         import logging as _lg
         _lg.getLogger("nexus-v3").exception("openai compat error: %s", e)
@@ -1501,21 +1549,22 @@ async def openai_chat_completions(req: Request):
 async def openai_models():
     cfg = _load_config_safe()
     try:
-        from src.core.provider_router import ProviderRouter
-        router = ProviderRouter.from_config(cfg)
-        models = []
-        for prov in getattr(router, "providers", []) or []:
-            for m in getattr(prov, "models", []) or [getattr(prov, "model", None)]:
-                if m:
-                    models.append(m)
+        # Fase 8: from_config no existe; listar via list_models() del router real.
+        router = _build_router(cfg)
+        models = [r.id for r in (router.list_models() or []) if getattr(r, "id", None)]
         if not models:
-            models = ["auto","nexus-v3"]
+            models = ["auto", "nexus-v3"]
     except Exception:
         models = ["auto","nexus-v3"]
     return JSONResponse({"object":"list","data":[{"id":m,"object":"model","created":0,"owned_by":"nexus"} for m in models]})
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
     await ws.accept()
+    # Fase 8: sesion por conexion (antes: run() sin session_id + APIs inexistentes).
+    try:
+        ws_session_id = _session_log().create_session(project="ws").id
+    except Exception:
+        ws_session_id = None
     try:
         while True:
             data = await ws.receive_text()
@@ -1527,22 +1576,16 @@ async def ws_chat(ws: WebSocket):
             except Exception:
                 msg, model = data, "auto"
             try:
-                from src.core.agent_loop import AgentLoop
-                from src.core.provider_router import ProviderRouter
-                from src.core.tool_registry import ToolRegistry
-                from src.core.scope import Scope
-                cfg = _load_config_safe()
-                router = ProviderRouter.from_config(cfg)
-                registry = ToolRegistry()
-                scope = Scope(permission=cfg.get("scope",{}).get("permission","workspace_write"))
-                try:
-                    from src.core.session_log import SessionLog
-                    slog = SessionLog()
-                except Exception:
-                    slog = None
-                loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
-                result = await loop.run(msg, model=model)
-                reply = result.get("reply") or result.get("text") or ""
+                if not ws_session_id:
+                    ws_session_id = _session_log().create_session(project="ws").id
+                from src.core.provider_router import infer_hint
+                result = await _run_agent_once(
+                    msg,
+                    session_id=ws_session_id,
+                    hint=infer_hint(msg),
+                    model=None if model == "auto" else model,
+                )
+                reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
             except Exception as e:
                 reply = f"Error: {e}"
             await ws.send_text(reply)
@@ -1556,22 +1599,16 @@ async def sse_chat(request: Request, message: str = "", model: str = "auto"):
     async def gen():
         import json as _js3
         try:
-            from src.core.agent_loop import AgentLoop
-            from src.core.provider_router import ProviderRouter
-            from src.core.tool_registry import ToolRegistry
-            from src.core.scope import Scope
-            cfg = _load_config_safe()
-            router = ProviderRouter.from_config(cfg)
-            registry = ToolRegistry()
-            scope = Scope(permission=cfg.get("scope",{}).get("permission","workspace_write"))
-            try:
-                from src.core.session_log import SessionLog
-                slog = SessionLog()
-            except Exception:
-                slog = None
-            loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
-            result = await loop.run(message, model=model)
-            reply = result.get("reply") or result.get("text") or ""
+            # Fase 8: misma construccion estandar; sesion por request.
+            from src.core.provider_router import infer_hint
+            sess = _session_log().create_session(project="sse")
+            result = await _run_agent_once(
+                message,
+                session_id=sess.id,
+                hint=infer_hint(message),
+                model=None if model == "auto" else model,
+            )
+            reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
         except Exception as e:
             reply = f"Error: {e}"
         yield f"data: {_js3.dumps({'reply': reply}, ensure_ascii=False)}\n\n"

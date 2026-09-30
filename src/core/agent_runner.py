@@ -45,7 +45,7 @@ def _tool_call_hash(tc: "ToolCall") -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 from src.core.provider_base import (
-    LLMProvider,
+    BaseProvider as LLMProvider,  # alias: provider_base exporta BaseProvider (Fase 8: antes el import fallaba y rompia el modulo entero)
     LLMResponse,
     LLMMessage,
     MessageRole,

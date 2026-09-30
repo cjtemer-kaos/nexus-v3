@@ -118,8 +118,12 @@ class AgentLoop:
         Solo acepta herramientas registradas (self.tools) para no ejecutar basura.
         """
         out: list = []
-        if not content or "{" not in content:
+        if not content:
             return out
+        # Nota Fase 8: antes habia `if "{" not in content` aqui, lo que cortaba
+        # el escaneo 0 (nombre("texto")) — esa forma no lleva llaves. El escaneo
+        # 1 (JSON balanceado) solo activa si hay '{', asi que el gate global
+        # sobraba.
         try:
             names = set()
             if self.tools is not None and hasattr(self.tools, "list_tools"):
@@ -129,9 +133,14 @@ class AgentLoop:
                     names = set()
         except Exception:
             names = set()
-        # 0) Sintaxis tipo llamada: nombre("texto") o nombre('texto') o nombre(args)
-        # Acepta prefijo tool_ (tool_echo -> echo) si el resto coincide con registrada.
+        # Escaneo 0 (sintaxis nombre("texto")) SOLO fuera de bloques de codigo:
+        # un ejemplo ilustrativo echo("hola") dentro de ``` o `...` no debe
+        # despacharse como tool real (capa 7, ejecucion alucinada). El escaneo 1
+        # (bloques JSON balanceados) si busca dentro de fences a proposito:
+        # los modelos locales emiten {"tool": ...} justo ahi.
         import re as _re2
+        _scan0 = _re2.sub(r"```.*?```", " ", content, flags=_re2.DOTALL)
+        _scan0 = _re2.sub(r"`[^`\n]+`", " ", _scan0)
         schemas: dict[str, dict] = {}
         if self.tools is not None and hasattr(self.tools, "_tools"):
             try:
@@ -140,7 +149,7 @@ class AgentLoop:
                     schemas[_tn] = _p
             except Exception:
                 pass
-        for _m in _re2.finditer(r"(?i)(?:^|[\s:>`\"'(\[])([a-zA-Z_][a-zA-Z0-9_\.]*)\(\s*\"([^\"]{1,500})\"\s*\)", content):
+        for _m in _re2.finditer(r"(?i)(?:^|[\s:>`\"'(\[])([a-zA-Z_][a-zA-Z0-9_\.]*)\(\s*\"([^\"]{1,500})\"\s*\)", _scan0):
             _raw = _m.group(1)
             _txt = _m.group(2)
             _cand = _raw[5:] if _raw.lower().startswith("tool_") else _raw
@@ -272,19 +281,36 @@ class AgentLoop:
         history_limit = 20
         if self.session_log is not None:
             try:
-                from .session_log import Message as SMsg  # type: ignore
-                recent = self.session_log.get_messages(session_id, limit=history_limit)
+                # Ventana de los 20 mensajes MAS RECIENTES: get_messages es ASC,
+                # asi que hay que paginar desde el final — con limit asecas se
+                # cargaban los 20 mas viejos de la sesion y se perdia el
+                # contexto reciente (capa 2, contaminacion/olvido).
+                _total = self.session_log.count_messages(session_id)
+                _off = max(0, _total - history_limit)
+                recent = self.session_log.get_messages(session_id, limit=history_limit, offset=_off)
                 # Skip the just-appended user message duplicate
                 for m in recent[:-1]:
-                    if m.role in ("system", "user", "assistant"):
+                    if m.role in ("user", "assistant"):
                         messages.append(LLMMessage(role=m.role, content=m.content))
                     elif m.role == "tool":
-                        messages.append(LLMMessage(role="tool", content=m.content, tool_call_id=m.tool_call_id))
+                        # session_log NO persiste los tool_calls del assistant,
+                        # asi que reenviar el tool tal cual deja mensajes
+                        # huerfanos (400 en providers OpenAI-compat, capa 10).
+                        # Se reencuadra como nota de asistente: conserva la
+                        # informacion sin romper el protocolo.
+                        _label = m.tool_name or "herramienta"
+                        _narr = (m.content or "")[:2000]
+                        messages.append(LLMMessage(role="assistant", content=f"[resultado {_label}] {_narr}"))
+                    # role=="system" se ignora: el system prompt fresco ya esta
+                    # inyectado arriba. Evita instrucciones conflictivas y
+                    # bloquea system-msgs inyectables via POST /sessions/{id}/messages.
             except Exception as e:
                 logger.debug(f"load history falló: {e}")
 
-        # Add current task as user message (if not already via history)
-        if not any(m.role == "user" and task in (m.content or "") for m in messages):
+        # Add current task as user message — SIEMPRE al final: aunque exista un
+        # duplicado identico en el historial, la tarea actual es lo ultimo que
+        # debe ver el modelo (el just-appended se descarto en recent[:-1]).
+        if not (messages and messages[-1].role == "user" and messages[-1].content == task):
             messages.append(LLMMessage(role="user", content=task))
 
         # Compaction pre-check
@@ -452,6 +478,11 @@ class AgentLoop:
                     _tcs = self._extract_text_tool_calls(getattr(llm_resp, "reasoning_content", "") or "")
                 if _tcs:
                     steps.append(LoopStep(iteration=iteration, phase="decide", content=f"tool_calls extraídos de texto: {len(_tcs)}"))
+                    # Adjuntarlos al mensaje assistant recien agregado: sin esto,
+                    # los mensajes tool que siguen quedarian huerfanos (el
+                    # provider veria tool sin tool_calls previos) — capa 10.
+                    if messages and messages[-1].role == "assistant" and not getattr(messages[-1], "tool_calls", None):
+                        messages[-1] = LLMMessage(role="assistant", content=assistant_content, tool_calls=tuple(_tcs))
             if not _tcs:
                 # Final answer
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta final ({len(assistant_content)} caracteres)"))
@@ -497,12 +528,15 @@ class AgentLoop:
                         _win.append(_fp)
                         self._tool_fp_window = _win[-3:]  # type: ignore[attr-defined]
                         if len(self._tool_fp_window) == 3 and all(x == _win[0] for x in self._tool_fp_window):
-                            final_output = f"[doom-loop: {tool_name} repetido 3 veces con mismos args — se detiene. Resultado ya entregado.]"
+                            # success=False: no hubo respuesta final del modelo —
+                            # declarar exito aqui persistiria un falso positivo en
+                            # trajectory/event_store/session summary (capa 12).
+                            final_output = f"[doom-loop: {tool_name} repetido 3 veces con mismos args — bucle detenido; sin respuesta final]"
                             try:
                                 messages.append(LLMMessage(role="tool", content=tool_result_str, tool_call_id=getattr(tc, 'id', '')))
                             except Exception:
                                 pass
-                            success = True
+                            success = False
                             iteration = max_iters  # force exit
                             break
                     except Exception:

@@ -302,10 +302,18 @@ class MemoryExtractor:
             return []
 
         try:
+            # Code-gate de admision (capa 3): el system prompt ya pide hechos
+            # SOLO del usuario, pero aqui se aplica en codigo — ni el monologo
+            # del asistente ni salidas de herramientas (contenido web con
+            # posible prompt-injection) pueden llegar a la extraction LLM como
+            # material de hechos.
+            user_only = [m for m in messages if isinstance(m, dict) and m.get("role") == "user" and m.get("content")]
+            if not user_only:
+                return []
             # Construir prompt de extracción
             extraction_messages = [
                 {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
-            ] + messages
+            ] + user_only
 
             # Usar el provider del Director
             provider = None
@@ -348,17 +356,14 @@ class MemoryExtractor:
             return []
 
     def _load_memories(self, owner: str = "") -> List[Dict]:
-        """Carga memorias existentes."""
-        if self.consolidator and hasattr(self.consolidator, 'search'):
-            # Usar consolidator si está disponible
-            try:
-                all_mems = []
-                # Esto es una simplificación — en producción se usaría la DB
-                return all_mems
-            except Exception:
-                pass
+        """Carga memorias existentes (fuente canonica: brain/memories.json).
 
-        # Fallback: archivo JSON
+        Fase 8: se elimino el branch `if self.consolidator` — devolvia [] sin
+        consultar nada (simplificacion heredada sin implementar), lo que
+        desactivaba el dedupe y hacia que _save_memories pisara el archivo con
+        solo los hechos nuevos (perdida de datos latente si el consolidator se
+        conectara).
+        """
         memory_file = os.path.join(str(brain_path()), "memories.json")
         if os.path.exists(memory_file):
             try:
