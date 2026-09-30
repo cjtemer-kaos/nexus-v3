@@ -19,6 +19,7 @@ Diferenciación con Odysseus:
     - Fingerprinting para saltar auditorías innecesarias
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import hashlib
 import json
@@ -214,9 +215,7 @@ class MemoryExtractor:
         self.consolidator = memory_consolidator
         self._extractions_since_audit = 0
         self._last_fingerprint = ""
-        self._tidy_state_path = os.path.join(
-            os.path.expanduser("~"), ".nexus", "brain", "memory_tidy_state.json"
-        )
+        self._tidy_state_path = os.path.join(str(brain_path()), "memory_tidy_state.json")
 
     async def after_response(
         self,
@@ -360,7 +359,7 @@ class MemoryExtractor:
                 pass
 
         # Fallback: archivo JSON
-        memory_file = os.path.join(os.path.expanduser("~"), ".nexus", "brain", "memories.json")
+        memory_file = os.path.join(str(brain_path()), "memories.json")
         if os.path.exists(memory_file):
             try:
                 with open(memory_file, "r", encoding="utf-8") as f:
@@ -373,7 +372,7 @@ class MemoryExtractor:
 
     def _save_memories(self, memories: List[Dict]):
         """Guarda memorias al archivo JSON."""
-        memory_file = os.path.join(os.path.expanduser("~"), ".nexus", "brain", "memories.json")
+        memory_file = os.path.join(str(brain_path()), "memories.json")
         os.makedirs(os.path.dirname(memory_file), exist_ok=True)
 
         tmp_file = memory_file + ".tmp"

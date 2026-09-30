@@ -3,6 +3,7 @@ System Prompts Advanced - SuperNEXUS v2
 Temperature control, prefix/suffix injection, preset system.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "prompts"
+DATA_DIR = data_home() / "prompts"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 PRESETS_FILE = DATA_DIR / "presets.json"
 

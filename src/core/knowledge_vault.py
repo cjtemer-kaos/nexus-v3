@@ -4,6 +4,7 @@ F9: Knowledge Graph Vault
 Markdown-based memory with backlinks, Obsidian-compatible, FTS5 search.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import sqlite3
@@ -45,7 +46,7 @@ class KnowledgeVault:
 
     def __init__(self, vault_path: Optional[str] = None):
         if vault_path is None:
-            vault_path = str(Path.home() / ".nexus" / "vault")
+            vault_path = str(data_home() / "vault")
         self.vault_path = Path(vault_path)
         self.vault_path.mkdir(parents=True, exist_ok=True)
         (self.vault_path / "notes").mkdir(exist_ok=True)

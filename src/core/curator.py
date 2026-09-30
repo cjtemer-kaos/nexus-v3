@@ -14,6 +14,7 @@ Patrons:
   - auto_skill_creator.py (skill data model)
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import hashlib
 import json
@@ -40,13 +41,13 @@ def _now_iso() -> str:
 
 def _db_path() -> Path:
     home = Path.home()
-    db_dir = home / ".nexus" / "brain"
+    db_dir = brain_path()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "curator.db"
 
 
 def _backup_dir() -> Path:
-    d = Path.home() / ".nexus" / "brain" / "curator_backups"
+    d = brain_path() / "curator_backups"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -210,7 +211,7 @@ class Curator:
 
         Returns count of skills synced.
         """
-        creator_db = Path.home() / ".nexus" / "brain" / "skills_creator.db"
+        creator_db = brain_path() / "skills_creator.db"
         if not creator_db.exists():
             return 0
 
@@ -256,7 +257,7 @@ class Curator:
         """
         Pull skills from skill_lifecycle DB into curator DB (state + pinned info).
         """
-        lc_db = Path.home() / ".nexus" / "brain" / "skill_lifecycle.db"
+        lc_db = brain_path() / "skill_lifecycle.db"
         if not lc_db.exists():
             return 0
 

@@ -14,6 +14,7 @@ Patrons:
   - Rollback chain: each Step can define an optional rollback_action string
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import os
@@ -86,7 +87,7 @@ def _now_iso() -> str:
 
 def _db_path() -> Path:
     home = Path.home()
-    db_dir = home / ".nexus" / "brain"
+    db_dir = brain_path()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "task_executor.db"
 

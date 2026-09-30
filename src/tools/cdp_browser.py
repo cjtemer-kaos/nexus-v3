@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -142,16 +143,37 @@ class CdpBrowser:
                 pass
 
     def _find_chrome(self) -> Optional[str]:
-        candidates = [
-            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-            os.path.expanduser("~\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"),
-            "/usr/bin/google-chrome",
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-        ]
+        import shutil
+        # 1) PATH (funciona en cualquier SO si chrome/chromium esta instalado)
+        for exe in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "msedge"):
+            found = shutil.which(exe)
+            if found:
+                return found
+        # 2) Rutas tipicas por SO
+        if os.name == "nt":
+            # ProgramFiles/LOCALAPPDATA siempre seteadas por Windows
+            pf = os.environ.get("ProgramFiles") or ""
+            pf86 = os.environ.get("ProgramFiles(x86)") or ""
+            local = os.environ.get("LOCALAPPDATA") or ""
+            candidates = [
+                os.path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+            ]
+        elif sys.platform == "darwin":
+            candidates = [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ]
+        else:
+            candidates = [
+                "/usr/bin/google-chrome",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/snap/bin/chromium",
+            ]
         for path in candidates:
-            if os.path.exists(path):
+            if path and os.path.exists(path):
                 return path
         return None
 

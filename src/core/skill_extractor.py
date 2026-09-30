@@ -18,6 +18,7 @@ Diferenciación con Odysseus:
     - Filtro de confianza mínimo (MIN_CONFIDENCE = 0.6)
 """
 from __future__ import annotations
+from src.core.environment import data_home
 
 import json
 import logging
@@ -34,7 +35,7 @@ MIN_ROUNDS = 2  # mínimo de rondas para considerar "compleja"
 MIN_TOOL_CALLS = 2  # mínimo de tool calls
 MIN_CONFIDENCE = 0.6  # confianza mínima para guardar el skill
 CONTEXT_WINDOW = 12  # mensajes a incluir en el prompt
-SKILLS_DIR = Path.home() / ".nexus" / "skills" / "auto-extracted"
+SKILLS_DIR = data_home() / "skills" / "auto-extracted"
 
 # ── Prompt de Extracción ─────────────────────────────────────────────────────
 

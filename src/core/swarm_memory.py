@@ -6,6 +6,7 @@ Reemplaza el message board simple con eventos tipados,
 checkpoints, handoffs y búsqueda estructurada.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -81,7 +82,7 @@ class SwarmMemory:
     """
 
     def __init__(self, nexus_home: Optional[str] = None):
-        home = nexus_home or os.environ.get("NEXUS_HOME", str(Path.home() / ".nexus"))
+        home = nexus_home or os.environ.get("NEXUS_HOME", str(data_home()))
         self.root = Path(home) / "swarm"
         self.root.mkdir(parents=True, exist_ok=True)
 

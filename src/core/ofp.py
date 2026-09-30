@@ -22,6 +22,7 @@ Public API:
 PeerRegistry holds known peers + last-seen and what they reported.
 """
 from __future__ import annotations
+from src.core.environment import data_home
 
 import asyncio
 import hmac
@@ -66,10 +67,10 @@ def load_psk() -> bytes:
     if raw:
         return raw.encode("utf-8") if not raw.startswith("0x") else bytes.fromhex(raw[2:])
     from pathlib import Path
-    f = Path.home() / ".nexus" / "ofp_psk"
+    f = data_home() / "ofp_psk"
     if f.exists():
         return f.read_bytes().strip()
-    raise RuntimeError("NEXUS_OFP_PSK unset and ~/.nexus/ofp_psk missing")
+    raise RuntimeError(f"NEXUS_OFP_PSK unset and {f} missing")
 
 
 def generate_psk() -> bytes:

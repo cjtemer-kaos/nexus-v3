@@ -6,6 +6,7 @@ Auto-triggers checkpoints at 20%/45%/70% context pressure.
 Supports budgeted context injection from checkpoints.
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -39,7 +40,7 @@ class CheckpointStore:
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "checkpoints.db")
+            db_path = str(brain_path() / "checkpoints.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

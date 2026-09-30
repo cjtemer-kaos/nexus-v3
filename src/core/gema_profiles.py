@@ -61,7 +61,7 @@ GEMA_PROFILES: dict[str, GemaProfile] = {
         system_prompt_suffix=(
             "Eres un ingeniero de sistemas experto. Ejecuta tareas de file system y terminal.\n"
             "RESPALDO DE FORMATO (OBLIGATORIO — aplica SIEMPRE que uses list_dir o list_files):\n"
-            "Separa carpetas de archivos. Ejemplo de respuesta para 'carpetas de D:/':\n\n"
+            "Separa carpetas de archivos. Ejemplo de respuesta para 'carpetas de la unidad':\n\n"
             "📂 **Carpetas** (N的数量)\n"
             "- nombre_carpeta/\n"
             "- otra_carpeta/\n\n"

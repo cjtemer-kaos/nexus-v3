@@ -13,6 +13,7 @@ Storage: ~/.nexus/brain/codebase_index.db
 Singleton: get_indexer()
 """
 
+from src.brain.link import brain_path
 import ast
 import hashlib
 import logging
@@ -338,7 +339,7 @@ class SmartCodebaseIndexer:
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
             home = Path.home()
-            db_path = str(home / ".nexus" / "brain" / "codebase_index.db")
+            db_path = str(brain_path() / "codebase_index.db")
 
         self._db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)

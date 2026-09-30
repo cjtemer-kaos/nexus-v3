@@ -4,10 +4,11 @@ Envuelve repomix con --compress Tree-sitter + cache LRU + grep contextual.
 
 Uso:
   from core.codebase_context import CodebaseContext
-  ctx = CodebaseContext(project_root="/path/to/supernexus-v2")
+  ctx = CodebaseContext(project_root="/path/to/nexus-v3")
   dump = await ctx.get_context(scope="src/core")  # full dump comprimido
   results = await ctx.query_context("auth system")  # grep + contexto
 """
+from src.core.environment import data_home
 import asyncio
 import hashlib
 import logging
@@ -94,7 +95,7 @@ class CodebaseContext:
         self._cache = LRUCache(maxsize=8, ttl=cache_ttl)
         self._repomix_available = self._check_repomix()
         self._project_hash = hashlib.md5(str(self._project_root).encode()).hexdigest()[:8]
-        self._dump_path = Path.home() / ".nexus" / "codebase_dumps" / f"dump_{self._project_hash}.md"
+        self._dump_path = data_home() / "codebase_dumps" / f"dump_{self._project_hash}.md"
 
     def _check_repomix(self) -> bool:
         """Check if repomix command is available via shell."""

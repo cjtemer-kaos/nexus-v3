@@ -287,7 +287,7 @@ export function ProvidersPanel() {
         <Sparkles className="h-4 w-4 text-violet-400 shrink-0 mt-0.5" />
         <div>
           <span className="text-zinc-300">Cómo funciona:</span> Ollama no necesita API key — solo base_url. llama.cpp usa OpenAI-compat (<code className="font-mono text-zinc-400">/v1/chat/completions</code>). Nube soporta OpenRouter/Opencode/OpenAI: elige preset, pega tu <code className="font-mono text-zinc-400">api_key</code> y modelo. <br />
-          Como <a className="text-violet-400 underline" href="https://github.com/cjtemer-kaos/supernexus-v2" target="_blank" rel="noreferrer">Hermes <code className="font-mono">provider: custom / base_url</code></a> y <a className="text-violet-400 underline" href="https://opencode.ai" target="_blank" rel="noreferrer">OpenCode <code className="font-mono">provider.npm=@ai-sdk/openai-compatible</code></a>, un solo campo <code className="font-mono text-zinc-300">base_url</code> alcanza para cualquier endpoint compatible.
+          Como Hermes (<code className="font-mono">provider: custom / base_url</code>) y OpenCode (<code className="font-mono">provider.npm=@ai-sdk/openai-compatible</code>), un solo campo <code className="font-mono text-zinc-300">base_url</code> alcanza para cualquier endpoint compatible.
         </div>
       </div>
     </div>

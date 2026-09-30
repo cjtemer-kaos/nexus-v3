@@ -14,6 +14,7 @@ Patrons:
   - fts5_search.py (FTS5 indexing pattern)
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import json
 import logging
@@ -86,7 +87,7 @@ def _now_iso() -> str:
 
 def _db_path() -> Path:
     home = Path.home()
-    db_dir = home / ".nexus" / "brain"
+    db_dir = brain_path()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "skills_creator.db"
 

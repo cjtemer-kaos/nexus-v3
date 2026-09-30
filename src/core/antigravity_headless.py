@@ -4,6 +4,7 @@ Permite a NEXUS enviar tareas al agente Antigravity (Gemini) y esperar su respue
 Usa la sesión activa de la cuenta Google del usuario (NO necesita API key).
 """
 
+from src.brain.link import brain_path
 import asyncio
 import json
 import sqlite3
@@ -23,7 +24,7 @@ class AntigravityHeadless:
     Envía tareas al buzón compartido y espera la respuesta del agente.
     """
     def __init__(self, db_path: Optional[str] = None, timeout: int = 300):
-        self.db_path = db_path or str(Path.home() / ".nexus" / "brain" / "message_board.db")
+        self.db_path = db_path or str(brain_path() / "message_board.db")
         self.timeout = timeout
 
     def _get_conn(self):

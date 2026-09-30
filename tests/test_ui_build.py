@@ -1,6 +1,7 @@
 """Sección [7] UI build (paridad run_tests.py)."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,11 +12,15 @@ UI_DIR = ROOT / "ui"
 
 pytestmark = pytest.mark.ui
 
+_HAS_NPX = shutil.which("npx") is not None
+_HAS_NPM = shutil.which("npm") is not None
+
 
 def test_package_json_exists():
     assert (UI_DIR / "package.json").exists()
 
 
+@pytest.mark.skipif(not _HAS_NPX, reason="npx no disponible en esta PC")
 def test_tsc_noemit():
     r = subprocess.run(
         "npx tsc --noEmit",
@@ -28,6 +33,7 @@ def test_tsc_noemit():
     assert r.returncode == 0, f"returncode={r.returncode} stderr={r.stderr[:500]} stdout={r.stdout[:500]}"
 
 
+@pytest.mark.skipif(not (_HAS_NPM and (UI_DIR / "node_modules").exists()), reason="npm/node_modules no disponibles en esta PC")
 def test_vite_build():
     r2 = subprocess.run(
         "npm run build",

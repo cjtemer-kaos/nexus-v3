@@ -3,6 +3,7 @@ Auto-Organize Chats - SuperNEXUS v2
 Asignacion AI-powered de chats a carpetas.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "chats"
+DATA_DIR = data_home() / "chats"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 FOLDERS_FILE = DATA_DIR / "folders.json"
 

@@ -5,6 +5,7 @@ Manages conversation sessions with auto-compaction at configurable thresholds.
 Used by DirectorNexus, API server, and all agents.
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -214,7 +215,7 @@ class SessionManager:
         self._checkpoint_store = None  # Auto-trigger checkpoint store
 
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "sessions.db")
+            db_path = str(brain_path() / "sessions.db")
         self.db_path = db_path
         self._in_memory = db_path == ":memory:"
         if not self._in_memory:

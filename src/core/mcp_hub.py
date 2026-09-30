@@ -7,6 +7,7 @@ deduplicates by source+id+name, marks installed entries, falls
 back to local file when all remote sources fail.
 """
 
+from src.core.environment import data_home
 import asyncio
 import json
 import logging
@@ -71,7 +72,7 @@ class CacheEntry:
 _MEM_CACHE: Dict[str, CacheEntry] = {}
 _MEM_TTL = 1800       # 30 min
 _DISK_TTL = 86400     # 24 h
-_CACHE_DIR = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus")) / "cache" / "mcp_hub"
+_CACHE_DIR = data_home() / "cache" / "mcp_hub"
 
 
 def _cache_path(source: str) -> Path:
@@ -219,7 +220,7 @@ class LocalFileSource(McpSource):
     _label = "local"
 
     def __init__(self, path: Optional[Path] = None):
-        self.path = path or Path.home() / ".nexus" / "mcp_presets.json"
+        self.path = path or data_home() / "mcp_presets.json"
 
     async def fetch(self, signal: asyncio.Event) -> SourceResult:
         return self._read_local()

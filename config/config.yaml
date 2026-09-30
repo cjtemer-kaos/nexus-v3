@@ -56,10 +56,14 @@ compaction:
     max_summary_tokens: 800
 providers:
   ollama:
+    # base_url se puede sobre-escribir con la env OLLAMA_HOST (autodeteccion).
     base_url: http://localhost:11434
     timeout_s: 300
     # Embeddings (OpenAI-compat de Ollama): embed() postea a {base}/v1/embeddings
     embed_url: http://localhost:11434
+    # Lista de PREFERENCIA: en el arranque, environment.adapt_models() la
+    # intersecta con los modelos reales de ESTA PC (si no hay match, adopta
+    # los instalados). Portabilidad: copiar a otra PC con otros modelos funciona.
     models:
     - nexus-director-v6
     - qwen3.5-9b

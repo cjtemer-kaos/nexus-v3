@@ -8,6 +8,7 @@ To add a server without touching code: drop an `mcp_servers.json` in one
 of the scanned paths. See docs/MCP_SERVERS.md for the full reference.
 """
 from __future__ import annotations
+from src.core.environment import data_home
 
 import json
 import logging
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 SCAN_PATHS: List[Path] = [
     Path("mcp_servers.json"),
     Path("src/bridges/mcp_servers.json"),
-    Path.home() / ".nexus" / "mcp_servers.json",
+    data_home() / "mcp_servers.json",
 ]
 
 

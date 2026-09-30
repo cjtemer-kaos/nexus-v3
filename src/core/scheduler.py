@@ -3,6 +3,7 @@ Task Scheduler - SuperNEXUS v2
 Cron, event triggers, task chaining, notificaciones multi-canal.
 """
 
+from src.core.environment import data_home
 import asyncio
 import json
 import logging
@@ -15,7 +16,7 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "scheduler"
+DATA_DIR = data_home() / "scheduler"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 TASKS_FILE = DATA_DIR / "tasks.json"
 RUNS_FILE = DATA_DIR / "runs.json"

@@ -4,6 +4,7 @@ Updated by LLMRoleGema when use_checkpoint_contract=true.
 Read by GET /api/checkpoint/metrics.
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import logging
 from collections import defaultdict
@@ -24,7 +25,7 @@ class GemaMetrics:
 
 
 _tracker: Dict[str, GemaMetrics] = defaultdict(GemaMetrics)
-_DB_PATH = Path.home() / ".nexus" / "brain" / "checkpoint_metrics.db"
+_DB_PATH = brain_path() / "checkpoint_metrics.db"
 
 
 def _ensure_db():

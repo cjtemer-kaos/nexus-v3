@@ -2,6 +2,7 @@
 Skills Marketplace — Registry searchable con metadata, install/publish, versioning.
 """
 from __future__ import annotations
+from src.core.environment import data_home
 import json
 import logging
 import shutil
@@ -12,7 +13,7 @@ from src.security.atomic_io import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-SKILL_REGISTRY_PATH = Path.home() / ".nexus" / "skill_registry.json"
+SKILL_REGISTRY_PATH = data_home() / "skill_registry.json"
 SKILLS_INSTALL_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 
 

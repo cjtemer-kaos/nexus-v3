@@ -4,6 +4,7 @@ F20: Live Notes — Auto-updating topic monitoring
 Track topics across web sources with auto-update and versioning.
 """
 
+from src.core.environment import data_home
 import asyncio
 import hashlib
 import logging
@@ -47,7 +48,7 @@ class LiveNotes:
 
     def __init__(self, notes_path: Optional[str] = None):
         if notes_path is None:
-            notes_path = str(Path.home() / ".nexus" / "live_notes")
+            notes_path = str(data_home() / "live_notes")
         self.notes_path = Path(notes_path)
         self.notes_path.mkdir(parents=True, exist_ok=True)
         self._notes: Dict[str, LiveNote] = {}

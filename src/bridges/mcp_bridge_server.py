@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import logging
+import platform
 import sqlite3
 import re
 import shutil
@@ -61,9 +62,13 @@ for p in [Path(__file__).resolve().parents[2] / ".env", Path.cwd() / ".env"]:
             logger.error(f"Error cargando .env desde {p}: {e}")
 
 REMOTE_NODE_IP = os.environ.get("SUPER_NEXUS_REMOTE_NODE_IP", "")
-NEXUS_HOME = os.environ.get("NEXUS_HOME", str(Path.home() / ".nexus"))
 import src.core.nexus_config as nexus_config
-BRAIN_DIR = Path(os.environ.get("NEXUS_BRAIN", str(Path.home() / ".nexus" / "brain")))
+from src.core.environment import data_home, ollama_base_url
+from src.brain.link import brain_path as _brain_path
+
+NEXUS_HOME = os.environ.get("NEXUS_HOME", str(data_home()))
+# Cerebro: NEXUS_BRAIN (enlace externo opcional) > <proyecto>/brain
+BRAIN_DIR = _brain_path()
 BRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Connection pool for MCP servers
@@ -78,7 +83,15 @@ except ImportError:
 # ============================================================
 _BOARD_DB = BRAIN_DIR / "message_board.db"
 _BRAIN_DB = BRAIN_DIR / "cerebro.db"
-_TASK_DIR = Path.home() / ".gemini" / "antigravity" / "scratch" / "Tasks"
+# Tareas Antigravity: integracion externa adaptativa — si Antigravity no
+# esta instalado en esta PC, los tasks caen dentro del proyecto.
+_TASK_DEFAULT = Path.home() / ".gemini" / "antigravity" / "scratch" / "Tasks"
+if os.environ.get("NEXUS_TASK_DIR"):
+    _TASK_DIR = Path(os.environ["NEXUS_TASK_DIR"]).expanduser()
+elif _TASK_DEFAULT.parent.exists():
+    _TASK_DIR = _TASK_DEFAULT
+else:
+    _TASK_DIR = data_home() / "antigravity_tasks"
 _TASK_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -706,8 +719,8 @@ async def token_report() -> str:
 
 @mcp.tool()
 async def system_resources() -> str:
-    """Check CPU, RAM, disk usage on PC1. Use before running heavy tasks to know if system can handle it."""
-    stats = {"node": "pc1"}
+    """Check CPU, RAM, disk usage on this machine. Use before running heavy tasks to know if system can handle it."""
+    stats = {"node": os.environ.get("NEXUS_NODE_NAME") or platform.node() or "local"}
     try:
         import psutil
         stats["cpu_percent"] = psutil.cpu_percent(interval=0.5)
@@ -715,18 +728,23 @@ async def system_resources() -> str:
         stats["ram_percent"] = mem.percent
         stats["ram_used_gb"] = round(mem.used / (1024**3), 1)
         stats["ram_total_gb"] = round(mem.total / (1024**3), 1)
+        # Disco del proyecto (portable: funciona en NT, Linux, macOS)
         try:
-            disk = psutil.disk_usage("D:\\")
-            stats["disk_d_percent"] = disk.percent
-            stats["disk_d_free_gb"] = round(disk.free / (1024**3), 1)
+            _ws = str(Path(__file__).resolve().parents[2])
+            disk = psutil.disk_usage(_ws)
+            stats["disk_workspace_percent"] = disk.percent
+            stats["disk_workspace_free_gb"] = round(disk.free / (1024**3), 1)
         except Exception:
             pass
-        try:
-            disk_c = psutil.disk_usage("C:\\")
-            stats["disk_c_percent"] = disk_c.percent
-            stats["disk_c_free_gb"] = round(disk_c.free / (1024**3), 1)
-        except Exception:
-            pass
+        # En Windows ademas el SystemDrive (C: por defecto)
+        if os.name == "nt":
+            try:
+                _sd = os.environ.get("SystemDrive", "C:") + "\\"
+                disk_c = psutil.disk_usage(_sd)
+                stats["disk_sys_percent"] = disk_c.percent
+                stats["disk_sys_free_gb"] = round(disk_c.free / (1024**3), 1)
+            except Exception:
+                pass
         stats["safe_to_run_heavy"] = stats["cpu_percent"] < 75 and stats["ram_percent"] < 80
     except ImportError:
         stats["error"] = "psutil not installed"
@@ -974,7 +992,7 @@ def _init_memory_db():
         ts TEXT NOT NULL,
         content TEXT NOT NULL,
         category TEXT DEFAULT 'general',
-        project TEXT DEFAULT 'supernexus-v2',
+        project TEXT DEFAULT 'nexus-v3',
         metadata TEXT DEFAULT '{}'
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS findings (
@@ -1181,7 +1199,7 @@ def _content_hash(content: str, category: str, project: str) -> str:
 async def add_observation(
     content: str,
     category: str = "general",
-    project: str = "supernexus-v2",
+    project: str = "nexus-v3",
     agent: str = "claude-code",
     metadata: str = "{}",
     topic_key: str = "",
@@ -1341,42 +1359,48 @@ async def add_observation(
 
 @mcp.tool()
 async def describe_image(image_data: str, instruction: str = "Describe this image") -> str:
-    """Describe an image using the vision gemma4:12b model.
-    
+    """Describe an image using a local vision model (detectado en Ollama de esta PC).
+
     Args:
         image_data: Base64 encoded image data
         instruction: Description instruction for the image
-    
+
     Returns:
         JSON string with vision analysis results
     """
     import httpx
     import base64
-    
+    from src.core.environment import list_ollama_models, pick_model
+
+    vision_model = pick_model(
+        list_ollama_models(ollama_base_url()),
+        prefer=("gemma4", "qwen2.5vl", "qwen3-vl", "llava", "moondream", "janus"),
+    ) or "qwen2.5vl:7b"
+
     result = {
-        "provider": "vision-gemma4",
-        "model": "gemma4:12b",
+        "provider": "vision-ollama",
+        "model": vision_model,
         "instruction": instruction,
         "success": False,
         "error": "Vision analysis failed"
     }
-    
+
     try:
         # Clean the image data (remove data: prefix if present)
         img_clean = image_data
         if img_clean.startswith("data:"):
             img_clean = img_clean.split(",", 1)[1]
-        
+
         # Use the vision process endpoint
-        url = "http://localhost:11434/api/vision/process"
-        
+        url = f"{ollama_base_url()}/api/vision/process"
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json={
-                "model": "gemma4:12b",
+                "model": vision_model,
                 "prompt": instruction,
                 "images": [img_clean],
                 "stream": False,
-                "provider": "vision-gemma4"
+                "provider": "vision-ollama"
             })
             
             if resp.status_code == 200:
@@ -1400,7 +1424,7 @@ async def add_episode(
     where: str = "",
     learned: str = "",
     category: str = "episode",
-    project: str = "supernexus-v2",
+    project: str = "nexus-v3",
     agent: str = "claude-code",
     topic_key: str = "",
     type: str = "decision",
@@ -1596,7 +1620,7 @@ async def search_by_entity(entity_text: str = "", entity_type: str = "", limit: 
 
 
 @mcp.tool()
-async def get_topic_families(project: str = "supernexus-v2") -> str:
+async def get_topic_families(project: str = "nexus-v3") -> str:
     """Get topic family distribution for observations.
 
     FASE 1.3: Family heuristics — groups topic keys by family prefix
@@ -1968,7 +1992,7 @@ async def retrieval_search(query: str, top_k: int = 10) -> str:
             """Use observations FTS5 for keyword search."""
             try:
                 import sqlite3
-                db_path = os.path.join(str(Path.home()), ".nexus", "brain", "nexus_memory.db")
+                db_path = str(_MEMORY_DB)
                 if not os.path.exists(db_path):
                     return []
                 conn = sqlite3.connect(db_path)
@@ -2636,7 +2660,7 @@ async def system_security_scan() -> str:
     try:
         from src.security.system_scanner import SystemScanner
     except ImportError:
-        return json.dumps({"error": "system_scanner module not available - run from supernexus-v2 project root"}, indent=2)
+        return json.dumps({"error": "system_scanner module not available - run from nexus-v3 project root"}, indent=2)
 
     scanner = SystemScanner(emit_events=False)
     report = scanner.run_full_scan()

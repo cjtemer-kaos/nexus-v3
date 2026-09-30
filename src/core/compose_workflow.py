@@ -10,6 +10,7 @@ Phases: SPEC → PLAN → BUILD → TEST → REVIEW → MERGE → REFLECT
 - Persiste estado en SQLite
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -91,7 +92,7 @@ class ComposeWorkflow:
     def __init__(self, director=None, db_path: Optional[str] = None):
         self.director = director
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "compose.db")
+            db_path = str(brain_path() / "compose.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

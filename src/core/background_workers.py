@@ -10,6 +10,7 @@ Basado en el patrón Daemon de multica: heartbeat, auto-registro, GC, health ser
   Daemon:  heartbeatLoop (30s), gcLoop (5min), autoUpdateLoop (1h), healthServer
 """
 
+from src.core.environment import data_home
 import asyncio
 import logging
 import os
@@ -523,7 +524,7 @@ class BackupWorker(BaseWorker):
     
     async def run(self, context: Dict[str, Any]) -> WorkerResult:
         try:
-            nexus_home = context.get("nexus_home", Path.home() / ".nexus")
+            nexus_home = context.get("nexus_home", data_home())
             backup_dir = Path(nexus_home) / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             
@@ -867,7 +868,7 @@ class DaemonRuntime:
         """Every N seconds: report alive, detect if deregistered, re-register."""
         while self._running:
             try:
-                nexus_dir = Path.home() / ".nexus"
+                nexus_dir = data_home()
                 nexus_dir.mkdir(exist_ok=True)
                 hb = nexus_dir / "daemon.heartbeat"
                 atomic_write_json(hb, {
@@ -887,7 +888,7 @@ class DaemonRuntime:
         """Clean stale sessions, old results, temp files."""
         while self._running:
             try:
-                nexus_dir = Path.home() / ".nexus"
+                nexus_dir = data_home()
                 if nexus_dir.exists():
                     # Clean heartbeats older than 1h (stale daemons)
                     now = time.time()
@@ -924,7 +925,7 @@ class DaemonRuntime:
         """Serve health status via a simple file-based endpoint."""
         while self._running:
             try:
-                nexus_dir = Path.home() / ".nexus"
+                nexus_dir = data_home()
                 nexus_dir.mkdir(exist_ok=True)
                 status = self.wm.get_status()
                 health = nexus_dir / "daemon.health"

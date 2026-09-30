@@ -9,6 +9,7 @@ Uso:
     python prepare_nexus_datasets.py --collect-all
 """
 
+from src.core.environment import data_home
 import argparse
 import json
 import logging
@@ -31,7 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
+NEXUS_HOME = data_home()
 BRAIN_DIR = NEXUS_HOME / "brain"
 SMOLTALK_DIR = Path(os.environ.get("SMOLTALK_DIR", str(PROJECT_ROOT / "data" / "SmolTalk")))
 

@@ -3,6 +3,7 @@ Security Utilities - SuperNEXUS v2
 Absorbed from Odysseus: url_safety, secret_storage, settings_scrub
 """
 
+from src.core.environment import data_home
 import ipaddress
 import logging
 import os
@@ -90,7 +91,7 @@ def _get_fernet():
         logger.warning("cryptography no instalado — secret_storage deshabilitado")
         return None
 
-    key_path = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / ".app_key"
+    key_path = data_home() / ".app_key"
     if key_path.exists():
         key = key_path.read_bytes()
     else:

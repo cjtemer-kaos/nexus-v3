@@ -9,6 +9,7 @@ Gestiona el estado del contexto por tokens:
 - renew_required (>500K) → forzar renovación
 """
 
+from src.core.environment import data_home
 import logging
 import os
 import sqlite3
@@ -82,7 +83,7 @@ class SwarmLifecycle:
     """Token-aware lifecycle manager for NexusHive workers."""
 
     def __init__(self, nexus_home: Optional[str] = None):
-        home = nexus_home or os.environ.get("NEXUS_HOME", str(Path.home() / ".nexus"))
+        home = nexus_home or os.environ.get("NEXUS_HOME", str(data_home()))
         self.root = Path(home) / "swarm"
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "lifecycle.db"

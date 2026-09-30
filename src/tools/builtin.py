@@ -76,7 +76,7 @@ class WorkspaceTools:
                     overwrite: bool = False) -> Dict:
         """Crea archivo con campos semánticos separados. Layer 2+4 fix.
         Auto-resuelve filename + location. location absoluta (C:\\, /home) → respeta.
-        location drive-root (D:\\) → fallback a D:\\Temp. location relativa → workspace.
+        location raíz de unidad (ej: D:\\) → fallback a <unidad>/Temp. location relativa → workspace.
         location vacía → workspace/data/."""
         # Sanitize filename: reject if contains path separators
         if not filename or not filename.strip():
@@ -172,7 +172,7 @@ class WorkspaceTools:
                 warnings.append(
                     f"PATH REJECTED: '{p}' is a drive root. Windows blocks writes here "
                     f"([Errno 22] Invalid argument). Use a subdirectory like "
-                    f"'D:\\\\Temp\\\\<file>' or 'D:\\\\Users\\\\<you>\\\\<file>'."
+                    f"'{parts[0]}Temp\\\\<file>' or '{parts[0]}Users\\\\<you>\\\\<file>'."
                 )
             # Drive root + filename (D:\prueba.txt) — this is the bug case
             elif len(parts) == 2 and parts[1] != "\\" and not p.name.startswith("$"):
@@ -188,15 +188,16 @@ class WorkspaceTools:
 
     @staticmethod
     def _resolve_drive_root_intent(path: str) -> str:
-        """Layer 4: si el path es drive root (D:\\file), auto-fallback a D:\\Temp\\file
-        en lugar de fallar. Solo aplica si D:\\Temp existe o se puede crear."""
+        """Layer 4: si el path es raíz de unidad (ej: D:\\file), auto-fallback a
+        <unidad>\\Temp\\file en lugar de fallar. Solo aplica si <unidad>\\Temp
+        existe o se puede crear."""
         p = Path(path)
         if not p.is_absolute():
             return path
         parts = p.parts
         # Drive root only: Path("D:\\").parts == ('D:\\',), len 1, no name
         if len(parts) == 1 or (len(parts) == 2 and not p.name and p.parts[1] == "\\"):
-            drive = p  # already 'D:\\'
+            drive = p  # ya es raiz de unidad
             candidate = drive / "Temp" / "_fallback.txt"
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +206,7 @@ class WorkspaceTools:
                 return path
         # Drive root + filename: Path("D:\\prueba.txt").parts == ('D:\\','prueba.txt')
         if len(parts) == 2 and parts[0].endswith("\\") and p.name and "." in p.name and " " not in p.name:
-            drive = parts[0]  # 'D:\\'
+            drive = parts[0]  # prefijo de unidad (ej: raiz + archivo)
             try:
                 Path(drive + "Temp").mkdir(parents=True, exist_ok=True)
                 return drive + "Temp\\" + p.name

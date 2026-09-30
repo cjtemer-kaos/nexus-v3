@@ -10,6 +10,7 @@ Each loop feeds into the next: fast loop findings accumulate into medium loop
 training data, and medium loop results inform slow loop architecture changes.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 from collections import defaultdict
@@ -22,7 +23,7 @@ from src.security.atomic_io import atomic_write_json
 
 logger = logging.getLogger("nexus-three-loop")
 
-NEXUS_HOME = Path.home() / ".nexus"
+NEXUS_HOME = data_home()
 THREE_LOOP_DIR = NEXUS_HOME / "three_loop"
 THREE_LOOP_DIR.mkdir(parents=True, exist_ok=True)
 

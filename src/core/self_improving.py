@@ -17,6 +17,7 @@ Design:
   Singleton via get_self_improving_loop() — one instance per process.
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import json
 import logging
@@ -61,7 +62,7 @@ class SelfImprovingLoop:
         5. Daily digest() summarises progress.
     """
 
-    DB_PATH = Path.home() / ".nexus" / "brain" / "self_improving.db"
+    DB_PATH = brain_path() / "self_improving.db"
 
     def __init__(self, db_path: str | Path | None = None):
         self._db_path = Path(db_path) if db_path else self.DB_PATH

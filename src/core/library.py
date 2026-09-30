@@ -3,6 +3,7 @@ Library - SuperNEXUS v2
 Vista unificada de todos los recursos: chats, documentos, gallery, research, notas.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -41,7 +42,7 @@ class LibraryManager:
     """Vista unificada de todos los recursos del sistema."""
 
     def __init__(self, data_dir: Optional[Path] = None):
-        self.data_dir = data_dir or Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus"))
+        self.data_dir = data_dir or data_home()
         self._items: List[LibraryItem] = []
 
     def scan_chats(self) -> List[Dict]:

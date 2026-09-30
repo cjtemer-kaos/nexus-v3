@@ -104,6 +104,19 @@ async def _startup():
     logger.info("Starting Nexus v3 harness backend")
     _state["config"] = _load_config_safe()
     _state["brain"] = _brain_info_safe()
+    # Resumen de entorno: qué hay en ESTA PC (SO, Ollama, modelos, brain)
+    try:
+        from src.core import environment as _env
+        _ocfg = (_state["config"].get("providers", {}) or {}).get("ollama", {}) or {}
+        _base = _env.ollama_base_url(_ocfg.get("base_url"))
+        _tags = _env.list_ollama_models(_base)
+        logger.info(
+            "Entorno detectado: os=%s root=%s ollama=%s modelos_ollama=%d brain=%s",
+            _env.os_name(), _env.workspace_root(), _base, len(_tags),
+            (_state["brain"] or {}).get("brain_path", "?"),
+        )
+    except Exception as e:
+        logger.warning(f"environment detect failed: {e}")
     # Touch session log so DB is created early
     try:
         _session_log()
@@ -181,8 +194,20 @@ def _build_router_from_config(cfg: dict):
     )
     if "ollama" in prov_cfg:
         oc = prov_cfg["ollama"]
-        router.register_provider("ollama", OllamaProvider(base_url=oc.get("base_url", "http://localhost:11434"), timeout_s=oc.get("timeout_s", 300)))
-        for m in oc.get("models", []) or []:
+        from src.core import environment as _env
+        _base = _env.ollama_base_url(oc.get("base_url"))
+        _avail = _env.list_ollama_models(_base)
+        _resolved, _dropped = _env.adapt_models(oc.get("models") or [], _avail)
+        if _avail:
+            logger.info(
+                "Ollama en %s: %d modelos detectados; registrados %d%s",
+                _base, len(_avail), len(_resolved),
+                f"; no existen aquí: {_dropped}" if _dropped else "",
+            )
+        else:
+            logger.warning(f"Ollama no responde en {_base} — se registran los modelos de config (se resuelven en cada call)")
+        router.register_provider("ollama", OllamaProvider(base_url=_base, timeout_s=oc.get("timeout_s", 300)))
+        for m in _resolved:
             router.register_model(ModelRoute(id=m, provider_name="ollama"))
     if "llamacpp" in prov_cfg:
         lc = prov_cfg["llamacpp"]
@@ -285,7 +310,7 @@ async def providers_status():
     import re as _re
     def _pretty_id(mid: str) -> tuple[str, str]:
         """Normaliza ID en vivo (ruta GGUF) a id corto de catálogo + etiqueta.
-        Ej: D:\\...\\nexus-director-v6-Q8_0.gguf -> (nexus-director-v6, Nexus Director v6)."""
+        Ej: /ruta/modelos/nexus-director-v6-Q8_0.gguf -> (nexus-director-v6, Nexus Director v6)."""
         base = _re.split(r"[\\/]", mid)[-1]
         if base.lower().endswith(".gguf"):
             base = base[:-5]

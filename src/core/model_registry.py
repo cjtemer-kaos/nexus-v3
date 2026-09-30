@@ -5,6 +5,7 @@ Inspired by openakita/llm/capabilities.py (869 lines) and 01_CORE/nexus_director
 Provides intelligent model selection based on task requirements.
 """
 from __future__ import annotations
+from src.core.environment import data_home
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -146,94 +147,94 @@ MODEL_CATALOG: list[ModelInfo] = [
         description="Flash financiero, rapido y razonamiento ligero. Via opencode CLI (no zen directo).",
     ),
 
-    # === Llama.cpp (Local, Free, D:\models <8GB) - auto swap, no VRAM si no se usa ===
+    # === Local via Ollama (detectado en /api/tags de ESTA PC) - llama.cpp descartado 2026-09-28 ===
     ModelInfo(
         id="nexus-director-v6",
-        name="Nexus Director v6 (Llama.cpp Q8_0 4.3GB)",
-        provider="llama",
+        name="Nexus Director v6 (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.REASONING, Capability.ANALYSIS, Capability.TOOLS],
         context_window=40960,
         speed_tps=30,
         quality=9,
         cost=0,
-        description="Director/orquestador residente :8080. D:\\ias\\...\\nexus-director-v6-Q8_0.gguf",
+        description="Director/orquestador local via Ollama.",
     ),
     ModelInfo(
         id="qwen3.5-9b",
-        name="Qwen 3.5 9B (Llama.cpp Q4 5.29GB)",
-        provider="llama",
+        name="Qwen 3.5 9B (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.CODE, Capability.CREATIVE, Capability.REASONING],
         context_window=131072,
         speed_tps=35,
         quality=9,
         cost=0,
-        description="Codigo y chat general. D:\\models\\Qwen3.5-9B\\Qwen3.5-9B-Q4_K_M.gguf - swap 30s",
+        description="Codigo y chat general via Ollama.",
     ),
     ModelInfo(
         id="deepseek-r1:8b",
-        name="DeepSeek R1 8B (Llama.cpp Q4 4.87GB)",
-        provider="llama",
+        name="DeepSeek R1 8B (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.REASONING, Capability.RESEARCH],
         context_window=32000,
         speed_tps=20,
         quality=9,
         cost=0,
-        description="Razonamiento profundo. D:\\models\\library-deepseek-r1-8b.gguf",
+        description="Razonamiento profundo via Ollama.",
     ),
     ModelInfo(
         id="qwen3-vl-4b",
-        name="Qwen3 VL 4B (Llama.cpp Q4 2.33GB + mmproj)",
-        provider="llama",
+        name="Qwen3 VL 4B (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.VISION],
         context_window=32000,
         speed_tps=25,
         quality=8,
         cost=0,
-        description="Vision Qwen3. D:\\models\\Qwen3-VL-4B - swap con mmproj",
+        description="Vision Qwen3 via Ollama.",
     ),
     ModelInfo(
         id="janus-pro-7b",
-        name="Janus Pro 7B Vision (Llama.cpp Q4 3.93GB)",
-        provider="llama",
+        name="Janus Pro 7B Vision (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.VISION],
         context_window=32000,
         speed_tps=20,
         quality=8,
         cost=0,
-        description="Vision DeepSeek Janus. D:\\models\\Janus-Pro-7B-Q4",
+        description="Vision DeepSeek Janus via Ollama.",
     ),
     ModelInfo(
         id="omnicoder-2-9b",
-        name="Omnicoder 2 9B (Llama.cpp Q4 5.34GB)",
-        provider="llama",
+        name="Omnicoder 2 9B (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.CODE],
         context_window=32000,
         speed_tps=30,
         quality=9,
         cost=0,
-        description="Codigo especializado. D:\\models\\carstenuhlig-omnicoder-2-9b",
+        description="Codigo especializado via Ollama.",
     ),
     ModelInfo(
         id="nemotron-3-nano:4b",
-        name="Nemotron 3 Nano 4B (Llama.cpp Q4 2.64GB)",
-        provider="llama",
+        name="Nemotron 3 Nano 4B (local)",
+        provider="ollama",
         capabilities=[Capability.CHAT, Capability.ANALYSIS, Capability.FAST],
         context_window=8192,
         speed_tps=60,
         quality=5,
         cost=0,
-        description="Rapido lightweight. D:\\models\\library-nemotron-3-nano-4b.gguf",
+        description="Rapido lightweight via Ollama.",
     ),
     ModelInfo(
         id="nomic-embed-text",
-        name="Nomic Embed Text (Llama.cpp Q4 0.26GB)",
-        provider="llama",
+        name="Nomic Embed Text (local)",
+        provider="ollama",
         capabilities=[Capability.EMBEDDING],
         context_window=8192,
         speed_tps=100,
         quality=8,
         cost=0,
-        description="Embeddings RAG. D:\\models\\library-nomic-embed-text-latest.gguf - siempre CPU",
+        description="Embeddings RAG via Ollama.",
     ),
 ]
 
@@ -400,37 +401,13 @@ import time as _time
 
 
 def _ollama_installed_models() -> set:
-    """Consulta Ollama /api/tags (timeout corto, no bloqueante)."""
-    try:
-        import httpx
-        url = "http://127.0.0.1:11434/api/tags"
-        r = httpx.get(url, timeout=2.5)
-        if r.status_code == 200:
-            data = r.json()
-            return {m.get("name", "") for m in data.get("models", [])}
-    except Exception:
-        pass
-    return set()
+    """Modelos reales del Ollama local (env OLLAMA_HOST > config > default)."""
+    from src.core import environment
+    return set(environment.list_ollama_models(environment.ollama_base_url(), timeout=2.5))
 
 def _llama_installed_models() -> set:
-    """GGUF en D:\\models (llama.cpp) - no ocupan VRAM hasta cargar."""
-    import pathlib
-    ids = set()
-    # mapeo id -> path GGUF (todos <8GB)
-    mapping = {
-        "nexus-director-v6": r"D:\ias\proyectos\supernexus-v2\models\nexus-director-v6\nexus-director-v6-Q8_0.gguf",
-        "qwen3.5-9b": r"D:\models\Qwen3.5-9B\Qwen3.5-9B-Q4_K_M.gguf",
-        "deepseek-r1:8b": r"D:\models\ollama_export\library-deepseek-r1-8b.gguf",
-        "qwen3-vl-4b": r"D:\models\Qwen3-VL-8B\Qwen3VL-8B-Instruct-Q4_K_M.gguf",
-        "janus-pro-7b": r"D:\models\Janus-Pro-7B-Q4\Janus-Pro-7B.Q4_K_M.gguf",
-        "omnicoder-2-9b": r"D:\models\ollama_export\carstenuhlig-omnicoder-2-9b-q4_k_m.gguf",
-        "nemotron-3-nano:4b": r"D:\models\ollama_export\library-nemotron-3-nano-4b.gguf",
-        "nomic-embed-text": r"D:\models\ollama_export\library-nomic-embed-text-latest.gguf",
-    }
-    for mid, p in mapping.items():
-        if pathlib.Path(p).exists():
-            ids.add(mid)
-    return ids
+    """llama.cpp DESCARTADO (2026-09-28, orden del usuario). Sin detección."""
+    return set()
 
 
 def _zen_key_available() -> bool:
@@ -439,7 +416,7 @@ def _zen_key_available() -> bool:
     if os.environ.get("OPENCODE_API_KEY"):
         return True
     try:
-        cp_path = os.path.join(os.path.expanduser("~"), ".nexus", "cloud_providers.json")
+        cp_path = os.path.join(str(data_home()), "cloud_providers.json")
         if os.path.exists(cp_path):
             with open(cp_path, "r", encoding="utf-8") as f:
                 import json
@@ -473,23 +450,25 @@ def _zen_key_available() -> bool:
 
 
 def get_available_model_ids() -> set:
-    """IDs de modelos REALMENTE disponibles (Ollama instalados + Zen con key)."""
+    """IDs de modelos REALMENTE disponibles (Ollama instalados + Zen con key).
+
+    Match exacto o por familia: el id del catálogo puede no llevar tag
+    (qwen3.5-9b) mientras Ollama reporta qwen3.5:9b / nomic-embed-text:latest.
+    """
     global _available_cache, _available_cache_ts
     now = _time.time()
     if _available_cache is not None and (now - _available_cache_ts) < _AVAILABLE_TTL:
         return _available_cache
 
+    from src.core.environment import family_match
+
     ollama = _ollama_installed_models()
     zen_ok = _zen_key_available()
-
-    llama = _llama_installed_models()
+    ollama_list = list(ollama)
     ids: set = set()
     for m in MODEL_CATALOG:
         if m.provider == "ollama":
-            if m.id in ollama:
-                ids.add(m.id)
-        elif m.provider == "llama":
-            if m.id in llama:
+            if family_match(m.id, ollama_list):
                 ids.add(m.id)
         elif m.provider == "opencode-zen":
             if zen_ok:

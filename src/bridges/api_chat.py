@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import httpx
 from src.core import nexus_config
+from src.core.environment import list_ollama_models, ollama_base_url, pick_model
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class APIEndpoint:
     headers: Dict[str, str] = field(default_factory=dict)
     streaming: bool = True
     status: str = "unknown"
+    kind: str = "generic"  # "ollama" | "generic"
 
 
 class APIChatBridge:
@@ -46,8 +48,9 @@ class APIChatBridge:
         self.endpoints = {
             "ollama_local": APIEndpoint(
                 name="ollama_local",
-                url="http://127.0.0.1:11434",
-                model="deepseek-r1:7b",
+                url=ollama_base_url(),
+                model="",  # se resuelve en runtime contra /api/tags
+                kind="ollama",
                 streaming=True,
             ),
             "nexus_master": APIEndpoint(
@@ -62,6 +65,17 @@ class APIChatBridge:
             ),
         }
 
+    def _resolve_model(self, ep: APIEndpoint) -> str:
+        """Modelo de Ollama para ESTA PC (detectado, no hardcodeado)."""
+        if ep.model:
+            return ep.model
+        m = pick_model(
+            list_ollama_models(ep.url, timeout=2.0),
+            prefer=("deepseek-r1", "qwen2.5-coder", "gemma4"),
+        )
+        ep.model = m or ""
+        return ep.model
+
     async def chat(self, endpoint_name: str, message: str, system: str = "", history: List[Dict] = None) -> Dict:
         """Envia mensaje y recibe respuesta completa"""
         ep = self.endpoints.get(endpoint_name)
@@ -70,9 +84,14 @@ class APIChatBridge:
 
         try:
             # Ollama-compatible API
-            if "11434" in ep.url:
+            if ep.kind == "ollama":
+                model = self._resolve_model(ep)
+                if not model:
+                    return {"success": False,
+                            "error": "no local Ollama models detected (is ollama running?)",
+                            "endpoint": endpoint_name}
                 payload = {
-                    "model": ep.model,
+                    "model": model,
                     "messages": self._build_messages(message, system, history),
                     "stream": False,
                 }
@@ -99,9 +118,12 @@ class APIChatBridge:
             return
 
         try:
-            if "11434" in ep.url:
+            if ep.kind == "ollama":
+                model = self._resolve_model(ep)
+                if not model:
+                    return
                 payload = {
-                    "model": ep.model,
+                    "model": model,
                     "messages": self._build_messages(message, system),
                     "stream": True,
                 }
@@ -162,7 +184,7 @@ class APIChatBridge:
         results = {}
         for name, ep in self.endpoints.items():
             try:
-                if "11434" in ep.url:
+                if ep.kind == "ollama":
                     r = await self.client.get(f"{ep.url}/api/tags", timeout=5.0)
                 else:
                     r = await self.client.get(f"{ep.url}/health", timeout=5.0)

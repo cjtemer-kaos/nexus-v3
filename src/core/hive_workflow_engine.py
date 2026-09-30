@@ -20,6 +20,7 @@ Usage:
     result = engine.wait(handle.id, timeout=600)
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import asyncio
 import json
@@ -40,7 +41,7 @@ from src.integrations.nexus_hive_bridge import NexusHiveBridge
 logger = logging.getLogger("nexus.hive_workflow")
 
 
-DEFAULT_DB = Path.home() / ".nexus" / "brain" / "message_board.db"
+DEFAULT_DB = brain_path() / "message_board.db"
 
 
 class StepStatus(str, Enum):

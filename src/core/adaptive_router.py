@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.core.environment import data_home
 
 import json
 import logging
@@ -13,7 +14,7 @@ from src.security.atomic_io import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-_ROUTER_STORAGE = Path.home() / ".nexus" / "router_state.json"
+_ROUTER_STORAGE = data_home() / "router_state.json"
 
 
 @dataclass

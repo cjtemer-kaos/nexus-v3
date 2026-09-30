@@ -12,6 +12,7 @@ Patrons:
   - auto_skill_creator.py (SkillState enum)
 """
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import logging
 import sqlite3
@@ -91,7 +92,7 @@ def _now_iso() -> str:
 
 def _db_path() -> Path:
     home = Path.home()
-    db_dir = home / ".nexus" / "brain"
+    db_dir = brain_path()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "skill_lifecycle.db"
 

@@ -5,6 +5,7 @@ Users create .md files with prompts that can be executed with variables.
 Supports user-level and project-level scopes.
 """
 
+from src.core.environment import data_home
 import logging
 import re
 from typing import Dict, List, Optional
@@ -46,7 +47,7 @@ class CustomCommandManager:
 
     def __init__(self, user_dir: Optional[str] = None, project_dir: Optional[str] = None):
         if user_dir is None:
-            user_dir = str(Path.home() / ".nexus" / "commands")
+            user_dir = str(data_home() / "commands")
         if project_dir is None:
             project_dir = str(Path.cwd() / ".nexus" / "commands")
 

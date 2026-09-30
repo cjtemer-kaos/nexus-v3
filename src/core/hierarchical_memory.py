@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.core.environment import data_home
 
 import json
 import logging
@@ -14,7 +15,7 @@ from src.security.atomic_io import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_STORAGE = Path.home() / ".nexus" / "hierarchical_memory.json"
+_MEMORY_STORAGE = data_home() / "hierarchical_memory.json"
 
 
 class MemoryTier(Enum):

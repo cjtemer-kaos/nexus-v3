@@ -16,6 +16,7 @@ Pipeline de scoring:
   6. Hybrid fusion con pesos configurables
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import re
@@ -71,7 +72,7 @@ class HybridMemoryBackend:
     MIN_SEMANTIC_THRESHOLD = 0.3
     
     def __init__(self, db_path: Path = None, ollama_url: str = "http://localhost:11434"):
-        self.db_path = db_path or Path.home() / ".nexus" / "brain" / "hybrid_memory.db"
+        self.db_path = db_path or brain_path() / "hybrid_memory.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.ollama_url = ollama_url
         self.embedding_model = "nomic-embed-text"

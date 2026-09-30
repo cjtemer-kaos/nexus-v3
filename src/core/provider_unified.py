@@ -253,23 +253,6 @@ class UnifiedProvider(BaseProvider):
     async def chat(self, messages: list[ChatMessage], model: str, temperature: float = 0.7,
                    tools: Optional[list[dict]] = None, stream_callback=None,
                    system_prompt: Optional[str] = None) -> ChatResponse:
-        # auto-swap llama.cpp model en D:\models si no es el residente (no ocupa VRAM si no se usa)
-        if self.local_provider and self.name == "llama" and model:
-            try:
-                import asyncio as _aio, pathlib as _pl
-                # si es GGUF path directo, usarlo; si es alias, swap_manager lo resuelve
-                from pathlib import Path as _P
-                # solo swap si es GGUF local (evita cloud)
-                if model.endswith(".gguf") or model in ("nexus-director-v6", "qwen3.5-9b", "deepseek-r1:8b", "qwen3-vl-4b", "janus-pro-7b", "omnicoder-2-9b", "nemotron-3-nano:4b"):
-                    import sys as _sys
-                    sys.path.insert(0, r"D:\llama.cpp")
-                    try:
-                        import swap_manager as _sm
-                        await _aio.to_thread(_sm.ensure_model, model)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
         body = {
             "model": model,
             "messages": self._build_messages(messages, system_prompt),
@@ -386,68 +369,25 @@ class ProviderFactory:
     @staticmethod
     def from_provider_string(ps: str, api_keys: Optional[dict] = None) -> tuple[Optional[BaseProvider], str]:
         api_keys = api_keys or {}
-        # Fallback: ollama: -> llama: cuando Ollama desinstalado (todo en D:\models)
         if ps.startswith("ollama:"):
-            import os, pathlib
-            # si Ollama sigue vivo, usarlo; si no, fallback a llama D:\
-            try:
-                import httpx
-                httpx.get("http://localhost:11434/api/tags", timeout=1.0)
-                # Ollama vivo
-                model = ps.split(":", 1)[1].split("@")[0].strip()
-                return UnifiedProvider(
-                    name="ollama",
-                    base_url="http://localhost:11434",
-                    auth_style=AuthStyle.NONE,
-                    supports_tools=False,
-                    supports_vision=True,
-                    local_provider=True,
-                ), model
-            except Exception:
-                # fallback a llama D:\models
-                base_url = os.environ.get("LLAMA_CPP_URL", "http://127.0.0.1:8000").rstrip("/").removesuffix("/v1")
-                raw = ps.split(":", 1)[1].split("@")[0].strip()
-                # mapeo ollama -> GGUF en D:\models
-                mapping = {
-                    "nexus-director-v6": r"D:\ias\proyectos\supernexus-v2\models\nexus-director-v6\nexus-director-v6-Q8_0.gguf",
-                    "nexus-director-v6:latest": r"D:\ias\proyectos\supernexus-v2\models\nexus-director-v6\nexus-director-v6-Q8_0.gguf",
-                    "qwen2.5-coder:7b": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                    "qwen2.5:0.5b": r"D:\models\Qwen3-VL-4B\Qwen3VL-4B-Instruct-Q4_K_M.gguf",
-                    "qwen2.5vl:7b": r"D:\models\Qwen3-VL-4B\Qwen3VL-4B-Instruct-Q4_K_M.gguf",
-                    "deepseek-r1:8b": r"D:\models\ollama_export\library-deepseek-r1-8b.gguf",
-                    "nemotron-3-nano:4b": r"D:\models\ollama_export\library-nemotron-3-nano-4b.gguf",
-                    "nomic-embed-text": r"D:\models\ollama_export\library-nomic-embed-text-latest.gguf",
-                    "nomic-embed-text:latest": r"D:\models\ollama_export\library-nomic-embed-text-latest.gguf",
-                    "gemma4:12b": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                    "gemma4:latest": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                    "qwen3.5:9b": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                    "carstenuhlig/omnicoder-2-9b:q4_k_m": r"D:\models\ollama_export\carstenuhlig-omnicoder-2-9b-q4_k_m.gguf",
-                }
-                model = mapping.get(raw, raw)
-                # si archivo no existe, devolver raw para error visible
-                return UnifiedProvider(name="llama", base_url=base_url, auth_style=AuthStyle.NONE, supports_tools=True, supports_vision=True, local_provider=True), model
+            from src.core.environment import ollama_base_url
+            url = ollama_base_url()
+            model = ps.split(":", 1)[1].split("@")[0].strip()
+            return UnifiedProvider(
+                name="ollama",
+                base_url=url,
+                auth_style=AuthStyle.NONE,
+                supports_tools=False,
+                supports_vision=True,
+                local_provider=True,
+            ), model
         if ps.startswith("llama:"):
-            # llama.cpp via llama-server OpenAI-compatible (local GGUF)
-            # ps = llama:model_id  -> model is full path or alias; base_url from env LLAMA_CPP_URL
+            # llama.cpp opt-in via llama-server OpenAI-compatible (si el usuario lo configura)
+            # ps = llama:<ruta-o-alias> ; base_url desde env LLAMA_CPP_URL ; sin mapeos de path
             import os
             base_url = os.environ.get("LLAMA_CPP_URL", "http://localhost:8080")
-            # strip /v1 if present, UnifiedProvider adds /v1/chat/completions
             base_url = base_url.rstrip("/").removesuffix("/v1")
             model = ps.split(":", 1)[1].split("@")[0].strip()
-            # mapear alias a GGUF reales en D:\models (todos <8GB)
-            mapping = {
-                "director-v6": r"D:\ias\proyectos\supernexus-v2\models\nexus-director-v6\nexus-director-v6-Q8_0.gguf",
-                "nexus-director-v6": r"D:\ias\proyectos\supernexus-v2\models\nexus-director-v6\nexus-director-v6-Q8_0.gguf",
-                "qwen3.5-9b": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                "qwen3.5:9b": r"D:\models\ollama_export\library-qwen3.5-9b.gguf",
-                "deepseek-r1:8b": r"D:\models\ollama_export\library-deepseek-r1-8b.gguf",
-                "deepseek-r1": r"D:\models\ollama_export\library-deepseek-r1-8b.gguf",
-                "nemotron-3-nano:4b": r"D:\models\ollama_export\library-nemotron-3-nano-4b.gguf",
-                "omnicoder-2-9b": r"D:\models\ollama_export\carstenuhlig-omnicoder-2-9b-q4_k_m.gguf",
-                "qwen3-vl-4b": r"D:\models\Qwen3-VL-4B\Qwen3VL-4B-Instruct-Q4_K_M.gguf",
-            }
-            if model in mapping:
-                model = mapping[model]
             return UnifiedProvider(
                 name="llama",
                 base_url=base_url,

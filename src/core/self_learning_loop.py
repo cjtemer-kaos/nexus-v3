@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import asyncio
 import json
@@ -53,7 +54,7 @@ class SelfLearningLoop(Actor):
         self._loop_task: asyncio.Task | None = None
         # Persistencia en SQLite
         from pathlib import Path
-        self._db_path = Path.home() / ".nexus" / "brain" / "learning_loop.db"
+        self._db_path = brain_path() / "learning_loop.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
     

@@ -13,6 +13,7 @@ Cada capa tiene un target de proporcion del presupuesto original.
 Progressive: las capas tempranas comprimen primero, las tardias solo si aun excede.
 """
 
+from src.core.environment import data_home
 import asyncio
 import logging
 import re
@@ -465,7 +466,7 @@ class ContextCompactor:
         return blocks
 
     def _persist_large_output(self, tool_use_id: str, output: str) -> str:
-        persist_dir = Path.home() / ".nexus" / "tool-outputs"
+        persist_dir = data_home() / "tool-outputs"
         persist_dir.mkdir(parents=True, exist_ok=True)
         path = persist_dir / f"{tool_use_id}.txt"
 
@@ -596,7 +597,7 @@ class ContextCompactor:
 
     def _persist_snipped_code(self, messages: List[Dict]):
         """Persist code blocks from snipped messages to disk."""
-        persist_dir = Path.home() / ".nexus" / "snipped-code"
+        persist_dir = data_home() / "snipped-code"
         persist_dir.mkdir(parents=True, exist_ok=True)
 
         for i, msg in enumerate(messages):

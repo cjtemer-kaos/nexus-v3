@@ -12,6 +12,8 @@ Features:
 Refs: byo-coding-agent (Go→Python), learn-claude-code, nexus-mcp-server
 """
 
+from src.core.environment import data_home
+from src.brain.link import brain_path
 import asyncio
 import json
 import logging
@@ -152,13 +154,13 @@ class MCPClientBridge:
         Search order (first wins per name):
             1. <workdir>/mcp_servers.json   (project-level)
             2. <workdir>/.nexus/mcp_servers.json
-            3. ~/.nexus/mcp_servers.json    (user-level fallback)
+            3. <data_home>/mcp_servers.json (datos internos del proyecto)
         """
         total = 0
         candidates = [
             self.workdir / "mcp_servers.json",
             self.workdir / ".nexus" / "mcp_servers.json",
-            Path.home() / ".nexus" / "mcp_servers.json",
+            data_home() / "mcp_servers.json",
         ]
         for c in candidates:
             try:
@@ -195,7 +197,7 @@ class MCPClientBridge:
         self.register_server(
             name="sqlite",
             command="uvx",
-            args=["mcp-server-sqlite", "--db-path", str(Path.home() / ".nexus" / "brain" / "cerebro.db")],
+            args=["mcp-server-sqlite", "--db-path", str(brain_path() / "cerebro.db")],
             auto_start=False,
         )
 

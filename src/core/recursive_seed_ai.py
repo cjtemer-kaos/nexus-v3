@@ -23,6 +23,7 @@ Categories:
 - Safety-Constrained Self-Improvement
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -36,7 +37,7 @@ from src.security.atomic_io import atomic_write_json
 
 logger = logging.getLogger("nexus-recursive-seed")
 
-NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
+NEXUS_HOME = data_home()
 DATASET_DIR = NEXUS_HOME / "datasets" / "recursive_seed_ai_25k"
 DATASET_DIR.mkdir(parents=True, exist_ok=True)
 

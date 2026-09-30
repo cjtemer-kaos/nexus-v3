@@ -3,6 +3,7 @@ Email Integration - SuperNEXUS v2
 IMAP/SMTP con AI auto-reply, auto-summarize, auto-tag.
 """
 
+from src.core.environment import data_home
 import asyncio
 import email
 import email.header
@@ -16,7 +17,7 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "email"
+DATA_DIR = data_home() / "email"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 

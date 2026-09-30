@@ -42,7 +42,7 @@ class SessionPersistence:
         
         # Guardar estado
         persistence.save_state(
-            current_project="supernexus-v2",
+            current_project="nexus-v3",
             active_tasks=[...],
             context_notes=["Implementando mejoras..."]
         )

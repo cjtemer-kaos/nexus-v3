@@ -11,6 +11,7 @@ Patrones:
 - Estadisticas de uso por skill
 """
 
+from src.core.environment import data_home
 import json
 import logging
 from dataclasses import dataclass, field
@@ -73,7 +74,7 @@ class SkillCurator:
 
     def __init__(self, skills_dir: str = None, config: CuratorConfig = None):
         if skills_dir is None:
-            skills_dir = str(Path.home() / ".nexus" / "skills")
+            skills_dir = str(data_home() / "skills")
         self.skills_dir = Path(skills_dir)
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._skills: Dict[str, SkillRecord] = {}

@@ -3,6 +3,7 @@ Notes + Calendar - SuperNEXUS v2
 Notas con recordatorios, checklist, repeat, calendar con CalDAV sync.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "notes"
+DATA_DIR = data_home() / "notes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 NOTES_FILE = DATA_DIR / "notes.json"
 CALENDAR_FILE = DATA_DIR / "calendar.json"

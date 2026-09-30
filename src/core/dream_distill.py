@@ -11,6 +11,7 @@ Cada ciclo genera:
   - metricas de confianza
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -76,7 +77,7 @@ class DreamDistillEngine:
         self.director = director
         self.get_observations_fn = get_observations_fn
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "dream.db")
+            db_path = str(brain_path() / "dream.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -373,7 +374,7 @@ class DreamDistillEngine:
         return ["revisar datos para mas recomendaciones"]
 
     def _load_recent_compose_runs(self, days: int = 7) -> List[Dict]:
-        compose_db = Path.home() / ".nexus" / "brain" / "compose.db"
+        compose_db = brain_path() / "compose.db"
         if not compose_db.exists():
             return []
         try:

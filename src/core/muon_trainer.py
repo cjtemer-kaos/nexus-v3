@@ -78,11 +78,17 @@ class MuonTrainer:
 
     async def prepare_dataset(
         self,
-        source_dir: str = "~/.nexus/logs",
-        output_file: str = "/tmp/nexus_train.jsonl",
+        source_dir: str = "",
+        output_file: str = "",
         execute_on_REMOTE=None,
     ) -> dict:
         """Prepare training data on REMOTE from NEXUS logs."""
+        from src.core.environment import data_home
+
+        if not source_dir:
+            source_dir = str(data_home() / "logs")
+        if not output_file:
+            output_file = str(data_home() / "nexus_train.jsonl")
         if execute_on_REMOTE:
             # Write prep script to REMOTE and run it
             result = await execute_on_REMOTE(

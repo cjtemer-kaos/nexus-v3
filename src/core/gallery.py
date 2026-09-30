@@ -11,6 +11,7 @@ Inspirado en Odysseus:
 - Metadata EXIF
 """
 
+from src.core.environment import data_home
 import hashlib
 import json
 import logging
@@ -23,7 +24,7 @@ from dataclasses import dataclass, field, asdict
 logger = logging.getLogger(__name__)
 
 # Directorio de imagenes
-IMAGES_DIR = Path.home() / ".nexus" / "gallery"
+IMAGES_DIR = data_home() / "gallery"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 

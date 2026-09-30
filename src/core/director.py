@@ -10,6 +10,7 @@ Combina:
 
 NEXUS es el cerebro. Los modelos de IA son herramientas stateless.
 """
+from src.core.environment import data_home
 import asyncio
 
 import json
@@ -202,11 +203,11 @@ class DirectorNexus:
         self._sticky_ttl_s = 300  # 5 minutes
 
         # Trace logging — record classify→gema→response for eval and retraining
-        self._traces_dir = Path.home() / ".nexus" / "traces"
+        self._traces_dir = data_home() / "traces"
         self._traces_dir.mkdir(parents=True, exist_ok=True)
 
         # Distillation buffer — save good responses as future SFT data
-        self._distill_dir = Path.home() / ".nexus" / "distillation"
+        self._distill_dir = data_home() / "distillation"
         self._distill_dir.mkdir(parents=True, exist_ok=True)
 
         # Brain modules (v3 architecture) — cerebro de NEXUS, el director los usa.
@@ -1509,7 +1510,7 @@ RESPUESTA:"""
             "connectivity": self.connectivity,
             "memory_health": self.memory_health,
             "execution_log": self.execution_log,
-            "nexus_home": str(Path.home() / ".nexus"),
+            "nexus_home": str(data_home()),
         }
 
         # Cada step puede ser saltado vía env para diagnostico
@@ -1546,7 +1547,7 @@ RESPUESTA:"""
             "connectivity": self.connectivity,
             "memory_health": self.memory_health,
             "execution_log": self.execution_log,
-            "nexus_home": str(Path.home() / ".nexus"),
+            "nexus_home": str(data_home()),
         }
         result = await self.worker_manager.run_on_demand(worker_name, context)
         return result.__dict__

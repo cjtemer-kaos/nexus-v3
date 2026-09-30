@@ -18,6 +18,7 @@ Usage:
 """
 
 from __future__ import annotations
+from src.brain.link import brain_path
 
 import logging
 import sqlite3
@@ -31,7 +32,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".nexus" / "brain" / "learning_graph.db"
+DB_PATH = brain_path() / "learning_graph.db"
 
 
 # =============================================================================

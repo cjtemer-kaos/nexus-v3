@@ -4,6 +4,8 @@ F14: Memory Health Dashboard
 Per-agent memory status (usable, searchable, needs attention).
 """
 
+from src.core.environment import data_home
+from src.brain.link import brain_path
 import logging
 import time
 from typing import Dict, List
@@ -34,8 +36,8 @@ class MemoryHealthMonitor:
     """Monitors memory health across all agents"""
 
     def __init__(self):
-        self._brain_path = Path.home() / ".nexus" / "brain"
-        self._memory_path = Path.home() / ".nexus" / "memory"
+        self._brain_path = brain_path()
+        self._memory_path = data_home() / "memory"
 
     def check_all(self) -> Dict[str, MemoryStatus]:
         agents = {
@@ -46,7 +48,7 @@ class MemoryHealthMonitor:
             "neural": self._memory_path / "neural.db",
             "rag": self._memory_path / "rag.db",
             "knowledge_graph": self._memory_path / "knowledge.db",
-            "vault": Path.home() / ".nexus" / "vault" / "vault.db",
+            "vault": data_home() / "vault" / "vault.db",
         }
 
         results = {}

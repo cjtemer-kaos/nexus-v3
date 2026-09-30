@@ -10,6 +10,7 @@ Features:
 - Zero-secrets policy for distribution
 """
 
+from src.brain.link import brain_path
 import base64
 import logging
 import re
@@ -105,7 +106,7 @@ class CredentialManager:
 
     def _get_fallback_db(self) -> sqlite3.Connection:
         """Get connection to credential fallback DB."""
-        db_path = Path.home() / ".nexus" / "brain" / "credentials.db"
+        db_path = brain_path() / "credentials.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")

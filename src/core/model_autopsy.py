@@ -13,6 +13,7 @@ systematically probing them, we extract their best behaviors and distill
 them into NEXUS's primary model (qwen2.5-coder:7b).
 """
 
+from src.core.environment import data_home
 import asyncio
 import json
 import logging
@@ -23,7 +24,7 @@ from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("nexus-model-autopsy")
 
-NEXUS_HOME = Path.home() / ".nexus"
+NEXUS_HOME = data_home()
 AUTOPSY_DIR = NEXUS_HOME / "autopsy"
 AUTOPSY_DIR.mkdir(parents=True, exist_ok=True)
 

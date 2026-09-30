@@ -8,6 +8,8 @@ Arquitectura de cerebro compartido:
   - Cada ciclo de aprendizaje sincroniza ambos cerebros via HTTP/SCP
 """
 
+from src.core.environment import data_home
+from src.brain.link import brain_path
 import asyncio
 import json
 import logging
@@ -267,7 +269,7 @@ class PeerChat:
         self.pc1 = PeerNode("pc1", "PC1 (Director)", f"http://127.0.0.1:{pc1_port}", "http://127.0.0.1:11434")
         self.pc2 = PeerNode("pc2", "PC2 (Remoto)", f"http://{pc2_host}:{pc2_port}", f"http://{pc2_host}:11434")
 
-        shared_dir = Path.home() / ".nexus" / "peer_chat"
+        shared_dir = data_home() / "peer_chat"
         shared_dir.mkdir(parents=True, exist_ok=True)
         self.message_board_path = shared_dir / "message_board.json"
         self.learned_knowledge_path = shared_dir / "learned_knowledge.json"
@@ -610,7 +612,7 @@ class PeerChat:
 
     async def sync_brain(self):
         """Sincroniza el cerebro compartido entre PC1 y PC2"""
-        brain_dir = Path.home() / ".nexus" / "brain"
+        brain_dir = brain_path()
         if self.pc2.online and brain_dir.exists():
             ok = await self.pc2.sync_brain_to(brain_dir, self.pc2.api_url)
             if ok:
@@ -618,7 +620,7 @@ class PeerChat:
             else:
                 logger.warning("Brain sync to PC2 had issues (non-critical)")
         # Also sync peer_chat knowledge directory
-        chat_dir = Path.home() / ".nexus" / "peer_chat"
+        chat_dir = data_home() / "peer_chat"
         if chat_dir.exists():
             for f in chat_dir.iterdir():
                 if f.suffix in (".json", ".jsonl"):
@@ -810,7 +812,7 @@ class PeerChat:
         """Publica un resumen de la conversacion en la memoria compartida para otros agentes (Claude, etc.)"""
         summary = self._generate_summary()
         # Write to shared file as fallback (in case embedding is slow)
-        report_path = Path.home() / ".nexus" / "peer_chat" / "latest_report.txt"
+        report_path = data_home() / "peer_chat" / "latest_report.txt"
         report_path.write_text(summary, encoding="utf-8")
         logger.info(f"Reporte PeerChat escrito a {report_path}")
         # Try memory backend (may be slow on first embedding)

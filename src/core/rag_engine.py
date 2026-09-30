@@ -28,11 +28,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
-RAG_DB_PATH = NEXUS_HOME / "rag_index.db"
-NEXUS_HOME.mkdir(parents=True, exist_ok=True)
+from src.core.environment import data_home, ollama_base_url
 
-DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+NEXUS_HOME = data_home()
+RAG_DB_PATH = NEXUS_HOME / "rag_index.db"
+
+DEFAULT_OLLAMA_URL = ollama_base_url()
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_CHUNK_SIZE = 800  # chars per chunk
 DEFAULT_CHUNK_OVERLAP = 100
@@ -91,6 +92,7 @@ class RAGEngine:
         self.db_path = db_path
         self.ollama_url = ollama_url
         self.embed_model = embed_model
+        self._embed_resolved = False
         self._client = httpx.AsyncClient(timeout=30)
         self._db: Optional[aiosqlite.Connection] = None
         self._embed_cache: Dict[str, List[float]] = {}
@@ -128,6 +130,16 @@ class RAGEngine:
 
     async def _embed(self, text: str) -> List[float]:
         """Get embedding from Ollama."""
+        if not self._embed_resolved:
+            # Autodetección: elegir modelo de embeddings REAL de esta PC
+            self._embed_resolved = True
+            try:
+                from src.core.environment import list_ollama_models, pick_embed_model
+                self.embed_model = pick_embed_model(
+                    self.embed_model, list_ollama_models(self.ollama_url)
+                )
+            except Exception:
+                pass
         text_hash = hashlib.md5(text[:512].encode()).hexdigest()
         if text_hash in self._embed_cache:
             return self._embed_cache[text_hash]

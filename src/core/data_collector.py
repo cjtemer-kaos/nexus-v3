@@ -14,6 +14,7 @@ Fases:
 4. Export - JSONL para SFT, preference pairs para DPO
 """
 
+from src.core.environment import data_home
 import hashlib
 import json
 import logging
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # Configuracion
 # ============================================================
-NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
+NEXUS_HOME = data_home()
 BRAIN_DIR = NEXUS_HOME / "brain"
 DATA_DIR = NEXUS_HOME / "training_data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)

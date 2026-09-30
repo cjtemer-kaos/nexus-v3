@@ -3,6 +3,7 @@ Personas - SuperNEXUS v2
 Custom agents con system prompt, modelo, herramientas y memoria propias.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "personas"
+DATA_DIR = data_home() / "personas"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 PERSONAS_FILE = DATA_DIR / "personas.json"
 

@@ -11,6 +11,7 @@ Inspired by Hermes Agent (Nous Research), these tools enable:
 """
 
 from __future__ import annotations
+from src.core.environment import data_home
 
 import asyncio
 import json
@@ -156,8 +157,7 @@ class HermesCron:
     """
 
     def __init__(self, storage_path: str | None = None):
-        self._storage = Path(storage_path or os.path.join(
-            str(Path.home()), ".nexus", "hermes_cron.json"))
+        self._storage = Path(storage_path or os.path.join(str(data_home()), "hermes_cron.json"))
         self._jobs: dict[str, CronJob] = {}
         self._running = False
         self._loop_task: asyncio.Task | None = None
@@ -405,8 +405,7 @@ class SkillAutoCreator:
     """
 
     def __init__(self, skills_dir: str | None = None):
-        self._skills_dir = Path(skills_dir or os.path.join(
-            str(Path.home()), ".nexus", "auto_skills"))
+        self._skills_dir = Path(skills_dir or os.path.join(str(data_home()), "auto_skills"))
         self._skills_dir.mkdir(parents=True, exist_ok=True)
         self._creation_threshold = 5  # Min tool calls to trigger skill creation
         self._pending_tools: list[dict] = []

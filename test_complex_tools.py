@@ -9,7 +9,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = "http://127.0.0.1:8765"
-PROJECT = pathlib.Path(r"D:\ias\proyectos\nexus-v3")
+PROJECT = pathlib.Path(__file__).resolve().parent
 
 def req(method, path, body=None, timeout=90):
     url = BASE + path

@@ -11,6 +11,7 @@ en caso de crash del sistema. Persiste:
 
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -55,7 +56,7 @@ class CursorStore:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "cursor.db")
+            db_path = str(brain_path() / "cursor.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

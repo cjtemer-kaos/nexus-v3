@@ -5,6 +5,7 @@ Checks: providers, extensions, connections, environment, memory, services.
 Returns comprehensive health report with remediation suggestions.
 """
 
+from src.brain.link import brain_path
 import asyncio
 import logging
 import os
@@ -170,8 +171,8 @@ class Doctor:
     async def _check_database(self) -> List[CheckResult]:
         results = []
         db_paths = [
-            Path.home() / ".nexus" / "brain" / "message_board.db",
-            Path.home() / ".nexus" / "brain" / "sessions.db",
+            brain_path() / "message_board.db",
+            brain_path() / "sessions.db",
         ]
         for db_path in db_paths:
             if db_path.exists():
@@ -192,8 +193,9 @@ class Doctor:
 
     async def _check_env_vars(self) -> List[CheckResult]:
         results = []
-        required = ["NEXUS_HOME", "NEXUS_BRAIN"]
-        optional = ["SUPER_NEXUS_PC2_IP", "DISCORD_TOKEN", "OPENCODE_CLI"]
+        required = []  # portabilidad: nada requerido, todo resuelve a defaults internos
+        optional = ["NEXUS_BRAIN", "NEXUS_V3_DATA", "OLLAMA_HOST",
+                    "SUPER_NEXUS_PC2_IP", "DISCORD_TOKEN", "OPENCODE_CLI"]
 
         for var in required:
             if os.getenv(var):

@@ -16,6 +16,7 @@ Usage:
     full = store.retrieve(pointer.id)
 """
 from __future__ import annotations
+from src.core.environment import data_home
 
 import hashlib
 import json
@@ -29,7 +30,7 @@ from src.security.atomic_io import atomic_write_json, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STORAGE = Path.home() / ".nexus" / "pointers"
+DEFAULT_STORAGE = data_home() / "pointers"
 DEFAULT_THRESHOLD = 30 * 1024  # 30KB
 
 

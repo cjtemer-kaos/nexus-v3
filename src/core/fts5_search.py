@@ -14,6 +14,7 @@ Patrones:
 - Highlighting de resultados
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -48,7 +49,7 @@ class FTS5Search:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "search.db")
+            db_path = str(brain_path() / "search.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

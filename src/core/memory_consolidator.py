@@ -21,6 +21,7 @@ Entity Linking (mem0 V3 pattern):
 - Entity-aware Search: Boost results by entity connections
 """
 
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -65,7 +66,7 @@ class MemoryConsolidator:
         max_memories: int = 200,
     ):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "cerebro.db")
+            db_path = str(brain_path() / "cerebro.db")
         self.db_path = db_path
         self.ollama_url = ollama_url
         self.extraction_model = extraction_model

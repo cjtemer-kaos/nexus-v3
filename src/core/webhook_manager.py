@@ -4,6 +4,7 @@ HTTP POST outgoing webhooks con HMAC-SHA256 signing, SSRF protection.
 Absorbed from odysseus/src/webhook_manager.py — names cleaned.
 """
 
+from src.core.environment import data_home
 import asyncio
 import hashlib
 import hmac
@@ -39,7 +40,7 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
-DATA_DIR = Path(__import__("os").environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "webhooks"
+DATA_DIR = Path(__import__("os").environ.get("NEXUS_DATA", data_home())) / "webhooks"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 WEBHOOKS_FILE = DATA_DIR / "webhooks.json"
 

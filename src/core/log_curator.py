@@ -12,9 +12,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+from src.core.environment import data_home
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(os.environ.get("NEXUS_DATA", os.path.expanduser("~/.nexus"))) / "curator.db"
+DB_PATH = data_home() / "curator.db"
 
 
 def _normalize(text: str) -> str:

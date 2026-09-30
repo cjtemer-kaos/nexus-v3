@@ -13,6 +13,8 @@ Solución:
    - Estado del proyecto activo
 """
 
+from src.core.environment import data_home
+from src.brain.link import brain_path
 import json
 import logging
 import sqlite3
@@ -52,7 +54,7 @@ class SessionContextRecovery:
     """
     
     def __init__(self, nexus_home: Path = None):
-        self.nexus_home = nexus_home or Path.home() / ".nexus"
+        self.nexus_home = nexus_home or data_home()
         self.sessions_dir = self.nexus_home / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         
@@ -62,7 +64,7 @@ class SessionContextRecovery:
         
         # Rutas de memoria
         self.memory_db = self.nexus_home / "brain" / "nexus_memory.db"
-        self.message_board_db = Path.home() / ".nexus" / "brain" / "message_board.db"
+        self.message_board_db = brain_path() / "message_board.db"
         
         # Configuración
         self.max_recent_messages = 50

@@ -90,7 +90,7 @@ class ClaudeHeadless:
 
         Args:
             prompt: El prompt a ejecutar
-            cwd: Directorio de trabajo (default: supernexus-v2)
+            cwd: Directorio de trabajo (default: nexus-v3)
             max_turns: Máximo de turnos del agente
             allowed_tools: Tools permitidos
             timeout: Timeout en segundos

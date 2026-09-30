@@ -3,6 +3,7 @@ Animated Themes - SuperNEXUS v2
 Particle system canvas: rain, constellations, synapse, perlin-flow, sparkles, embers.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(os.environ.get("NEXUS_DATA", Path.home() / ".nexus")) / "themes"
+DATA_DIR = data_home() / "themes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 THEMES_FILE = DATA_DIR / "themes.json"
 

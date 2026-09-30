@@ -33,6 +33,7 @@ Uso:
     ))
 """
 
+from src.core.environment import data_home
 import asyncio
 import hashlib
 import hmac
@@ -252,7 +253,7 @@ class AutopilotStore:
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "autopilots.db")
+            db_path = str(data_home() / "autopilots.db")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

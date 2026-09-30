@@ -21,6 +21,7 @@ Soporta:
 - Ollama para conversion y despliegue
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # Configuracion
 # ============================================================
-NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
+NEXUS_HOME = data_home()
 BRAIN_DIR = NEXUS_HOME / "brain"
 DATA_DIR = NEXUS_HOME / "training_data"
 TRAINING_DIR = NEXUS_HOME / "training_runs"

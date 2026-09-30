@@ -3,6 +3,7 @@ MCP Tools Cache — In-memory + disk cache for MCP probe results.
 Adapted from Hermes mcp-tools-cache.ts.
 """
 
+from src.core.environment import data_home
 import json
 import logging
 import os
@@ -27,7 +28,7 @@ class CachedProbe:
 
 _TTL = int(os.environ.get("MCP_TOOLS_CACHE_TTL", "86400"))  # 24h default
 _probes: Dict[str, CachedProbe] = {}
-_cache_dir = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus")) / "cache"
+_cache_dir = data_home() / "cache"
 _cache_path = _cache_dir / "mcp_tools.json"
 
 

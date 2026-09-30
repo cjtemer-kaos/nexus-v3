@@ -11,6 +11,7 @@ Diferenciación:
   - RealtimeHub (scopes + dedup + Redis) → eventos en tiempo real multi-nodo
 """
 
+from src.brain.link import brain_path
 import asyncio
 import json
 import logging
@@ -56,7 +57,7 @@ class MessageBoard:
 
     def __init__(self, db_path: str = None, hub=None):
         if db_path is None:
-            db_path = str(Path.home() / ".nexus" / "brain" / "message_bus.db")
+            db_path = str(brain_path() / "message_bus.db")
         self.db_path = db_path
         self.hub = hub
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
