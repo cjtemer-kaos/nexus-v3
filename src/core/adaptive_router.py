@@ -165,6 +165,11 @@ class ThompsonSampler:
             if self._save_count % 10 == 0:
                 self._save()
 
+    def flush(self):
+        """Fuerza el persist del estado (cierre de sesion / shutdown)."""
+        with self._lock:
+            self._save()
+
     def get_stats(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -217,6 +222,10 @@ class AdaptiveRouter:
                       latency_ms: float = 0, cost: float = 0):
         reward = max(0.0, min(1.0, (1.0 if success else 0.0) * 0.5 + quality_score * 0.5))
         self._sampler.record_outcome(model, reward, latency_ms, cost)
+
+    def flush(self):
+        """Persiste el estado del sampler ahora (sin esperar el throttle de 10)."""
+        self._sampler.flush()
 
     def get_stats(self) -> dict:
         return self._sampler.get_stats()

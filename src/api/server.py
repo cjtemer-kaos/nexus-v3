@@ -187,10 +187,25 @@ async def _startup():
         _asyncio.create_task(_bg_zen())
     except Exception:
         pass
+    # LearningService (re-wiring ciclo #113, colmena #132): orden EXPLICITO
+    # post-arranque, sin actor system. Nunca debe tumbar el startup.
+    try:
+        from src.core.learning_service import get_learning_service
+        _ls = get_learning_service()
+        await _ls.start(dream_interval_s=86400.0, enable_dream=True)
+        logger.info("LearningService started (judge+Thompson+grafo+dream scheduler)")
+    except Exception as e:
+        logger.warning(f"LearningService startup skipped: {e}")
 
 
 @app.on_event("shutdown")
 async def _shutdown():
+    try:
+        from src.core.learning_service import get_learning_service
+        await get_learning_service().stop()
+        logger.info("LearningService detenida")
+    except Exception as e:
+        logger.warning(f"learning shutdown: {e}")
     try:
         from src.providers import llama_manager as _lm
         _lm.stop_managed()
@@ -995,6 +1010,128 @@ async def search_session(session_id: str, q: str, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---- Ciclo #113: autoaprendizaje (re-wiring P1, colmena #132) ----
+@app.get("/api/learning/stats")
+async def learning_stats():
+    """Paso 1-3: telemetría + Thompson + grafo + SkillOpt en un solo vistazo."""
+    from src.core.learning_service import get_learning_service
+    try:
+        return get_learning_service().stats()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/learning/record")
+async def learning_record(request: Request):
+    """Registro manual de un turno (en v2 este endpoint daba 500)."""
+    body = await request.json()
+    task = body.get("task") or ""
+    if not task:
+        raise HTTPException(status_code=400, detail="task required")
+    from src.core.learning_service import get_learning_service
+    try:
+        return await get_learning_service().record_turn(
+            task=task,
+            output=body.get("outcome") or "",
+            model=body.get("model") or "",
+            success=bool(body.get("success", True)),
+            session_id=body.get("session_id") or "",
+            tokens=int(body.get("tokens", 0) or 0),
+            latency_ms=int(body.get("latency_ms", 0) or 0),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/learning/recommend")
+async def learning_recommend(task: str = ""):
+    """Paso 2: recomendación del router Thompson para una tarea."""
+    from src.core.learning_service import get_learning_service
+    try:
+        return get_learning_service().recommend(task)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/skill-opt/stats")
+async def skill_opt_stats():
+    from src.core.learning_service import get_learning_service
+    return get_learning_service().skill_opt.stats()
+
+
+@app.get("/api/skill-opt/heldout")
+async def skill_opt_heldout():
+    from src.core.learning_service import get_learning_service
+    return {"cases": get_learning_service().skill_opt.heldout()}
+
+
+@app.post("/api/skill-opt/heldout")
+async def skill_opt_set_heldout(request: Request):
+    body = await request.json()
+    cases = body.get("cases") or []
+    from src.core.learning_service import get_learning_service
+    try:
+        n = get_learning_service().skill_opt.set_heldout(cases)
+        return {"heldout_cases": n}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/skill-opt/propose")
+async def skill_opt_propose(request: Request):
+    body = await request.json()
+    desc = body.get("description") or ""
+    if not desc:
+        raise HTTPException(status_code=400, detail="description required")
+    from src.core.learning_service import get_learning_service
+    return get_learning_service().skill_opt.propose(
+        description=desc,
+        config_delta=body.get("config_delta") or {},
+        change_id=body.get("change_id"),
+    )
+
+
+@app.post("/api/skill-opt/validate")
+async def skill_opt_validate(request: Request):
+    """Valida un cambio contra held-out usando el pipeline REAL del agente.
+
+    Fail-closed: si el provider no responde, los casos fallan y el cambio se
+    rechaza (no se persiste).
+    """
+    body = await request.json()
+    change_id = body.get("change_id") or ""
+    if not change_id:
+        raise HTTPException(status_code=400, detail="change_id required")
+    required = float(body.get("required_score", 1.0))
+    cases = body.get("cases")  # opcional: casos ad-hoc
+    from src.core.learning_service import get_learning_service
+    slog = _session_log()
+
+    async def _eval(case: dict) -> bool:
+        try:
+            sess = slog.create_session(project="skill-opt")
+            r = await _run_agent_once(str(case.get("task", "")), sess.id)
+            expect = str(case.get("expect_contains", ""))
+            return bool(expect) and expect in (getattr(r, "final_output", "") or "")
+        except Exception:
+            return False
+
+    try:
+        return await get_learning_service().skill_opt.validate(
+            change_id, _eval, required_score=required, cases=cases)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/dream/run")
+async def dream_run():
+    """Dispara dream_distill a demanda (el scheduler corre cada 24h)."""
+    from src.core.learning_service import get_learning_service
+    return await get_learning_service().run_dream()
+
+
 # ---- FS (Scope-guarded) ----
 def _get_scope():
     from src.core.config import load_config
@@ -1370,6 +1507,27 @@ def _build_registry(scope, session_id: str):
     return registry
 
 
+async def _learning_record(task: str, session_id: str, result,
+                           hint: str | None = None, model: str | None = None) -> None:
+    """Paso 1-2 del ciclo #113: telemetria + judge + Thompson por turno.
+
+    Fire-and-forget: el aprendizaje NUNCA puede romper una respuesta de chat.
+    """
+    try:
+        from src.core.learning_service import get_learning_service
+        await get_learning_service().record_turn(
+            task=task,
+            output=getattr(result, "final_output", "") or "",
+            model=model or hint or "unknown",
+            success=bool(getattr(result, "success", False)),
+            session_id=session_id,
+            tokens=int(getattr(result, "total_tokens", 0) or 0),
+            latency_ms=int(getattr(result, "duration_ms", 0) or 0),
+        )
+    except Exception as e:
+        logger.debug("learning record skipped: %s", e)
+
+
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False):
     """Un run de AgentLoop con la construccion estandar (config segura)."""
@@ -1380,8 +1538,10 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     scope = _build_scope(cfg)
     registry = _build_registry(scope, session_id)
     loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log())
-    return await loop.run(task=message, session_id=session_id, hint=hint,
-                          force_tools=force_tools, model=model)
+    result = await loop.run(task=message, session_id=session_id, hint=hint,
+                            force_tools=force_tools, model=model)
+    await _learning_record(message, session_id, result, hint=hint, model=model)
+    return result
 
 
 @app.post("/api/chat")
@@ -1449,6 +1609,10 @@ async def chat(request: Request):
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
                                 model=body.get("model"))
+
+        # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
+        await _learning_record(message, session_id, result, hint=hint,
+                               model=body.get("model"))
 
         # El asistente ya lo persiste el AgentLoop (session_log=slog). No duplicar.
 

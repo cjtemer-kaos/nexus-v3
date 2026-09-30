@@ -52,6 +52,9 @@ class RelationshipType(Enum):
     PREREQUISITE = "PREREQUISITE"
     BUILDS_ON = "BUILDS_ON"
     RELATED_TO = "RELATED_TO"
+    # Ciclo #113 paso 3 (re-wiring v3): un insight nuevo REEMPLAZA al anterior
+    # de la misma familia (ExpeL-style). Aditivo: no rompe datos existentes.
+    SUPERSEDES = "SUPERSEDES"
 
 
 # =============================================================================

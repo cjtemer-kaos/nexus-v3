@@ -1,4 +1,4 @@
-# Node
+﻿# Node
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -21,7 +21,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Data / brain — runtime data ignorado, seed/schema si se trackea via brain/! Negation
+# Data / brain â€” runtime data ignorado, seed/schema si se trackea via brain/! Negation
 data/session.db
 data/session.db-*
 data/spill/
@@ -42,11 +42,11 @@ Thumbs.db
 # Env
 .env
 
-# UI build (keep dist for Electron installer — do not ignore)
+# UI build (keep dist for Electron installer â€” do not ignore)
 ui/node_modules/
 
 # --- Fase 0 baseline hygiene (2026-09-28) ---
-# Binarios pesados (llama.cpp bundlado) — 556MB
+# Binarios pesados (llama.cpp bundlado) â€” 556MB
 vendor/
 # Runtime logs/caches
 data/logs/
@@ -58,4 +58,11 @@ ui/tsconfig.tsbuildinfo
 # Electron output (se regenera con electron-builder)
 release/
 # NOTA: build/ (iconos buildResources) se trackea; dist/ (ui/dist) es artefacto
-# de npm run build — se regenera antes de electron-builder.
+# de npm run build â€” se regenera antes de electron-builder.
+
+# Ciclo de autoaprendizaje (Fase 9) - runtime
+data/event_store.db
+data/event_store.db-*
+data/router_state.json
+data/skill_opt_state.json
+data/heldout.json
