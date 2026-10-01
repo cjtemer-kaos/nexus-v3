@@ -50,6 +50,14 @@ class CloudProvider(BaseProvider):
             # Formato OpenAI completo: sin tool_calls/tool_call_id el modelo
             # no enlaza resultados y repite llamadas / rompe la conversación (400).
             d: dict = {"role": m.role, "content": m.content or ""}
+            imgs = getattr(m, "images", None)
+            if imgs and m.role == "user" and m.content is not None:
+                # Adjuntos visuales (DECK): content parts estilo OpenAI vision.
+                parts: list[dict] = [{"type": "text", "text": m.content or ""}]
+                for im in imgs:
+                    url = im if isinstance(im, str) and im.startswith("data:") else f"data:image/png;base64,{im}"
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+                d["content"] = parts
             tcs = getattr(m, "tool_calls", ()) or ()
             if m.role == "assistant" and tcs:
                 wire = []

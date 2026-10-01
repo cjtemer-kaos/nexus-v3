@@ -33,10 +33,19 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# .env de la raiz del proyecto (portable, sin rutas fijas). override=False para
+# respetar variables ya seteadas en el shell (NEXUS_BRAIN, OPENCODE_API_KEY, ...).
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(_PROJECT_ROOT / ".env", encoding="utf-8-sig", override=False)
+except Exception:  # python-dotenv ausente -> solo env del sistema
+    pass
+
+import os
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import logging
 import json as _json2
@@ -262,6 +271,30 @@ def _build_router_from_config(cfg: dict):
             router.register_provider("cloud", CloudProvider(base_url=cc.get("base_url"), api_key=cc.get("api_key"), auth_style=cc.get("auth_style", "bearer")))
             for m in cc.get("models", []) or []:
                 router.register_model(ModelRoute(id=m, provider_name="cloud"))
+    # DECK: proveedores BYOK del catalogo — se registran solo con key en env/.env.
+    # CloudProvider anade /v1/chat/completions al base_url, asi que se recorta el
+    # sufijo /v1 del catalogo. Solo auth bearer (compat OpenAI); cohere/gemini/
+    # anthropic tienen formatos distintos -> no se registran aqui.
+    try:
+        from src.core.provider_catalog import PROVIDER_CATALOG
+        for pc in PROVIDER_CATALOG:
+            env_name = pc.get("api_key_env") or ""
+            if not env_name or pc.get("auth_style") != "bearer":
+                continue
+            key = os.environ.get(env_name, "")
+            if not key:
+                continue
+            base = (pc.get("base_url") or "").rstrip("/")
+            if not base.endswith("/v1") or pc["id"] == "cohere":
+                continue
+            pid = pc["id"]
+            router.register_provider(pid, CloudProvider(base_url=base[:-3], api_key=key, auth_style="bearer"))
+            router.register_model(ModelRoute(id=pc["default_model"], provider_name=pid))
+            if pid not in router.fallback_order:
+                router.fallback_order.append(pid)
+            logger.info(f"BYOK catalogo activo: {pid} ({pc['default_model']})")
+    except Exception as e:
+        logger.warning(f"catalogo BYOK no registrado: {e}")
     return router
 
 
@@ -1374,6 +1407,286 @@ async def plan_get():
     perm = cfg.get("scope", {}).get("permission", "workspace_write")
     return {"active": perm == "read_only", "permission": perm}
 
+
+# ==== DECK: adjuntos de chat (Ctrl+V, capturas, archivos) ====
+_UPLOADS_MAX_BYTES = 20 * 1024 * 1024
+_UPLOAD_ID_RE = re.compile(r"^[a-f0-9]{8}$")
+_MAX_ATTACHMENTS = 8
+_MAX_IMAGE_BYTES = 12 * 1024 * 1024
+_MAX_TEXT_BYTES = 512 * 1024
+_MAX_TEXT_CHARS = 24000
+_TEXT_EXTS = {
+    ".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".vue", ".html", ".css", ".sh", ".ps1",
+    ".bat", ".sql", ".xml", ".rs", ".go", ".java", ".c", ".h", ".cpp", ".cs",
+    ".rb", ".php", ".log", ".svg",
+}
+
+
+def _uploads_dir() -> Path:
+    d = _PROJECT_ROOT / "data" / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_filename(name: str) -> str:
+    name = (name or "archivo").replace("\\", "/").split("/")[-1].strip()
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name)[:120].strip()
+    return name or "archivo"
+
+
+def _upload_path(file_id: str) -> Path | None:
+    """Resuelve data/uploads/{file_id}_* validando el id (regex estricta)."""
+    if not _UPLOAD_ID_RE.match(file_id):
+        return None
+    matches = sorted(_uploads_dir().glob(f"{file_id}_*"))
+    return matches[0] if matches else None
+
+
+@app.post("/api/upload")
+async def upload_post(file: UploadFile = File(...)):
+    """Sube un adjunto (imagen o archivo) -> {id, url, name, mime, is_image, size}."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="archivo vacio")
+    if len(data) > _UPLOADS_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"archivo muy grande (max {_UPLOADS_MAX_BYTES} bytes)")
+    import mimetypes as _mt
+    from uuid import uuid4
+    fid = uuid4().hex[:8]
+    fname = _safe_filename(file.filename or "archivo")
+    (_uploads_dir() / f"{fid}_{fname}").write_bytes(data)
+    mime = file.content_type or _mt.guess_type(fname)[0] or "application/octet-stream"
+    return {
+        "id": fid,
+        "url": f"/api/uploads/{fid}",
+        "name": fname,
+        "mime": mime,
+        "is_image": mime.startswith("image/"),
+        "size": len(data),
+    }
+
+
+@app.get("/api/uploads/{file_id}")
+async def upload_get(file_id: str):
+    """Sirve un adjunto subido (id validado contra traversal)."""
+    path = _upload_path(file_id)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="archivo no encontrado")
+    import mimetypes as _mt
+    mime = _mt.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=mime, filename=path.name.split("_", 1)[-1])
+
+
+def _materialize_attachments(attachments: list) -> tuple[list[str], str]:
+    """Adjuntos referenciados por id -> (imagenes data-URI, contexto textual).
+    Se ejecuta en thread (lectura de disco)."""
+    import base64 as _b64
+    import mimetypes as _mt
+    images: list[str] = []
+    texts: list[str] = []
+    for att in attachments[:_MAX_ATTACHMENTS]:
+        if not isinstance(att, dict):
+            continue
+        path = _upload_path(str(att.get("id") or ""))
+        if path is None or not path.is_file():
+            continue
+        try:
+            data = path.read_bytes()
+        except Exception:
+            continue
+        name = str(att.get("name") or path.name.split("_", 1)[-1])
+        mime = str(att.get("mime") or _mt.guess_type(path.name)[0] or "application/octet-stream")
+        ext = Path(name).suffix.lower()
+        if mime.startswith("image/") and mime != "image/svg+xml":
+            if len(data) <= _MAX_IMAGE_BYTES:
+                images.append(f"data:{mime};base64,{_b64.b64encode(data).decode('ascii')}")
+            else:
+                texts.append(f"[imagen omitida por tamano: {name} ({len(data)} bytes)]")
+        elif (
+            mime.startswith("text/")
+            or mime in ("application/json", "application/xml", "application/javascript",
+                        "application/yaml", "application/x-yaml", "application/toml", "application/sql")
+            or ext in _TEXT_EXTS
+        ):
+            if len(data) <= _MAX_TEXT_BYTES:
+                txt = data.decode("utf-8", errors="replace")[:_MAX_TEXT_CHARS]
+                texts.append(f"[archivo: {name} ({mime}, {len(data)} bytes)]\n{txt}")
+            else:
+                texts.append(f"[archivo adjunto grande (solo metadata): {name} ({mime}, {len(data)} bytes)]")
+        else:
+            texts.append(f"[archivo adjunto: {name} ({mime}, {len(data)} bytes)]")
+    return images, "\n\n".join(texts)
+
+
+# ==== DECK: voz — STT (faster-whisper local) + TTS (Piper local) ====
+_AUDIO_SUFFIX = {
+    "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav",
+    "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".m4a",
+}
+
+
+@app.get("/api/voice/status")
+async def voice_status():
+    """Estado de STT/TTS locales (init en thread: la 1ra llamada puede descargar modelos)."""
+    def _status():
+        from src.core.voice_engine import get_engine
+        return get_engine().get_status()
+    try:
+        return await asyncio.to_thread(_status)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/voice/stt")
+async def voice_stt(request: Request):
+    """Transcribe audio crudo del navegador (webm/ogg/wav) -> {text, ...}."""
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="audio required")
+    ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    suffix = _AUDIO_SUFFIX.get(ct, ".webm")
+    language = request.query_params.get("language", "es")
+
+    def _job():
+        import tempfile as _tf
+        from src.core.voice_engine import get_engine
+        engine = get_engine()
+        if not engine.stt_available:
+            return {"error": "STT no disponible — faltan modelos de whisper (1ra ejecucion los descarga)"}
+        with _tf.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(audio)
+            p = tmp.name
+        try:
+            return engine.transcribe_file(p, language=language)
+        finally:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+    try:
+        result = await asyncio.to_thread(_job)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"stt failed: {e}")
+    if result.get("error"):
+        raise HTTPException(status_code=501, detail=result["error"])
+    return result
+
+
+@app.post("/api/voice/tts")
+async def voice_tts(request: Request):
+    """Sintetiza voz (Piper local) -> WAV bytes."""
+    body = await request.json()
+    text = str(body.get("text") or "").strip()[:4000]
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+
+    def _job():
+        from src.core.voice_engine import get_engine
+        engine = get_engine()
+        if not engine.available:
+            return None
+        return engine.speak_bytes(text)
+
+    try:
+        wav = await asyncio.to_thread(_job)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"tts failed: {e}")
+    if not wav:
+        raise HTTPException(status_code=501, detail="TTS no disponible — faltan modelos Piper (voice_models/piper)")
+    return Response(content=wav, media_type="audio/wav")
+
+
+# ==== DECK: API keys BYOK (catalogo de proveedores) — .env en la raiz ====
+_ENV_FILE = _PROJECT_ROOT / ".env"
+_ENV_NAME_RE = re.compile(r"^[A-Z0-9_]{2,64}$")
+
+
+def _read_env_file() -> dict[str, str]:
+    vals: dict[str, str] = {}
+    if _ENV_FILE.exists():
+        for line in _ENV_FILE.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            vals[k.strip()] = v.strip().strip('"').strip("'")
+    return vals
+
+
+def _write_env_key(key: str, value: str) -> None:
+    """Upsert (o borra si value vacio) de KEY=value en el .env raiz."""
+    lines = _ENV_FILE.read_text(encoding="utf-8-sig").splitlines() if _ENV_FILE.exists() else []
+    out = [ln for ln in lines if not ln.strip().startswith(f"{key}=")]
+    if value:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+        _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
+    elif _ENV_FILE.exists():
+        # borrado: reescribir sin la linea; si no queda nada, eliminar el archivo
+        if out:
+            _ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
+        else:
+            try:
+                _ENV_FILE.unlink()
+            except Exception:
+                pass
+
+
+def _mask_key(v: str) -> str:
+    if not v:
+        return ""
+    return (v[:4] + "…" + v[-4:]) if len(v) > 10 else "••••"
+
+
+@app.get("/api/keys")
+async def keys_get():
+    """Estado de las API keys del catalogo (valores enmascarados, nunca el valor crudo)."""
+    from src.core.provider_catalog import PROVIDER_CATALOG
+    env_file = _read_env_file()
+    seen: set[str] = set()
+    keys = []
+    for p in PROVIDER_CATALOG:
+        env_name = p.get("api_key_env") or ""
+        if not env_name or env_name in seen:
+            continue
+        seen.add(env_name)
+        raw = os.environ.get(env_name) or env_file.get(env_name) or ""
+        keys.append({
+            "env": env_name,
+            "label": p.get("name", env_name),
+            "providers": [q["id"] for q in PROVIDER_CATALOG if q.get("api_key_env") == env_name],
+            "configured": bool(raw),
+            "source": "env" if os.environ.get(env_name) else ("file" if env_file.get(env_name) else ""),
+            "masked": _mask_key(raw),
+        })
+    return {"keys": keys, "env_file": _ENV_FILE.name}
+
+
+@app.put("/api/keys")
+async def keys_put(request: Request):
+    """Guarda/borra una API key en .env (raiz) + os.environ (efectivo al instante)."""
+    body = await request.json()
+    env_name = str(body.get("env") or "")
+    value = str(body.get("value") or "").strip()
+    if not _ENV_NAME_RE.match(env_name):
+        raise HTTPException(status_code=400, detail="nombre de variable invalido")
+    from src.core.provider_catalog import PROVIDER_CATALOG
+    valid = {p.get("api_key_env") for p in PROVIDER_CATALOG if p.get("api_key_env")}
+    if env_name not in valid:
+        raise HTTPException(status_code=400, detail=f"variable desconocida: {env_name}")
+    if value:
+        _write_env_key(env_name, value)
+        os.environ[env_name] = value
+    else:
+        _write_env_key(env_name, "")
+        os.environ.pop(env_name, None)
+    return {"ok": True, "env": env_name, "configured": bool(value), "masked": _mask_key(value) if value else ""}
+
 # ---- Construccion de harness (compartida: /api/chat, /v1, /ws, /stream) ----
 # Fase 8: antes /v1/chat/completions, /ws/chat y /api/chat/stream construian su
 # propio loop con APIs inexistentes (ProviderRouter.from_config, Scope(permission=),
@@ -1389,16 +1702,46 @@ def _build_router(cfg: dict):
     return _build_router_from_config(cfg)
 
 
+def _full_access_roots() -> tuple[str, ...]:
+    """Raices para permission=full: todas las unidades existentes (Windows) o / (POSIX).
+    Sin letras de unidad hardcodeadas — se detectan en runtime."""
+    roots: list[str] = []
+    if sys.platform == "win32":
+        import string as _string
+        for letter in _string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            try:
+                if Path(drive).exists():
+                    roots.append(drive)
+            except Exception:
+                continue
+    else:
+        roots.append("/")
+    return tuple(roots) or ("/",)
+
+
 def _build_scope(cfg: dict):
-    """Scope jail desde config.scope (allowed_roots + deny_patterns)."""
+    """Scope jail desde config.scope (allowed_roots + deny_patterns + permission).
+
+    Fase DECK: antes no se pasaba permission= y ScopeConfig quedaba en el default
+    workspace_write -> 'full' no liberaba nada. Con permission=full se anaden
+    todas las unidades y la red.
+    """
     from src.core.scope import Scope, ScopeConfig
     scope_cfg = cfg.get("scope", {})
+    permission = str(scope_cfg.get("permission", "workspace_write"))
+    roots = tuple(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
+    allow_net = bool(scope_cfg.get("allow_network", False))
+    if permission == "full":
+        roots = roots + tuple(r for r in _full_access_roots() if r not in roots)
+        allow_net = True
     return Scope(ScopeConfig(
-        allowed_roots=tuple(scope_cfg.get("allowed_roots", ["./workspace", "./data"])),
+        allowed_roots=roots,
         deny_patterns=tuple(scope_cfg.get("deny_patterns", ["**/.env"])),
         max_read_bytes=int(scope_cfg.get("max_read_bytes", 1_048_576)),
-        allow_network=bool(scope_cfg.get("allow_network", False)),
+        allow_network=allow_net,
         allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)),
+        permission=permission,
     ), project_root=_PROJECT_ROOT)
 
 
@@ -1553,10 +1896,22 @@ async def chat(request: Request):
     """
     body = await request.json()
     message = body.get("message") or body.get("content") or ""
-    if not message:
+    attachments = body.get("attachments") or []
+    if not message and not attachments:
         raise HTTPException(status_code=400, detail="message required")
     session_id = body.get("session_id")
     hint = body.get("hint")
+    # DECK: materializar adjuntos -> imagenes data-URI (vision) + contexto textual
+    images: list[str] = []
+    if attachments:
+        try:
+            images, attach_ctx = await asyncio.to_thread(_materialize_attachments, attachments)
+            if attach_ctx:
+                message = f"{message}\n\n{attach_ctx}" if message else attach_ctx
+        except Exception as e:
+            logger.warning(f"adjuntos ignorados: {e}")
+    if not message:
+        message = "[contenido adjunto sin texto]"
     # Inferir hint desde el mensaje si la UI no lo envía (enruta a la gema correcta).
     if not hint:
         from src.core.provider_router import infer_hint
@@ -1608,7 +1963,8 @@ async def chat(request: Request):
         loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
-                                model=body.get("model"))
+                                model=body.get("model"),
+                                images=images or None)
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,

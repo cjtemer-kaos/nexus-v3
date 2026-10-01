@@ -1,17 +1,24 @@
-import { useState, useRef, useEffect } from 'react'
-import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi } from '@/lib/api'
+import { chatApi, apiFetch, uploadApi, type UploadResult } from '@/lib/api'
+import { VoiceMic } from '@/components/chat/VoiceMic'
+
+type Pending = { key: string; file: File; preview?: string }
+
+const now = () => new Date().toLocaleTimeString().slice(0, 5)
 
 export function ChatPanel() {
-  const { messages, addMessage } = useAppStore()
+  const { messages, addMessage, activeSession, loadMessages } = useAppStore()
   const [input, setInput] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
-  const [attachToast, setAttachToast] = useState(false)
+  const [attachToast, setAttachToast] = useState<string | null>(null)
+  const [pending, setPending] = useState<Pending[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
@@ -19,71 +26,162 @@ export function ChatPanel() {
   const [lastTodos, setLastTodos] = useState<any|null>(null)
   const [showTraj, setShowTraj] = useState(false)
 
+  // Historial: al cambiar de sesión (o al cargar la primera) traer mensajes del server
+  useEffect(() => { void loadMessages(activeSession) }, [activeSession, loadMessages])
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isStreaming, lastSteps, lastTodos])
 
+  const toast = useCallback((msg: string) => {
+    setAttachToast(msg)
+    setTimeout(() => setAttachToast(null), 3200)
+  }, [])
+
+  /* ── adjuntos ─────────────────────────────────────────────── */
+
+  const addFiles = useCallback((files: FileList | File[]) => {
+    const list = Array.from(files)
+    if (!list.length) return
+    const room = 8 - pending.length
+    if (room <= 0) { toast('Máximo 8 adjuntos por mensaje'); return }
+    const accepted = list.slice(0, room)
+    const next: Pending[] = accepted.map((file) => ({ key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, file }))
+    for (const p of next) {
+      if (p.file.type.startsWith('image/')) {
+        const r = new FileReader()
+        r.onload = () => setPending((cur) => cur.map((x) => (x.key === p.key ? { ...x, preview: String(r.result) } : x)))
+        r.readAsDataURL(p.file)
+      }
+    }
+    setPending((cur) => [...cur, ...next])
+  }, [pending.length, toast])
+
+  // Ctrl+V global: pega donde esté el foco dentro del chat
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = e.clipboardData?.files
+      if (files && files.length > 0) { e.preventDefault(); addFiles(files) }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [addFiles])
+
+  const captureScreen = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+      const track = stream.getVideoTracks()[0]
+      const video = document.createElement('video')
+      video.srcObject = stream
+      video.muted = true
+      await video.play()
+      await new Promise((r) => setTimeout(r, 250))
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth || 1280
+      canvas.height = video.videoHeight || 720
+      canvas.getContext('2d')?.drawImage(video, 0, 0)
+      track.stop()
+      stream.getTracks().forEach((t) => t.stop())
+      const blob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b || new Blob()), 'image/png'))
+      const f = new File([blob], `captura-${Date.now()}.png`, { type: 'image/png' })
+      addFiles([f])
+    } catch (e) {
+      const msg = (e as Error).name === 'NotAllowedError' ? 'Captura cancelada' : 'Captura no disponible: ' + (e as Error).message
+      toast(msg)
+    }
+  }
+
+  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) addFiles(e.target.files)
+    e.target.value = ''
+  }
+
+  const removePending = (key: string) => setPending((cur) => cur.filter((p) => p.key !== key))
+
+  const onTranscript = (text: string) => {
+    setInput((cur) => (cur ? `${cur} ${text}` : text))
+    textareaRef.current?.focus()
+  }
+
+  /* ── envío ────────────────────────────────────────────────── */
+
   const send = async () => {
-    if (!input.trim()) return
+    if ((!input.trim() && pending.length === 0) || isStreaming) return
     const text = input.trim()
+
+    // subir adjuntos pendientes
+    let uploads: UploadResult[] = []
+    if (pending.length) {
+      setIsStreaming(true)
+      try {
+        uploads = await Promise.all(pending.map((p) => uploadApi(p.file)))
+      } catch (e) {
+        setIsStreaming(false)
+        toast('Fallo al subir adjunto: ' + (e as Error).message.slice(0, 140))
+        return
+      }
+      setPending([])
+      setIsStreaming(false)
+      const imgs = pending.filter((p) => p.file.type.startsWith('image/'))
+      addMessage({
+        id: Date.now().toString(),
+        role: 'user',
+        content: text || `📎 ${uploads.map((u) => u.name).join(', ')}`,
+        timestamp: now(),
+        images: imgs.map((p) => p.preview).filter(Boolean) as string[],
+      })
+    }
+
     if (text.startsWith('/')) {
       const { activeSession } = useAppStore.getState()
-      addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: new Date().toLocaleTimeString().slice(0,5) })
+      const stillActive = () => useAppStore.getState().activeSession === activeSession
+      if (!uploads.length) addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: now() })
       setInput(''); setSlashOpen(false)
       try {
-        const isDev = (window as any).location?.port === '5174'
-        const base = isDev ? 'http://127.0.0.1:8765' : window.location.origin
-        const url = base === window.location.origin ? '/api/slash' : base + '/api/slash'
-        const r = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ command: text, ctx: { session_id: activeSession } }) })
+        const r = await apiFetch('/api/slash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: text, ctx: { session_id: activeSession } }) })
         const j = await r.json()
         const reply = j.ok ? j.message : (text.slice(1).split(' ')[0] + ': ' + j.message)
-        addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: new Date().toLocaleTimeString().slice(0,5) })
+        if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
         if (j.data?.action === 'clear_local_only') useAppStore.setState({ messages: [] } as any)
         if (j.data?.action === 'set_model') useAppStore.getState().setModel(j.data.model)
         if (j.data?.action === 'set_permission' || j.data?.action === 'set_plan_mode') {
           try {
-            const pr = await fetch(base === window.location.origin ? '/api/permission' : base + '/api/permission')
+            const pr = await apiFetch('/api/permission')
             const pj = await pr.json()
-            addMessage({ id: (Date.now()+2).toString(), role: 'tool', content: 'permiso ahora: ' + pj.permission, toolName: 'permission', timestamp: new Date().toLocaleTimeString().slice(0,5) })
+            if (stillActive()) addMessage({ id: (Date.now()+2).toString(), role: 'tool', content: 'permiso ahora: ' + pj.permission, toolName: 'permission', timestamp: now() })
           } catch {}
         }
-      } catch (e) { addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: new Date().toLocaleTimeString().slice(0,5) }) }
+      } catch (e) { if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: now() }) }
       return
     }
+
     const { activeSession, selectedModel } = useAppStore.getState()
-    addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: new Date().toLocaleTimeString().slice(0,5) })
+    const stillActive = () => useAppStore.getState().activeSession === activeSession
+    if (!uploads.length) addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: now() })
     setInput(''); setSlashOpen(false)
     setIsStreaming(true)
     try {
       const model = selectedModel && selectedModel !== 'auto' ? selectedModel : undefined
-      const res: any = await chatApi(text, activeSession || undefined, undefined, model)
+      const res: any = await chatApi(text, activeSession || undefined, undefined, model,
+        uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })))
       if (res.steps?.length) setLastSteps(res.steps)
       if (res.todos) setLastTodos(res.todos)
-      addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: res.reply, timestamp: new Date().toLocaleTimeString().slice(0,5) })
+      // si el usuario cambió de sesión mientras respondía, el historial de la sesión
+      // destino se recarga con loadMessages — no mezclar la respuesta aquí
+      if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: res.reply, timestamp: now() })
     } catch (e) {
       const msg = (e as Error).message || String(e)
       let reply: string
       if (msg.includes("timeout") || msg.includes("AbortError")) {
         reply = `Timeout 90s — el modelo local tarda. Reintenta con un mensaje más corto o cambia de modelo. Detalle: ${msg.slice(0,200)}`
       } else {
-        reply = `⚠️ Backend no disponible (${msg.slice(0,120)}). Verifica que el arnés esté corriendo en http://127.0.0.1:8765 — inicia con \`python -m src.api.server\` o vía Electron. Cuando el backend esté online el mensaje se enrutará vía ProviderRouter (Thompson/VRAM) y TDAO.`
+        reply = `⚠️ Backend no disponible (${msg.slice(0,120)}). Inicia el servidor con \`python -m src.api.server\` (o vía Electron) y reintenta.`
       }
       if (text.toLowerCase().includes('compact')) reply = 'Pipeline **4 capas** activo: **L0 SecurityLingua** filtra inyección, **L1 Recorte** mantiene 4 turnos, **L2 Micro** colapsa herramientas >2k tokens, **L3 Presupuesto** derrama a `./data/spill`, **L4 Resumen** usa modelo barato. Emergencia `prompt_too_long` → Compactación Reactiva.'
       if (text.toLowerCase().includes('alcance') || text.toLowerCase().includes('scope')) reply = 'Guardia de **Alcance** aplica ACL por defecto denegado. Raíces permitidas: `./workspace`, `./data`. Patrones denegados: `**/.env`, `**/.git/**`. Límite lectura 1.0 MB. Cada herramienta pasa por `alcance.verificar` antes de ejecutar.'
       await new Promise(r => setTimeout(r, 500))
-      addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: new Date().toLocaleTimeString().slice(0,5) })
+      if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
     } finally {
       setIsStreaming(false)
     }
-  }
-
-  const handleAttach = () => {
-    if (fileInputRef.current) fileInputRef.current.click()
-    else { setAttachToast(true); setTimeout(()=>setAttachToast(false), 2000) }
-  }
-  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    addMessage({ id: Date.now().toString(), role: 'user', content: `Archivo adjunto: ${f.name} (${(f.size/1024).toFixed(1)} KB) — será leído por el agente bajo Guardia de Alcance (./workspace, ./data)`, timestamp: new Date().toLocaleTimeString().slice(0,5) })
-    e.target.value = ''
   }
 
   return (
@@ -92,64 +190,72 @@ export function ChatPanel() {
       <div className="flex-1 overflow-auto px-6 py-6 space-y-5">
         {messages.length === 0 && !isStreaming && (
           <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 text-white">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#0B62D6] text-white">
               <Bot className="h-6 w-6" />
             </div>
             <div>
-              <div className="text-sm font-semibold text-zinc-200">Bienvenido a Nexus v3</div>
-              <div className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-zinc-500">
-                Arnés TDAO conectado al backend vivo (8765). Escribe / para comandos. El agente usa todo_write, web_fetch y Guardia de permisos.
+              <div className="text-sm font-semibold text-[#EDEEF0]">Bienvenido a Nexus v3</div>
+              <div className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-[#9BA1AA]">
+                Arnés TDAO conectado al backend. Escribe / para comandos · Ctrl+V pega archivos · el micrófono transcribe con el STT local.
               </div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <button onClick={() => setInput('/help')} className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[0.1]">/help</button>
-              <button onClick={() => setInput('explícame la compactación 4 capas')} className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[0.1]">Compactación 4 capas</button>
-              <button onClick={() => setInput('lista el grafo de conocimiento')} className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[0.1]">Grafo</button>
+              <button onClick={() => setInput('/help')} className="rounded-full border border-[#2C3037] bg-[#22262D] px-3 py-1.5 text-xs text-[#9BA1AA] hover:text-[#EDEEF0]">/help</button>
+              <button onClick={() => setInput('explícame la compactación 4 capas')} className="rounded-full border border-[#2C3037] bg-[#22262D] px-3 py-1.5 text-xs text-[#9BA1AA] hover:text-[#EDEEF0]">Compactación 4 capas</button>
+              <button onClick={() => setInput('lista el grafo de conocimiento')} className="rounded-full border border-[#2C3037] bg-[#22262D] px-3 py-1.5 text-xs text-[#9BA1AA] hover:text-[#EDEEF0]">Grafo</button>
             </div>
           </div>
         )}
         {messages.map((m) => (
           <div key={m.id} className={cn('flex gap-3', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             {m.role !== 'user' && (
-              <div className={cn('mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full', m.role === 'tool' ? 'bg-amber-500/15 text-amber-400' : 'bg-violet-600 text-white')}>
+              <div className={cn('mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full', m.role === 'tool' ? 'bg-[#FFB86B]/15 text-[#FFB86B]' : 'bg-[#0B62D6] text-white')}>
                 {m.role === 'tool' ? <Wrench className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
               </div>
             )}
-            <div className={cn('group relative max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed', m.role === 'user' ? 'bg-violet-600 text-white rounded-br-sm' : m.role === 'tool' ? 'bg-amber-500/10 border border-amber-500/20 text-amber-100' : 'bg-white/[0.06] border border-white/10 text-zinc-100')}>
-              {m.toolName && <div className="mb-1 text-xs font-mono text-amber-400/80">{m.toolName}</div>}
+            <div className={cn('group relative max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed', m.role === 'user' ? 'bg-[#0B62D6] text-white rounded-br-sm' : m.role === 'tool' ? 'bg-[#FFB86B]/10 border border-[#FFB86B]/20 text-[#FFE0B0]' : 'bg-[#1E2127] border border-[#2C3037] text-[#EDEEF0]')}>
+              {m.toolName && <div className="mb-1 text-xs font-mono text-[#FFB86B]/80">{m.toolName}</div>}
+              {m.images && m.images.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {m.images.map((src, i) => (
+                    <img key={i} src={src} alt={`adjunto ${i + 1}`} className="h-24 w-24 rounded-lg border border-[#2C3037] object-cover" />
+                  ))}
+                </div>
+              )}
               <div className="whitespace-pre-wrap break-words">{m.content}</div>
-              <div className={cn('mt-1.5 flex items-center gap-2 text-[11px]', m.role === 'user' ? 'text-violet-200 justify-end' : 'text-zinc-500')}>
+              <div className={cn('mt-1.5 flex items-center gap-2 text-[11px]', m.role === 'user' ? 'text-[#B9DBFF] justify-end' : 'text-[#9BA1AA]')}>
                 <span>{m.timestamp}</span>
                 <button
                   onClick={() => { navigator.clipboard.writeText(m.content); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
+                  aria-label={copied===m.id ? 'Copiado' : 'Copiar mensaje'}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-[#EDEEF0]"
                 >
                   {copied===m.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                 </button>
               </div>
             </div>
-            {m.role === 'user' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-zinc-300"><User className="h-3.5 w-3.5" /></div>}
+            {m.role === 'user' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#22262D] text-[#9BA1AA]"><User className="h-3.5 w-3.5" /></div>}
           </div>
         ))}
         {(lastTodos && lastTodos.todos?.length > 0) && (
-          <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-3 text-xs">
-            <div className="flex items-center gap-2 font-semibold text-violet-300"><ListTodo className="h-3.5 w-3.5" /> Todos: {lastTodos.counts.completed}/{lastTodos.todos.length} completados</div>
-            <div className="mt-2 space-y-1">{lastTodos.todos.map((td:any,i:number)=>(<div key={i} className="flex gap-2"><span className={td.status==='completed'?'text-emerald-400':td.status==='in_progress'?'text-amber-400':'text-zinc-500'}>{td.status==='completed'?'●':td.status==='in_progress'?'◐':'○'}</span><span className={td.status==='completed'?'line-through text-zinc-500':''}>{td.content}</span><span className="ml-auto text-zinc-500">{td.status}</span></div>))}</div>
+          <div className="rounded-xl border border-[#4C9DFF]/20 bg-[#4C9DFF]/10 p-3 text-xs">
+            <div className="flex items-center gap-2 font-semibold text-[#8CC1FF]"><ListTodo className="h-3.5 w-3.5" /> Todos: {lastTodos.counts.completed}/{lastTodos.todos.length} completados</div>
+            <div className="mt-2 space-y-1">{lastTodos.todos.map((td:any,i:number)=>(<div key={i} className="flex gap-2"><span className={td.status==='completed'?'text-[#3DDC84]':td.status==='in_progress'?'text-[#FFB86B]':'text-[#9BA1AA]'}>{td.status==='completed'?'●':td.status==='in_progress'?'◐':'○'}</span><span className={td.status==='completed'?'line-through text-[#9BA1AA]':''}>{td.content}</span><span className="ml-auto text-[#9BA1AA]">{td.status}</span></div>))}</div>
           </div>
         )}
         {(lastSteps && lastSteps.length>0) && (
-          <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-xs">
-            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-zinc-300"><Eye className="h-3.5 w-3.5" /> Trajectory: {lastSteps.length} pasos {showTraj? '▾':'▸'}</button>
-            {showTraj && <div className="mt-2 space-y-2 max-h-64 overflow-auto">{lastSteps.map((s:any,i:number)=>(<div key={i} className="rounded-lg border border-white/5 bg-zinc-900 p-2"><div className="flex gap-2 text-zinc-500">#{s.iteration} <span className="text-violet-400">{s.phase}</span> {s.tool_used && <span className="text-amber-400">{s.tool_used}</span>}</div><div className="mt-1 whitespace-pre-wrap text-zinc-300">{String(s.content||'').slice(0,600)}</div></div>))}</div>}
+          <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs">
+            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trajectory: {lastSteps.length} pasos {showTraj? '▾':'▸'}</button>
+            {showTraj && <div className="mt-2 space-y-2 max-h-64 overflow-auto">{lastSteps.map((s:any,i:number)=>(<div key={i} className="rounded-lg border border-[#2C3037] bg-[#15171B] p-2"><div className="flex gap-2 text-[#9BA1AA]">#{s.iteration} <span className="text-[#4C9DFF]">{s.phase}</span> {s.tool_used && <span className="text-[#FFB86B]">{s.tool_used}</span>}</div><div className="mt-1 whitespace-pre-wrap text-[#EDEEF0]">{String(s.content||'').slice(0,600)}</div></div>))}</div>}
           </div>
         )}
         {isStreaming && (
           <div className="flex gap-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-600 text-white"><Bot className="h-3.5 w-3.5" /></div>
-            <div className="bg-white/[0.06] border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-2">
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500 [animation-delay:0ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500 [animation-delay:150ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500 [animation-delay:300ms]" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#0B62D6] text-white"><Bot className="h-3.5 w-3.5" /></div>
+            <div className="bg-[#1E2127] border border-[#2C3037] rounded-2xl px-4 py-3 flex items-center gap-2">
+              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:0ms]" />
+              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:150ms]" />
+              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:300ms]" />
             </div>
           </div>
         )}
@@ -157,36 +263,64 @@ export function ChatPanel() {
       </div>
 
       {slashOpen && (
-        <div className="mx-4 mb-2 rounded-xl border border-white/10 bg-zinc-900 p-2 text-xs shadow-xl">
-          <div className="px-2 py-1 text-zinc-500">Comandos /{slashQuery}</div>
+        <div className="mx-4 mb-2 rounded-xl border border-[#2C3037] bg-[#22262D] p-2 text-xs shadow-xl">
+          <div className="px-2 py-1 text-[#9BA1AA]">Comandos /{slashQuery}</div>
           {['help — show available commands','clear — clear local chat buffer','model <id> — set model','persona [preset] — switch persona','skill <name> — invoke a skill','session [new|list] — session ops','plan [on|off] — toggle plan mode','permission <read_only|workspace_write|full> — cambia permiso','compact — info compactación','goal <objetivo|status|clear> — gestiona goal','export — exporta sesion','feedback [texto] — envia feedback','todo — ver lista'].filter(s=>!slashQuery || s.toLowerCase().includes(slashQuery.toLowerCase())).map(s=>(
-            <button key={s} onClick={()=>{const cmd='/'+s.split(' —')[0].split(' ')[0]; setInput(cmd+' '); setSlashOpen(false)}} className="flex w-full gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/10"><span className="text-violet-400">/{s.split(' —')[0]}</span><span className="text-zinc-500">{s.split(' —')[1]||''}</span></button>
+            <button key={s} onClick={()=>{const cmd='/'+s.split(' —')[0].split(' ')[0]; setInput(cmd+' '); setSlashOpen(false); textareaRef.current?.focus()}} className="flex w-full gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#2C3037]"><span className="text-[#4C9DFF]">/{s.split(' —')[0]}</span><span className="text-[#9BA1AA]">{s.split(' —')[1]||''}</span></button>
           ))}
         </div>
       )}
-      {/* composer */}
-      <div className="border-t border-white/10 bg-zinc-950/50 backdrop-blur p-4">
-        <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.04] p-2 focus-within:border-violet-500/50 focus-within:bg-white/[0.06] transition-colors">
-          <input ref={fileInputRef} type="file" className="hidden" onChange={onFilePicked} />
-          <Button variant="ghost" size="icon" className="shrink-0 rounded-xl" aria-label="Adjuntar archivo" onClick={handleAttach}><Paperclip className="h-4 w-4" /></Button>
+
+      {/* composer DECK */}
+      <div className="relative border-t border-[#2C3037] bg-[#15171B] p-4">
+        {/* previews de adjuntos */}
+        {pending.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pending.map((p) => (
+              <div key={p.key} className="group relative flex items-center gap-2 rounded-xl border border-[#2C3037] bg-[#1E2127] py-1.5 pl-1.5 pr-8 text-xs">
+                {p.preview ? (
+                  <img src={p.preview} alt={p.file.name} className="h-9 w-9 rounded-lg object-cover" />
+                ) : (
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#22262D] text-[#4C9DFF]"><FileText className="h-4 w-4" /></span>
+                )}
+                <div className="max-w-[140px]">
+                  <div className="truncate font-medium text-[#EDEEF0]">{p.file.name}</div>
+                  <div className="text-[10px] text-[#9BA1AA]">{(p.file.size/1024).toFixed(1)} KB</div>
+                </div>
+                <button onClick={() => removePending(p.key)} aria-label={`Quitar ${p.file.name}`} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-[#9BA1AA] hover:bg-[#2C3037] hover:text-[#FF6259]">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-end gap-2 rounded-2xl border border-[#2C3037] bg-[#1E2127] p-2 focus-within:border-[#4C9DFF]/50 transition-colors">
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilePicked} accept="*/*" />
+          <Button variant="ghost" size="icon" className="shrink-0 rounded-xl text-[#9BA1AA] hover:text-[#EDEEF0]" aria-label="Adjuntar archivo" onClick={() => fileInputRef.current?.click()}><Paperclip className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" className="shrink-0 rounded-xl text-[#9BA1AA] hover:text-[#EDEEF0]" aria-label="Capturar pantalla" onClick={captureScreen}><Camera className="h-4 w-4" /></Button>
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e)=>{ const v=e.target.value; setInput(v); if(v.startsWith('/')){ setSlashOpen(true); setSlashQuery(v.slice(1).split(' ')[0]) } else setSlashOpen(false) }}
             onKeyDown={(e)=>{ if(e.key==='Escape' && slashOpen){ e.preventDefault(); setSlashOpen(false); return } if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send() }}}
-            placeholder="Mensaje a Nexus…  / para comandos (Shift+Enter salto)"
+            placeholder="Mensaje a Nexus…  / comandos · Ctrl+V adjunta · Shift+Enter salto"
             rows={1}
             aria-label="Mensaje a Nexus"
-            className="max-h-32 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2.5 text-sm placeholder:text-zinc-500 focus:outline-none"
+            className="max-h-32 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2.5 text-sm placeholder:text-[#9BA1AA] focus:outline-none text-[#EDEEF0]"
           />
-          <Button onClick={send} disabled={!input.trim() || isStreaming} aria-label="Enviar mensaje" className="shrink-0 rounded-xl bg-violet-600 hover:bg-violet-500">
+          <div className="relative flex shrink-0 items-center">
+            <VoiceMic onTranscript={onTranscript} />
+          </div>
+          <Button onClick={send} disabled={(!input.trim() && pending.length===0) || isStreaming} aria-label="Enviar mensaje" className="shrink-0 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] text-white">
             <Send className="h-4 w-4" /> <span className="hidden sm:inline">Enviar</span>
           </Button>
         </div>
-        <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-          <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3 text-violet-400" /> Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas</span>
-          <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · @archivos</span>
+        <div className="mt-2 flex items-center justify-between text-xs text-[#9BA1AA]">
+          <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3 text-[#4C9DFF]" /> Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas</span>
+          <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · Ctrl+V adjuntos</span>
         </div>
-        {attachToast && <div className="mt-2 text-xs text-amber-400">Selector de archivos — respeta Guardia de Alcance (./workspace)</div>}
+        {attachToast && <div className="mt-2 text-xs text-[#FFB86B]">{attachToast}</div>}
       </div>
     </div>
   )

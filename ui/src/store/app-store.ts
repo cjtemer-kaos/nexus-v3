@@ -1,16 +1,25 @@
 import { create } from 'zustand'
-import { providersApi, sessionsApi, createSessionApi } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi, sessionMessagesApi } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
 
 type View = 'chat' | 'graph' | 'editor' | 'terminal'
 
-export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string }
+export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string; images?: string[] }
 
 export type SessionMeta = { id: string; title: string; project?: string; summary?: string; source?: 'server' | 'local' }
 
 type FileTab = { path: string; content: string; dirty: boolean; language: string }
+
+const fmtTime = (iso: string): string => {
+  try {
+    const d = new Date(iso)
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString().slice(0, 5)
+  } catch {
+    return ''
+  }
+}
 
 type AppState = {
   view: View
@@ -33,6 +42,8 @@ type AppState = {
   createSession: () => void
   messages: ChatMessage[]
   addMessage: (m: ChatMessage) => void
+  setMessages: (m: ChatMessage[]) => void
+  loadMessages: (sessionId: string) => Promise<void>
   // editor
   tabs: FileTab[]
   activeTab: number
@@ -86,7 +97,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setProviderHealth: (providerHealth: Record<string, ProviderStatus>) => set({ providerHealth }),
   sessions: [] as SessionMeta[],
   activeSession: '',
-  setActiveSession: (activeSession) => set({ activeSession }),
+  // Cambiar de sesión limpia el buffer local (evita ver mensajes de otra sesión
+  // mientras carga el historial desde el server).
+  setActiveSession: (activeSession) =>
+    set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] })),
   loadSessions: async () => {
     try {
       const data = await sessionsApi()
@@ -121,11 +135,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   messages: [] as ChatMessage[],
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
+  setMessages: (messages) => set({ messages }),
+  loadMessages: async (sessionId) => {
+    if (!sessionId) return
+    try {
+      const raw = await sessionMessagesApi(sessionId)
+      if (get().activeSession !== sessionId) return // carrera: la sesión cambió
+      const mapped: ChatMessage[] = raw
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
+        .map((m, i) => ({
+          id: `${sessionId}-${i}`,
+          role: m.role as ChatMessage['role'],
+          content: m.content ?? '',
+          toolName: m.tool_name || undefined,
+          timestamp: m.created_at ? fmtTime(m.created_at) : '',
+        }))
+      set({ messages: mapped })
+    } catch {
+      // server caído o sesión local (fallback) → buffer vacío, nunca mensajes ajenos
+      if (get().activeSession !== sessionId) return
+      set({ messages: [] })
+    }
+  },
   tabs: [] as FileTab[],
   activeTab: 0,
   setActiveTab: (activeTab) => set({ activeTab }),
   updateTab: (i, content) => set((s) => { const tabs = [...s.tabs]; tabs[i] = { ...tabs[i], content, dirty: true }; return { tabs } }),
-  openFile: (path, content = '# new file\n') => set((s) => ({ tabs: [...s.tabs, { path, content, dirty: false, language: path.endsWith('.py') ? 'python' : path.endsWith('.yaml') ? 'yaml' : 'typescript' }], activeTab: s.tabs.length })),
+  openFile: (path, content = '# new file\n') => set((s) => ({
+    tabs: [...s.tabs, {
+      path,
+      content,
+      dirty: false,
+      language: path.endsWith('.py') ? 'python'
+        : path.endsWith('.yaml') || path.endsWith('.yml') ? 'yaml'
+        : path.endsWith('.json') ? 'json'
+        : path.endsWith('.md') ? 'markdown'
+        : path.endsWith('.txt') ? 'plaintext'
+        : 'typescript',
+    }],
+    activeTab: s.tabs.length,
+  })),
   closeTab: (i) => set((s) => {
     if (s.tabs.length <= 1) return s
     const tabs = s.tabs.filter((_, idx) => idx !== i)

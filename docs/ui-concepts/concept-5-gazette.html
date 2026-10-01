@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepto 5 — GAZETTE (Editorial / Papel)</title>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F6F1E7; --paper2:#FBF8F1; --ink:#1C1A16; --dim:#6B6656; --rule:#C9C2B2; --rule2:#8F8878;
+    --red:#9E2B25; --hl:#F3E3B3; --ok:#3E6B44;
+    --serif:'Newsreader',Georgia,serif; --mono:'IBM Plex Mono',monospace; --cond:'IBM Plex Sans Condensed',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--serif);background:var(--paper);color:var(--ink);font-size:16px;display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:1fr 302px;height:100vh;overflow:hidden}
+  button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+  a{color:inherit}
+
+  /* ─── MASTHEAD ─── */
+  header{grid-column:1/3;padding:14px 34px 0;background:var(--paper)}
+  .top-row{display:flex;justify-content:space-between;align-items:center;font-family:var(--cond);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--rule);padding-bottom:8px}
+  .top-row a{text-decoration:none;padding:2px 7px;border:1px solid transparent}
+  .top-row a:hover{border-color:var(--rule2);color:var(--ink)}
+  .top-row .nav{display:flex;gap:4px}
+  .top-row .nav a.on{color:var(--ink);font-weight:700;border:1px solid var(--ink);background:var(--paper2)}
+  .mast{display:flex;align-items:baseline;justify-content:center;gap:18px;padding:13px 0 9px;border-bottom:3px double var(--ink);position:relative}
+  .mast h1{font-size:40px;font-weight:600;letter-spacing:-.02em;font-style:italic}
+  .mast h1 b{font-style:normal;font-weight:700;color:var(--red)}
+  .mast .fl{position:absolute;right:0;bottom:10px;font-family:var(--cond);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .mast .fl2{position:absolute;left:0;bottom:10px;font-family:var(--cond);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .sub-rule{display:flex;justify-content:center;gap:26px;font-family:var(--cond);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--rule);padding:7px 0}
+
+  /* ─── BODY: article + margin ─── */
+  .article{overflow-y:auto;padding:30px 42px 16px;grid-column:1;max-width:100%}
+  .inner{max-width:66ch}
+  .entry{margin-bottom:30px}
+  .speaker{font-family:var(--cond);font-size:12px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--red);border-bottom:1px solid var(--rule);padding-bottom:5px;margin-bottom:12px;display:flex;justify-content:space-between}
+  .speaker .tm{color:var(--dim);font-weight:500;letter-spacing:.1em}
+  .speaker.you{color:var(--ink)}
+  .entry p{font-size:17.5px;line-height:1.72;margin-bottom:.85em;text-wrap:pretty}
+  .entry p:first-of-type::first-letter{font-size:2.9em;float:left;line-height:.82;padding:.06em .1em 0 0;font-weight:600}
+  .entry.you p:first-of-type::first-letter{font-size:1.9em;color:var(--red)}
+  .entry p:last-child{margin-bottom:0}
+  code{font-family:var(--mono);font-size:.8em;background:var(--hl);padding:1px 5px;border-bottom:1px solid var(--rule2)}
+  .ref{font-family:var(--mono);font-size:.62em;vertical-align:super;color:var(--red);font-weight:600;text-decoration:none;padding:0 1px}
+  .ref:hover{background:var(--red);color:var(--paper)}
+  mark{background:var(--hl);padding:.05em .15em}
+
+  .prose-note{border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:13px 0;margin:22px 0;font-family:var(--cond);font-size:14.5px;display:flex;gap:14px;align-items:baseline;color:var(--dim)}
+  .prose-note .k{font-weight:700;color:var(--red);letter-spacing:.12em;text-transform:uppercase;font-size:11.5px;white-space:nowrap}
+  .prose-note a{color:var(--ink)}
+
+  .pend{display:inline-flex;gap:9px;align-items:center;font-family:var(--cond);font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);border:1px solid var(--rule2);padding:7px 14px;background:var(--paper2);cursor:pointer}
+  .pend:hover{border-color:var(--ink);color:var(--ink)}
+  .pend .dot{width:8px;height:8px;border-radius:50%;background:var(--red);animation:pulse 1.4s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .cur{display:inline-block;width:9px;height:18px;background:var(--ink);vertical-align:-3px;animation:blink .9s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ─── MARGIN COLUMN (marginalia) ─── */
+  .margin{grid-column:2;grid-row:2;border-left:1px solid var(--rule);padding:30px 22px 20px;overflow-y:auto;background:var(--paper2)}
+  .margin h4{font-family:var(--cond);font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--ink);padding-bottom:7px;margin-bottom:14px}
+  .note{margin-bottom:18px;padding-bottom:16px;border-bottom:1px dashed var(--rule);font-family:var(--cond)}
+  .note .nh{display:flex;gap:9px;align-items:baseline;font-size:12.5px;font-weight:700}
+  .note .no{font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600}
+  .note .nst{margin-left:auto;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.08em}
+  .nst.ok{color:var(--ok)} .nst.run{color:var(--red)}
+  .note .nb{font-family:var(--mono);font-size:11px;color:var(--dim);line-height:1.55;margin-top:7px;word-break:break-word}
+  .note .nb b{color:var(--ink);font-weight:600}
+  .note .more{font-family:var(--cond);font-size:11.5px;font-weight:700;color:var(--red);margin-top:6px;display:inline-block;cursor:pointer}
+  .note .more:hover{text-decoration:underline}
+  .mstat{border-top:3px double var(--ink);padding-top:14px;margin-top:6px}
+  .mrow{display:flex;justify-content:space-between;font-family:var(--cond);font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--rule)}
+  .mrow .lbl{color:var(--dim);letter-spacing:.1em;text-transform:uppercase;font-size:10.5px;font-weight:600}
+  .mrow .val{font-family:var(--mono);font-size:12px;font-weight:600}
+  .mrow .val.g{color:var(--ok)}
+  .mbar{height:4px;background:#E4DCCB;margin-top:4px}
+  .mbar i{display:block;height:100%;background:var(--red)}
+
+  /* ─── WIRE (composer) ─── */
+  .wire{grid-column:1;border-top:3px double var(--ink);padding:16px 42px 15px;background:var(--paper)}
+  .wire .lab{font-family:var(--cond);font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--red);margin-bottom:8px;display:flex;justify-content:space-between;color:var(--dim)}
+  .wire .lab b{color:var(--red)}
+  .wire .row{display:flex;border:1px solid var(--ink);background:var(--paper2)}
+  .wire .row:focus-within{outline:2px solid var(--red);outline-offset:2px}
+  .wire input{flex:1;border:0;outline:0;background:transparent;font-family:var(--serif);font-size:17px;padding:13px 15px;color:var(--ink)}
+  .wire input::placeholder{color:#9A9483;font-style:italic}
+  .wire .send{border-left:1px solid var(--ink);background:var(--ink);color:var(--paper);font-family:var(--cond);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12.5px;padding:0 24px}
+  .wire .send:hover{background:var(--red)}
+  .wire .keys{display:flex;gap:20px;margin-top:7px;font-family:var(--cond);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .wire .keys kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--rule2);padding:0 4px}
+
+  /* ─── FOOTER (folio) ─── */
+  footer{grid-column:1/3;border-top:1px solid var(--ink);display:flex;align-items:center;font-family:var(--cond);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);background:var(--paper);padding:0 34px;height:34px;gap:0}
+  footer .sg{padding:0 15px;height:100%;display:flex;align-items:center;gap:7px;border-right:1px solid var(--rule)}
+  footer .sg:first-child{padding-left:0}
+  footer .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  footer b{color:var(--ink);font-weight:700}
+  footer .folio{margin-left:auto;border-right:0;padding-right:0;font-style:italic;font-family:var(--serif);font-size:13px;letter-spacing:0;text-transform:none}
+  ::selection{background:var(--hl)}
+  ::-webkit-scrollbar{width:10px}
+  ::-webkit-scrollbar-thumb{background:var(--rule);border:3px solid var(--paper)}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top-row">
+    <span>Edición local · nº 42</span>
+    <div class="nav">
+      <a href="#" class="on">Crónica</a><a href="#">Grafo</a><a href="#">Taller</a><a href="#">Consola</a>
+    </div>
+    <span style="display:flex;gap:6px;align-items:center">
+      <a href="#">Buscar ⌘K</a><a href="#">Ajustes</a>
+    </span>
+  </div>
+  <div class="mast">
+    <span class="fl2">Conversación</span>
+    <h1>NEXUS <b>GAZETTE</b></h1>
+    <span class="fl">Miércoles 30 sep 2026</span>
+  </div>
+  <div class="sub-rule"><span>El agente local, en diálogo</span><span>·</span><span>Gema code en servicio</span><span>·</span><span>Precio: su atención</span></div>
+</header>
+
+<div class="article">
+  <div class="inner">
+
+    <div class="entry you">
+      <div class="speaker you"><span>Usted</span><span class="tm">18:42</span></div>
+      <p>El login devuelve 401 después de refrescar el token. Revísalo y propón un arreglo.</p>
+    </div>
+
+    <div class="entry">
+      <div class="speaker"><span>Nexus · gema code</span><span class="tm">18:42 — en redacción</span></div>
+      <p>Voy a revisar el flujo de refresh. Primero consulto la sesión <a class="ref" href="#n1">[1]</a> y después corro los pruebas de autenticación para reproducir el fallo <a class="ref" href="#n2">[2]</a>.</p>
+      <p>La causa queda establecida: <code>refresh_token()</code> invalida la sesión <em>antes</em> de emitir el nuevo JWT. El arreglo consiste en intercambiar el orden de ambas operaciones y añadir una prueba de regresión que fije el comportamiento.</p>
+
+      <div class="prose-note">
+        <span class="k">En curso</span>
+        <span>Redactando el parche en <code>src/auth/session.py</code> — el turno continúa<span class="cur"></span></span>
+      </div>
+
+      <button class="pend"><span class="dot"></span> Traza: 4 pasos · 4 s — desplegar</button>
+    </div>
+
+  </div>
+</div>
+
+<div class="margin">
+  <h4>Notas al margen</h4>
+
+  <div class="note" id="n1">
+    <div class="nh"><span class="no">[1]</span><span>read_file</span><span class="nst ok">✓ 38 MS</span></div>
+    <div class="nb"><b>src/auth/session.py</b> — 240 líneas<br>sha 4f29… · sólo lectura</div>
+    <span class="more">Ver salida completa →</span>
+  </div>
+
+  <div class="note" id="n2">
+    <div class="nh"><span class="no">[2]</span><span>run_command</span><span class="nst run">● EN MARCHA</span></div>
+    <div class="nb"><b>pytest tests/auth -x -q</b><br>2 fallidos · test_refresh_keeps_session</div>
+    <span class="more">Ver consola en vivo →</span>
+  </div>
+
+  <div class="note">
+    <div class="nh"><span class="no">[3]</span><span>plan</span><span class="nst ok">✓ 1.1 S</span></div>
+    <div class="nb">Hipótesis: orden de invalidación</div>
+  </div>
+
+  <div class="mstat">
+    <div class="mrow"><span class="lbl">Contexto</span><span class="val">12% · 15.4k</span></div>
+    <div class="mbar"><i style="width:12%"></i></div>
+    <div class="mrow"><span class="lbl">Latencia</span><span class="val g">312 ms</span></div>
+    <div class="mrow"><span class="lbl">Costo</span><span class="val">$0.014</span></div>
+    <div class="mrow"><span class="lbl">Modelo</span><span class="val">auto → code</span></div>
+    <div class="mrow"><span class="lbl">Permisos</span><span class="val">guía</span></div>
+  </div>
+</div>
+
+<div class="wire">
+  <div class="lab"><span><b>Redacte su siguiente intervención</b></span><span>/ comandos · @ archivos</span></div>
+  <div class="row">
+    <input type="text" placeholder="Escriba aquí… el agente responde al margen" aria-label="Mensaje">
+    <button class="send">Enviar ⏎</button>
+  </div>
+  <div class="keys"><span><kbd>⇧⏎</kbd> nueva línea</span><span><kbd>Esc</kbd> detener</span><span><kbd>⌘K</kbd> índice</span></div>
+</div>
+
+<footer>
+  <span class="sg"><span class="dot"></span> imprenta <b>en línea · :8765</b></span>
+  <span class="sg">gema <b>code</b></span>
+  <span class="sg">turno <b>3 de la sesión</b></span>
+  <span class="folio">Nexus Gazette — pág. 1 de 1</span>
+</footer>
+
+</body>
+</html>

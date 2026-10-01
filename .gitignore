@@ -66,3 +66,6 @@ data/event_store.db-*
 data/router_state.json
 data/skill_opt_state.json
 data/heldout.json
+
+# Uploads de usuario (runtime)
+data/uploads/

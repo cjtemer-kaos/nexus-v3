@@ -1,45 +1,57 @@
 @import "tailwindcss";
 
+/* ── DECK Dark tokens ─────────────────────────────────────────────
+   bg #15171B · cards #1E2127/#22262D · ink #EDEEF0 · dim #9BA1AA
+   line #2C3037 · accent #4C9DFF · fill #0B62D6 · ok #3DDC84 · err #FF6259 */
 @theme {
-  --color-border: hsl(240 6% 14%);
-  --color-input: hsl(240 6% 14%);
-  --color-ring: hsl(262 83% 58%);
-  --color-background: hsl(240 10% 3.9%);
-  --color-foreground: hsl(0 0% 98%);
-  --color-card: hsl(240 10% 3.9%);
-  --color-card-foreground: hsl(0 0% 98%);
-  --color-popover: hsl(240 10% 3.9%);
-  --color-popover-foreground: hsl(0 0% 98%);
-  --color-primary: hsl(262 83% 58%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(240 4% 16%);
-  --color-secondary-foreground: hsl(0 0% 98%);
-  --color-muted: hsl(240 4% 16%);
-  --color-muted-foreground: hsl(240 5% 64%);
-  --color-accent: hsl(240 4% 16%);
-  --color-accent-foreground: hsl(0 0% 98%);
-  --color-destructive: hsl(0 62% 30%);
-  --color-destructive-foreground: hsl(0 0% 98%);
+  --color-border: #2C3037;
+  --color-input: #2C3037;
+  --color-ring: #4C9DFF;
+  --color-background: #15171B;
+  --color-foreground: #EDEEF0;
+  --color-card: #1E2127;
+  --color-card-foreground: #EDEEF0;
+  --color-popover: #22262D;
+  --color-popover-foreground: #EDEEF0;
+  --color-primary: #0B62D6;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #22262D;
+  --color-secondary-foreground: #EDEEF0;
+  --color-muted: #22262D;
+  --color-muted-foreground: #9BA1AA;
+  --color-accent: #22262D;
+  --color-accent-foreground: #EDEEF0;
+  --color-destructive: #FF6259;
+  --color-destructive-foreground: #FFFFFF;
   --radius: 0.75rem;
-  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Geist Mono', 'JetBrains Mono', monospace;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-* { border-color: hsl(240 6% 14%); }
-html { scrollbar-width: thin; scrollbar-color: hsl(240 4% 16%) transparent; }
+* { border-color: #2C3037; }
+html { scrollbar-width: thin; scrollbar-color: #2C3037 transparent; }
 body {
-  background: hsl(240 10% 3.9%);
-  color: hsl(0 0% 98%);
+  background: #15171B;
+  color: #EDEEF0;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
+/* DECK focus — accent halo, never a color jump */
+.focus-deck:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(76, 157, 255, 0.18);
+}
+
 /* custom scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: hsl(240 4% 22%); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(240 4% 28%); }
+::-webkit-scrollbar-thumb { background: #2C3037; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #3A4049; }
 
 /* shimmer */
 @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }

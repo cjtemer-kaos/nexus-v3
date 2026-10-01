@@ -13,9 +13,8 @@ export async function getBackendUrl(): Promise<string> {
       if (url) return url;
     } catch {}
   }
-  // Web dev: if we're on :5174, backend is on :8765 — Vite proxies /api, so relative works
-  // But for absolute fetches, use current origin or fallback
-  if (window.location.port === "5174") return "http://127.0.0.1:8765";
+  // Web (dev :5174 con proxy de Vite, o servido por el backend): mismo origen.
+  // El proxy/target se configura con NEXUS_API_URL (vite.config.ts), sin hardcodear.
   return window.location.origin;
 }
 
@@ -30,14 +29,20 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   return fetch(url, init);
 }
 
-export async function chatApi(message: string, sessionId?: string, hint?: string, model?: string): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string }> {
+export async function chatApi(
+  message: string,
+  sessionId?: string,
+  hint?: string,
+  model?: string,
+  attachments?: { id: string; url?: string; name?: string; mime?: string; is_image?: boolean }[],
+): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string; images?: string[] }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const res = await apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, session_id: sessionId, hint, model }),
+      body: JSON.stringify({ message, session_id: sessionId, hint, model, attachments }),
       signal: ctrl.signal,
     });
     if (!res.ok) {
@@ -131,4 +136,85 @@ export async function createSessionApi(project = "default"): Promise<SessionInfo
   const res = await apiFetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project }) });
   if (!res.ok) throw new Error(`sessions POST ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+export type SessionMessage = { role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number }
+
+export async function sessionMessagesApi(sessionId: string, limit = 200): Promise<SessionMessage[]> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`);
+  if (!res.ok) throw new Error(`messages ${res.status}`);
+  const j = await res.json();
+  return (j.messages ?? []) as SessionMessage[];
+}
+
+/** FTS5 global (todas las sesiones). El path de la sesión solo fija la ruta; la búsqueda es global. */
+export async function searchApi(query: string): Promise<{ role: string; content: string }[]> {
+  const res = await apiFetch(`/api/sessions/global/search?q=${encodeURIComponent(query)}`);
+  if (!res.ok) throw new Error(`search ${res.status}`);
+  const j = await res.json();
+  return (j.results ?? []) as { role: string; content: string }[];
+}
+
+/* -- DECK: adjuntos, voz, keys, permisos ----------------------- */
+
+export type UploadResult = { id: string; url: string; name: string; mime: string; is_image: boolean; size: number }
+
+export async function uploadApi(file: File): Promise<UploadResult> {
+  const fd = new FormData()
+  fd.append("file", file, file.name)
+  const res = await apiFetch("/api/upload", { method: "POST", body: fd })
+  if (!res.ok) throw new Error(`upload ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  return res.json()
+}
+
+export type VoiceStatus = { tts_available: boolean; stt_available: boolean; stt_model?: string; tts_model?: string }
+
+export async function voiceStatusApi(): Promise<VoiceStatus> {
+  const res = await apiFetch("/api/voice/status")
+  if (!res.ok) throw new Error(`voice ${res.status}`)
+  return res.json()
+}
+
+export async function voiceSttApi(audio: Blob, language = "es"): Promise<{ text: string; duration?: number }> {
+  const res = await apiFetch(`/api/voice/stt?language=${encodeURIComponent(language)}`, {
+    method: "POST",
+    headers: { "Content-Type": audio.type || "audio/webm" },
+    body: audio,
+  })
+  if (!res.ok) throw new Error(`stt ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  return res.json()
+}
+
+export type KeyEntry = { env: string; label: string; providers: string[]; configured: boolean; source: string; masked: string }
+
+export async function keysApi(): Promise<{ keys: KeyEntry[]; env_file: string }> {
+  const res = await apiFetch("/api/keys")
+  if (!res.ok) throw new Error(`keys ${res.status}`)
+  return res.json()
+}
+
+export async function keyPutApi(env: string, value: string): Promise<{ ok: boolean; configured: boolean; masked: string }> {
+  const res = await apiFetch("/api/keys", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ env, value }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
+}
+
+export async function permissionApi(): Promise<{ permission: string; options: string[] }> {
+  const res = await apiFetch("/api/permission")
+  if (!res.ok) throw new Error(`permission ${res.status}`)
+  return res.json()
+}
+
+export async function permissionPutApi(permission: string): Promise<{ ok: boolean; permission: string }> {
+  const res = await apiFetch("/api/permission", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ permission }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
 }

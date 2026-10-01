@@ -232,7 +232,7 @@ class AgentLoop:
                 break
         return out
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None) -> LoopResult:
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -240,6 +240,7 @@ class AgentLoop:
             session_id: SessionLog session id
             hint: provider hint (simple|coding|reasoning|deep etc)
             system_prompt: optional system prompt override
+            images: optional vision attachments (data URIs) on the user message
         """
         t0 = time.monotonic()
         steps: list[LoopStep] = []
@@ -311,7 +312,12 @@ class AgentLoop:
         # duplicado identico en el historial, la tarea actual es lo ultimo que
         # debe ver el modelo (el just-appended se descarto en recent[:-1]).
         if not (messages and messages[-1].role == "user" and messages[-1].content == task):
-            messages.append(LLMMessage(role="user", content=task))
+            messages.append(LLMMessage(role="user", content=task,
+                                       images=tuple(images) if images else None))
+        elif images and not getattr(messages[-1], "images", None):
+            # La tarea ya estaba en el historial: igual hay que adjuntar la visión.
+            import dataclasses as _dc
+            messages[-1] = _dc.replace(messages[-1], images=tuple(images))
 
         # Compaction pre-check
         if self.compaction is not None:

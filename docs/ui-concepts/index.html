@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus v3 — 5 Conceptos de UI</title>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#14161A;--dim:#6C7178;--line:#E4E6EA;--bg:#F5F6F8}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Newsreader',Georgia,serif;background:var(--bg);color:var(--ink);padding:44px 34px 60px;font-size:16px}
+  h1{font-size:34px;font-weight:600;letter-spacing:-.02em;text-align:center}
+  h1 em{font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:.55em;color:var(--dim);display:block;margin-top:8px;letter-spacing:.14em;text-transform:uppercase}
+  .lead{max-width:62ch;margin:16px auto 40px;text-align:center;color:var(--dim);line-height:1.65}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;max-width:1500px;margin:0 auto}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;transition:.15s}
+  .card:hover{transform:translateY(-4px);box-shadow:0 10px 34px rgba(16,18,22,.10)}
+  .frame{height:210px;position:relative;overflow:hidden;border-bottom:1px solid var(--line);background:#fff}
+  .frame iframe{width:1440px;height:900px;border:0;transform:scale(.235);transform-origin:0 0;pointer-events:none}
+  .frame .scrim{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.06))}
+  .body{padding:18px 20px 20px;flex:1;display:flex;flex-direction:column}
+  .tag{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .body h2{font-size:23px;font-weight:600;margin:5px 0 8px;letter-spacing:-.01em}
+  .body p{font-size:14.5px;line-height:1.6;color:#41454B;flex:1}
+  .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:13px}
+  .chip{font-family:'IBM Plex Mono',monospace;font-size:10.5px;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--dim);background:#FAFAFB}
+  .open{display:inline-block;margin-top:15px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--ink);border:1.5px solid var(--ink);border-radius:8px;padding:9px 14px;text-align:center;transition:.12s}
+  .open:hover{background:var(--ink);color:#fff}
+  .note{max-width:78ch;margin:44px auto 0;border-top:1px solid var(--line);padding-top:22px;color:var(--dim);font-size:14.5px;line-height:1.7;text-align:center}
+</style>
+</head>
+<body>
+
+<h1>Nexus v3 — Cinco conceptos de interfaz<em>Shell de agente local · septiembre 2026</em></h1>
+<p class="lead">Cinco lenguajes de diseño genuinamente distintos —misma conversación de prueba, cinco filosofías de producto. Cada tarjeta incluye una vista previa en vivo y acceso al mock completo a tamaño real (1440×900).</p>
+
+<div class="grid">
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-1-suite.html" loading="lazy" title="SUITE"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 01 · Suiza</span>
+      <h2>SUITE — Swiss Modernism</h2>
+      <p>Sistema tipográfico en cajas, líneas de 1px, radio cero. La conversación se lee como una transcripción con etiquetas alineadas; estado siempre visible en una línea mono inferior. Precisión de instrumento, cero decoración.</p>
+      <div class="meta"><span class="chip">Archivo + IBM Plex Mono</span><span class="chip">light #FAFAF6</span><span class="chip">azul Klein #002FA7</span><span class="chip">densidad 5/8</span></div>
+      <a class="open" href="concept-1-suite.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-2-bridge.html" loading="lazy" title="BRIDGE"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 02 · Misión</span>
+      <h2>BRIDGE — HUD / Mission Control</h2>
+      <p>OLED puro, JetBrains Mono, acento ámbar. Tres columnas: timeline de sesiones, stream de log con tool calls como líneas <code>▸/✓/✗</code>, e instrumentación con gauges de contexto, latencia y costo. Telemetría primero.</p>
+      <div class="meta"><span class="chip">JetBrains Mono</span><span class="chip">dark #050505</span><span class="chip">ámbar #FFB000</span><span class="chip">3 columnas</span></div>
+      <a class="open" href="concept-2-bridge.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-3-deck.html" loading="lazy" title="DECK"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 03 · Bento</span>
+      <h2>DECK — Apple / Bento Airy</h2>
+      <p>Sin barra lateral: modos en tabs superiores y sesiones como fichas bento. Burbujas redondeadas sobre gris claro, widgets de vitals a la derecha, composer flotante con atajos. Cercano, luminoso, de consumer.</p>
+      <div class="meta"><span class="chip">Plus Jakarta Sans</span><span class="chip">light #F2F3F5</span><span class="chip">azul #0A84FF</span><span class="chip">sin sidebar</span></div>
+      <a class="open" href="concept-3-deck.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-3-deck-dark.html" loading="lazy" title="DECK Dark"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 03B · Bento oscuro</span>
+      <h2>DECK Dark — Apple / Bento OLED</h2>
+      <p>La misma arquitectura de DECK llevada a tema oscuro: superficie #15171B con cards flotantes #1E2127, acentos en azul legible #4C9DFF (≥4.5:1), burbujas en azul profundo con texto blanco, focus ring visible en el composer. Modo noche real, no un filtro invertido.</p>
+      <div class="meta"><span class="chip">Plus Jakarta Sans</span><span class="chip">dark #15171B</span><span class="chip">azul #4C9DFF</span><span class="chip">contraste AA</span></div>
+      <a class="open" href="concept-3-deck-dark.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-4-stamp.html" loading="lazy" title="STAMP"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 04 · Neubrutalismo</span>
+      <h2>STAMP — Neubrutalismo</h2>
+      <p>Bordes negros de 3px, sombras sólidas desplazadas, amarillo señal. Las herramientas se muestran como bloques con cinta diagonal de precaución; los estados son botones que se hunden al pulsar. Ruidoso, táctil, imposible de ignorar.</p>
+      <div class="meta"><span class="chip">Space Grotesk</span><span class="chip">paper #FFFDF3</span><span class="chip">amarillo #FFDE59</span><span class="chip">shadow sólida</span></div>
+      <a class="open" href="concept-4-stamp.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="frame"><iframe src="concept-5-gazette.html" loading="lazy" title="GAZETTE"></iframe><div class="scrim"></div></div>
+    <div class="body">
+      <span class="tag">Concepto 05 · Editorial</span>
+      <h2>GAZETTE — Papel / E-Ink</h2>
+      <p>Masthead con filete doble, conversación como entrevista tipográfica sin burbujas, versalitas para los parlantes. Las herramientas viven en la columna marginal con notas numeradas <code>[1][2]</code> enlazadas desde el texto. Leer, no escanear.</p>
+      <div class="meta"><span class="chip">Newsreader + Plex</span><span class="chip">paper #F6F1E7</span><span class="chip">rojo #9E2B25</span><span class="chip">marginalia</span></div>
+      <a class="open" href="concept-5-gazette.html" target="_blank">Abrir a tamaño real →</a>
+    </div>
+  </div>
+
+</div>
+
+<p class="note">Todos los conceptos comparten el mismo mock de sesión (401 tras refresh del token, dos tool calls, trajectory de 4 pasos) y el mismo set de estados (conectado, ejecutando, ok, streaming). Anti-slop: sin degradados morados, sin hero centrado, sin Inter, sin emoji — SVG en su lugar, contraste ≥4.5:1, foco visible.</p>
+
+</body>
+</html>

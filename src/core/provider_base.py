@@ -40,6 +40,10 @@ class LLMMessage:
     content: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str = ""
+    # Adjuntos visuales (DECK): data URIs "data:image/png;base64,..." en el
+    # mensaje de usuario. Ollama los recibe como base64 crudo; OpenAI-compat
+    # como content parts image_url. None = mensaje sin imagen.
+    images: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

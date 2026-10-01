@@ -6,11 +6,11 @@ const badgeVariants = cva('inline-flex items-center rounded-full px-2.5 py-0.5 t
   variants: {
     variant: {
       default: 'bg-primary text-primary-foreground',
-      secondary: 'bg-white/10 text-foreground',
-      outline: 'border border-white/15 text-muted-foreground',
-      success: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20',
+      secondary: 'bg-[#2C3037] text-foreground',
+      outline: 'border border-[#3A4049] text-muted-foreground',
+      success: 'bg-[#3DDC84]/15 text-[#3DDC84] border border-[#3DDC84]/20',
       warning: 'bg-amber-500/15 text-amber-400 border border-amber-500/20',
-      muted: 'bg-white/[0.06] text-muted-foreground',
+      muted: 'bg-[#22262D] text-muted-foreground',
     },
   },
   defaultVariants: { variant: 'default' },

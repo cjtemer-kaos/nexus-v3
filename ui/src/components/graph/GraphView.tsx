@@ -122,21 +122,21 @@ export function GraphView() {
   }
 
   return (
-    <div className={isFullscreen ? "fixed inset-0 z-50 flex flex-col bg-zinc-950" : "flex h-full flex-col"}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-3">
+    <div className={isFullscreen ? "fixed inset-0 z-50 flex flex-col bg-[#15171B]" : "flex h-full flex-col"}>
+      <div className="flex flex-wrap items-center gap-2 border-b border-[#2C3037] px-4 py-3">
         <form onSubmit={submitSearch} className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#9BA1AA]" />
           <input
             value={q} onChange={e => setQ(e.target.value)}
             placeholder="Buscar en el grafo… (título, contenido, tag)"
             aria-label="Buscar en el grafo de conocimiento"
-            className="w-full rounded-xl border border-white/10 bg-white/[0.04] pl-9 pr-3 py-2 text-sm placeholder:text-zinc-500 focus:outline-none focus:border-violet-500/50"
+            className="w-full rounded-xl border border-[#2C3037] bg-[#1E2127] pl-9 pr-3 py-2 text-sm placeholder:text-[#9BA1AA] focus:outline-none focus:border-[#4C9DFF]/50"
           />
         </form>
         <select
           value={category} aria-label="Filtrar por categoría"
           onChange={e => { setCategory(e.target.value); load({ category: e.target.value }) }}
-          className="rounded-xl border border-white/10 bg-zinc-900 px-2 py-2 text-xs text-zinc-300 focus:outline-none"
+          className="rounded-xl border border-[#2C3037] bg-[#1E2127] px-2 py-2 text-xs text-[#EDEEF0] focus:outline-none"
         >
           <option value="">todas las categorías</option>
           {(data?.stats.categories ?? []).map(c => <option key={c} value={c}>{c}</option>)}
@@ -145,7 +145,7 @@ export function GraphView() {
           <select
             value={community} aria-label="Filtrar por comunidad"
             onChange={e => { setCommunity(e.target.value); load({ community: e.target.value }) }}
-            className="rounded-xl border border-white/10 bg-zinc-900 px-2 py-2 text-xs text-zinc-300 focus:outline-none max-w-[160px]"
+            className="rounded-xl border border-[#2C3037] bg-[#1E2127] px-2 py-2 text-xs text-[#EDEEF0] focus:outline-none max-w-[160px]"
           >
             <option value="">todas las comunidades</option>
             {data.communities.slice(0, 30).map(c => <option key={c.id} value={String(c.id)}>{c.label} ({c.size})</option>)}
@@ -157,21 +157,21 @@ export function GraphView() {
         </div>
       </div>
 
-      <div ref={wrapRef} className="relative flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(139,92,246,0.10),_transparent_60%)]">
+      <div ref={wrapRef} className="relative flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.07),_transparent_60%)]">
         {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-zinc-400">
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-[#9BA1AA]">
             <RefreshCw className="h-5 w-5 animate-spin mr-2" /> Cargando grafo de conocimiento…
           </div>
         )}
         {error && !loading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-sm">
-            <div className="text-zinc-300 font-medium">No se pudo cargar el grafo</div>
-            <div className="text-xs text-zinc-500 max-w-md text-center break-all">{error}</div>
-            <button onClick={() => load()} className="mt-2 rounded-xl bg-violet-600 hover:bg-violet-500 px-3 py-1.5 text-xs font-medium text-white">Reintentar</button>
+            <div className="text-[#EDEEF0] font-medium">No se pudo cargar el grafo</div>
+            <div className="text-xs text-[#9BA1AA] max-w-md text-center break-all">{error}</div>
+            <button onClick={() => load()} className="mt-2 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] px-3 py-1.5 text-xs font-medium text-white">Reintentar</button>
           </div>
         )}
         {data && data.nodes.length === 0 && !loading && !error && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-sm text-zinc-500">
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-sm text-[#9BA1AA]">
             <Network className="h-6 w-6 text-zinc-600" />
             Sin nodos para este filtro — probá otra búsqueda o quitá filtros.
           </div>
@@ -215,29 +215,29 @@ export function GraphView() {
         )}
 
         {(selected !== null) && (
-          <div className="absolute bottom-4 left-4 z-10 rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur p-4 shadow-2xl max-w-sm max-h-[60%] overflow-auto">
+          <div className="absolute bottom-4 left-4 z-10 rounded-2xl border border-[#2C3037] bg-[#1E2127]/95 backdrop-blur p-4 shadow-2xl max-w-sm max-h-[60%] overflow-auto">
             <div className="flex items-start justify-between gap-2">
               <div className="text-sm font-semibold">Nodo #{selected}</div>
-              <button aria-label="Cerrar detalle" onClick={() => { setSelected(null); setDetail(null) }} className="rounded p-1 hover:bg-white/10 text-zinc-400"><X className="h-4 w-4" /></button>
+              <button aria-label="Cerrar detalle" onClick={() => { setSelected(null); setDetail(null) }} className="rounded p-1 hover:bg-[#2C3037] text-[#9BA1AA]"><X className="h-4 w-4" /></button>
             </div>
-            {detailLoading && <div className="mt-2 text-xs text-zinc-500">Cargando detalle…</div>}
+            {detailLoading && <div className="mt-2 text-xs text-[#9BA1AA]">Cargando detalle…</div>}
             {detail && (
               <div className="mt-2 space-y-2 text-xs">
-                <div className="font-medium text-zinc-100 leading-snug">{detail.title?.split('\n')[0]?.slice(0, 120)}</div>
+                <div className="font-medium text-[#EDEEF0] leading-snug">{detail.title?.split('\n')[0]?.slice(0, 120)}</div>
                 <div className="flex flex-wrap gap-1">
                   <Badge variant="outline">{detail.category}</Badge>
                   <Badge variant="outline">importancia {detail.importance}</Badge>
                   <Badge variant="outline">{detail.degree} conexiones</Badge>
                 </div>
-                {detail.content && <div className="text-zinc-400 leading-relaxed whitespace-pre-wrap max-h-40 overflow-auto">{detail.content.slice(0, 600)}{detail.content.length > 600 ? '…' : ''}</div>}
+                {detail.content && <div className="text-[#9BA1AA] leading-relaxed whitespace-pre-wrap max-h-40 overflow-auto">{detail.content.slice(0, 600)}{detail.content.length > 600 ? '…' : ''}</div>}
                 {detail.neighbors.length > 0 && (
                   <div>
-                    <div className="text-zinc-500 tracking-widest text-[11px] mb-1">VECINOS ({detail.neighbors.length})</div>
+                    <div className="text-[#9BA1AA] tracking-widest text-[11px] mb-1">VECINOS ({detail.neighbors.length})</div>
                     <div className="space-y-1">
                       {detail.neighbors.slice(0, 12).map(nb => (
-                        <button key={nb.edge_id} onClick={() => loadDetail(nb.other_id)} className="block w-full text-left rounded-lg bg-white/[0.04] hover:bg-white/[0.08] px-2 py-1.5">
-                          <span className="text-violet-300 font-mono text-[11px]">{nb.relation}</span>{' '}
-                          <span className="text-zinc-300">{nb.other_title.slice(0, 60)}</span>
+                        <button key={nb.edge_id} onClick={() => loadDetail(nb.other_id)} className="block w-full text-left rounded-lg bg-[#1E2127] hover:bg-[#22262D] px-2 py-1.5">
+                          <span className="text-[#8CC1FF] font-mono text-[11px]">{nb.relation}</span>{' '}
+                          <span className="text-[#EDEEF0]">{nb.other_title.slice(0, 60)}</span>
                         </button>
                       ))}
                     </div>
@@ -249,7 +249,7 @@ export function GraphView() {
         )}
 
         {data && (
-          <div className="pointer-events-none absolute right-4 top-4 rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur px-3 py-2 text-xs text-zinc-400">
+          <div className="pointer-events-none absolute right-4 top-4 rounded-xl border border-[#2C3037] bg-[#1E2127]/70 backdrop-blur px-3 py-2 text-xs text-[#9BA1AA]">
             {data.stats.visible_nodes ?? data.nodes.length} nodos · {data.stats.visible_edges ?? data.edges.length} aristas · de {data.stats.total_nodes} totales
           </div>
         )}

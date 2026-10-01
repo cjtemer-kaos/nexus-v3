@@ -11,7 +11,7 @@ export function Tabs({ defaultValue, value, onValueChange, children, className }
   return <TabsCtx.Provider value={{ value: v, setValue }}><div className={cn(className)}>{children}</div></TabsCtx.Provider>
 }
 export function TabsList({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('inline-flex items-center gap-1 rounded-xl bg-white/[0.06] p-1', className)} {...props} />
+  return <div className={cn('inline-flex items-center gap-1 rounded-xl bg-[#22262D] p-1', className)} {...props} />
 }
 export function TabsTrigger({ value, children, className }: { value: string; children: React.ReactNode; className?: string }) {
   const ctx = React.useContext(TabsCtx)!

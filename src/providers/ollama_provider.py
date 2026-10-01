@@ -29,9 +29,16 @@ class OllamaProvider(BaseProvider):
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         model = await self._resolve_model(model or "qwen2.5-coder:7b")
         # Ollama /api/chat expects messages with role/content; tools is OpenAI format but Ollama supports tools
+        def _wire(m):
+            d = {"role": m.role, "content": m.content or ""}
+            imgs = getattr(m, "images", None)
+            if imgs:
+                # Ollama pide base64 CRUDO — quitar el prefijo data:image/...;base64,
+                d["images"] = [im.split(",", 1)[-1] if isinstance(im, str) and im.startswith("data:") else im for im in imgs]
+            return d
         payload = {
             "model": model,
-            "messages": [{"role": m.role, "content": m.content or ""} for m in messages],
+            "messages": [_wire(m) for m in messages],
             "stream": False,
         }
         if tools:

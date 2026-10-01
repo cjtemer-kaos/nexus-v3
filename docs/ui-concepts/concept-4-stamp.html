@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepto 4 — STAMP (Neubrutalismo)</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FFFDF3; --ink:#0B0B0B; --yellow:#FFDE59; --red:#FF5733; --blue:#4D7CFE;
+    --mint:#7CE7C3; --grey:#EFEDE2;
+    --sans:'Space Grotesk',sans-serif; --mono:'IBM Plex Mono',monospace;
+    --bd:3px solid var(--ink);
+    --sh:6px 6px 0 var(--ink);
+    --sh-s:4px 4px 0 var(--ink);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--sans);background:var(--paper);color:var(--ink);font-size:15px;display:grid;grid-template-rows:64px 1fr 42px;grid-template-columns:264px 1fr;height:100vh;overflow:hidden}
+  button{font-family:inherit;cursor:pointer}
+  a{color:inherit}
+
+  /* ─── TOP BAR ─── */
+  header{grid-column:1/3;background:var(--yellow);border-bottom:var(--bd);display:flex;align-items:center;padding:0 20px;gap:26px}
+  .brand{font-weight:700;font-size:21px;letter-spacing:-.04em;display:flex;align-items:center;gap:11px}
+  .brand .mark{background:var(--ink);color:var(--yellow);padding:3px 9px;font-family:var(--mono);font-size:15px;font-weight:700;transform:rotate(-2deg)}
+  .brand small{font-family:var(--mono);font-size:10px;background:var(--red);color:#fff;padding:2px 6px;letter-spacing:.1em;transform:rotate(2deg)}
+  nav{display:flex;gap:0;height:100%;margin-left:8px}
+  nav a{display:flex;align-items:center;padding:0 17px;text-decoration:none;font-weight:700;font-size:13.5px;letter-spacing:.02em;text-transform:uppercase;border-left:3px solid transparent;border-right:3px solid transparent}
+  nav a:hover{background:rgba(0,0,0,.07)}
+  nav a.on{background:var(--ink);color:var(--yellow);border-color:var(--ink)}
+  .top-r{margin-left:auto;display:flex;gap:11px;align-items:center}
+  .hbtn{border:var(--bd);background:var(--paper);font-weight:700;font-size:12.5px;text-transform:uppercase;padding:8px 13px;box-shadow:var(--sh-s);transition:.1s}
+  .hbtn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+  .hbtn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .hbtn.dark{background:var(--ink);color:var(--paper)}
+  .hbtn .kk{font-family:var(--mono);font-size:10px;opacity:.65;margin-left:6px}
+
+  /* ─── SIDEBAR ─── */
+  aside{border-right:var(--bd);display:flex;flex-direction:column;background:var(--grey);overflow:hidden}
+  .side-t{padding:15px 14px 11px;display:flex;justify-content:space-between;align-items:center}
+  .side-t h3{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+  .newbtn{border:var(--bd);background:var(--blue);color:#fff;font-weight:700;font-size:12.5px;padding:7px 12px;box-shadow:var(--sh-s);text-transform:uppercase;transition:.1s}
+  .newbtn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+  .newbtn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .sess{list-style:none;flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 12px 12px;display:flex;flex-direction:column;gap:11px}
+  .sess li button{width:100%;text-align:left;border:var(--bd);background:var(--paper);padding:11px 12px;box-shadow:var(--sh-s);transition:.1s;display:block}
+  .sess li button:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+  .sess li button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .sess .nm{font-weight:700;font-size:14px;letter-spacing:-.01em}
+  .sess .mt{font-family:var(--mono);font-size:10.5px;color:#555;margin-top:4px;display:flex;justify-content:space-between}
+  .sess li.on button{background:var(--yellow);box-shadow:var(--sh)}
+  .sess li.on .nm::before{content:"▶ ";font-size:10px}
+  .side-f{border-top:var(--bd);padding:11px 14px;font-family:var(--mono);font-size:11px;font-weight:600;display:flex;justify-content:space-between;background:var(--paper)}
+  .side-f a{text-decoration:none}
+  .side-f a:hover{background:var(--yellow)}
+
+  /* ─── MAIN ─── */
+  main{display:flex;flex-direction:column;overflow:hidden}
+  .scroll{flex:1;overflow-y:auto;padding:26px 34px 8px}
+  .banner{border:var(--bd);background:var(--mint);padding:11px 15px;font-weight:600;font-size:13.5px;box-shadow:var(--sh-s);margin-bottom:24px;display:flex;gap:10px;align-items:center}
+  .banner .x{margin-left:auto;font-family:var(--mono);font-weight:700}
+
+  .msg{margin-bottom:24px;max-width:760px}
+  .msg .lbl{display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;border:2px solid var(--ink);margin-bottom:7px;background:var(--paper)}
+  .msg.u .lbl{background:var(--ink);color:var(--yellow)}
+  .msg.u .body{background:var(--yellow);border:var(--bd);box-shadow:var(--sh);padding:14px 17px;font-weight:500;font-size:15.5px}
+  .msg.a .body{background:#fff;border:var(--bd);box-shadow:var(--sh);padding:16px 18px;line-height:1.62}
+  .msg.a .meta{font-family:var(--mono);font-size:10.5px;font-weight:600;color:#666;margin-top:8px;display:flex;gap:14px}
+  code{font-family:var(--mono);font-size:.87em;background:var(--ink);color:var(--yellow);padding:2px 7px;font-weight:600}
+
+  /* tool block = warning tape */
+  .tool{border:var(--bd);margin:14px 0;background:var(--paper);box-shadow:var(--sh-s)}
+  .tape{background:repeating-linear-gradient(-45deg,var(--ink) 0 10px,var(--yellow) 10px 20px);height:9px;border-bottom:var(--bd)}
+  .tool .row1{display:flex;align-items:center;gap:11px;padding:11px 13px 9px}
+  .tool .tn{font-family:var(--mono);font-weight:700;font-size:13.5px}
+  .tool .tn span{font-weight:400;color:#555}
+  .st{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:700;border:2px solid var(--ink);padding:3px 9px;letter-spacing:.08em;text-transform:uppercase}
+  .st.ok{background:var(--mint)}
+  .st.run{background:var(--blue);color:#fff;animation:tilt .5s steps(2) infinite}
+  @keyframes tilt{50%{transform:translateY(-2px)}}
+  .tool .row2{display:flex;justify-content:space-between;padding:9px 13px;border-top:2px dashed #C9C6B8;font-family:var(--mono);font-size:11.5px;color:#555}
+  .tool .row2 b{color:var(--ink)}
+  .expand{border:2px solid var(--ink);background:var(--paper);font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 9px;text-transform:uppercase}
+  .expand:hover{background:var(--yellow)}
+
+  .traj{display:inline-flex;align-items:center;gap:9px;border:var(--bd);background:var(--red);color:#fff;font-family:var(--mono);font-weight:700;font-size:12px;padding:8px 14px;box-shadow:var(--sh-s);cursor:pointer;text-transform:uppercase;letter-spacing:.04em;transition:.1s}
+  .traj:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+  .traj:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .cursor{display:inline-block;width:9px;height:17px;background:var(--ink);vertical-align:-3px;animation:blink .8s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ─── COMPOSER ─── */
+  .composer{border-top:var(--bd);background:var(--grey);padding:15px 34px 13px}
+  .field{display:flex;border:var(--bd);background:#fff;box-shadow:var(--sh)}
+  .field .pfx{background:var(--ink);color:var(--yellow);font-family:var(--mono);font-weight:700;padding:0 15px;display:grid;place-items:center;font-size:16px;border-right:var(--bd)}
+  .field input{flex:1;border:0;outline:0;font-family:var(--sans);font-size:15.5px;font-weight:500;padding:14px 15px;background:transparent}
+  .field input::placeholder{color:#8A8778}
+  .send{border:0;border-left:var(--bd);background:var(--red);color:#fff;font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:13.5px;padding:0 24px;transition:.1s}
+  .send:hover{background:var(--ink);color:var(--yellow)}
+  .send:active{transform:translate(2px,2px)}
+  .hints{display:flex;gap:17px;margin-top:9px;font-family:var(--mono);font-size:11px;font-weight:600}
+  .hints span{background:var(--paper);border:2px solid var(--ink);padding:2px 8px}
+  .hints kbd{font-weight:700}
+
+  /* ─── STATUS ─── */
+  footer{grid-column:1/3;border-top:var(--bd);background:var(--ink);color:var(--paper);display:flex;align-items:center;font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.03em}
+  footer .sg{padding:0 16px;height:100%;display:flex;align-items:center;gap:8px;border-right:2px solid #333}
+  footer .led{width:9px;height:9px;background:var(--mint);border:2px solid var(--paper);animation:blink 1.6s steps(2) infinite}
+  footer b{color:var(--yellow)}
+  footer .rt{margin-left:auto;border-right:0;border-left:2px solid #333;color:#8f8f8f}
+  footer .rt b{color:var(--mint)}
+  ::selection{background:var(--red);color:#fff}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--ink);border:2px solid var(--grey)}
+  ::-webkit-scrollbar-track{background:var(--grey)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="mark">N3</span> NEXUS <small>ALFA</small></div>
+  <nav>
+    <a href="#" class="on">Chat</a><a href="#">Grafo</a><a href="#">Editor</a><a href="#">Terminal</a>
+  </nav>
+  <div class="top-r">
+    <button class="hbtn">Auto ▾</button>
+    <button class="hbtn">Buscar <span class="kk">⌘K</span></button>
+    <button class="hbtn dark">Ajustes</button>
+  </div>
+</header>
+
+<aside>
+  <div class="side-t"><h3>Sesiones / 04</h3><button class="newbtn">+ Nueva</button></div>
+  <ul class="sess">
+    <li class="on"><button>
+      <div class="nm">401 tras refresh del token</div>
+      <div class="mt"><span>gema code</span><span>18:42</span></div>
+    </button></li>
+    <li><button>
+      <div class="nm">5 conceptos de UI</div>
+      <div class="mt"><span>gema design</span><span>17:55</span></div>
+    </button></li>
+    <li><button>
+      <div class="nm">Benchmark TUI opencode/codex</div>
+      <div class="mt"><span>scholar</span><span>16:10</span></div>
+    </button></li>
+    <li><button>
+      <div class="nm">Migración FTS5 → WAL</div>
+      <div class="mt"><span>devops · ok</span><span>ayer</span></div>
+    </button></li>
+  </ul>
+  <div class="side-f"><a href="#">⚙ Ajustes</a><span>v3.0.0</span></div>
+</aside>
+
+<main>
+  <div class="scroll">
+    <div class="banner">● CONECTADO AL BACKEND LOCAL :8765 — sesiones, grafo y cerebro operativos <span class="x">[ OCULTAR ]</span></div>
+
+    <div class="msg u">
+      <span class="lbl">Tú</span>
+      <div class="body">El login devuelve 401 después de refrescar el token. Revísalo y propón un arreglo.</div>
+    </div>
+
+    <div class="msg a">
+      <span class="lbl">Nexus · gema code</span>
+      <div class="body">
+        Voy a revisar el flujo de refresh: leo la sesión y corro los tests de auth para reproducirlo.
+
+        <div class="tool">
+          <div class="tape"></div>
+          <div class="row1">
+            <span class="tn">read_file <span>· src/auth/session.py</span></span>
+            <span class="st ok">✓ OK · 38ms</span>
+          </div>
+          <div class="row2"><span>240 líneas leídas · <b>sha 4f29…</b></span><button class="expand">Ver salida</button></div>
+        </div>
+
+        <div class="tool">
+          <div class="tape"></div>
+          <div class="row1">
+            <span class="tn">run_command <span>· pytest tests/auth -x</span></span>
+            <span class="st run">◉ Ejecutando</span>
+          </div>
+          <div class="row2"><span>2 fallidos · <b>test_refresh_keeps_session</b></span><button class="expand">Ver vivo</button></div>
+        </div>
+
+        Causa encontrada: <code>refresh_token()</code> invalida la sesión antes de emitir el nuevo JWT. Propongo intercambiar el orden + test de regresión<span class="cursor"></span>
+      </div>
+      <div class="meta"><span>18:42</span><span>4 pasos · 4s</span><span>$0.004</span></div>
+    </div>
+
+    <button class="traj">▶ Trajectory — 4 pasos</button>
+  </div>
+
+  <div class="composer">
+    <div class="field">
+      <div class="pfx">&gt;_</div>
+      <input type="text" placeholder="Escribe tu mensaje — / comandos · @ archivos" aria-label="Mensaje">
+      <button class="send">Enviar ⏎</button>
+    </div>
+    <div class="hints"><span><kbd>⇧⏎</kbd> salto</span><span><kbd>Esc</kbd> detener</span><span><kbd>⌘K</kbd> paleta</span></div>
+  </div>
+</main>
+
+<footer>
+  <div class="sg"><span class="led"></span> <b>EN LÍNEA</b></div>
+  <div class="sg">MODELO <b>AUTO → CODE</b></div>
+  <div class="sg">PERMISOS <b>GUÍA</b></div>
+  <div class="sg">CONTEXTO <b>12%</b></div>
+  <div class="sg rt">COSTO <b>$0.014</b> · TURNO <b>03</b></div>
+</footer>
+
+</body>
+</html>

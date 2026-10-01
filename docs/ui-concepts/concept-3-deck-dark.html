@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepto 3 — DECK Dark (Bento / Apple-dark)</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#15171B; --card:#1E2127; --card2:#22262D; --ink:#EDEEF0; --dim:#9BA1AA; --line:#2C3037;
+    --blue:#0B62D6; --blue-hi:#4C9DFF; --blue-soft:#17293F; --green:#3DDC84; --red:#FF6259;
+    --sans:'Plus Jakarta Sans',system-ui,sans-serif; --mono:'JetBrains Mono',monospace;
+    --sh:0 1px 2px rgba(0,0,0,.40),0 4px 14px rgba(0,0,0,.34);
+    --sh-lg:0 2px 6px rgba(0,0,0,.45),0 12px 32px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:15px;display:grid;grid-template-rows:auto auto 1fr auto;grid-template-columns:1fr 300px;height:100vh;overflow:hidden}
+  button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+
+  /* ─── HEADER + TABS ─── */
+  header{grid-column:1/3;background:rgba(30,33,39,.86);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line);padding:0 22px}
+  .hrow{display:flex;align-items:center;gap:14px;height:56px}
+  .logo{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.02em;font-size:16.5px}
+  .logo .sq{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#0B62D6,#4C9DFF);display:grid;place-items:center;color:#fff;font-size:13px;font-weight:800}
+  .modes{display:flex;gap:2px;background:#23262C;border-radius:10px;padding:3px}
+  .modes button{font-size:13px;font-weight:600;color:var(--dim);padding:6px 14px;border-radius:8px;transition:.15s}
+  .modes button:hover{color:var(--ink)}
+  .modes button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.5)}
+  .h-right{margin-left:auto;display:flex;align-items:center;gap:9px}
+  .pill{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:600;color:var(--ink);box-shadow:var(--sh);transition:.15s}
+  .pill:hover{transform:translateY(-1px);border-color:#3A3F48}
+  .pill .green{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px rgba(61,220,132,.7)}
+  .pill kbd{font-family:var(--mono);font-size:10px;color:var(--dim);background:#2A2E35;border-radius:4px;padding:1px 5px}
+  .avatar{width:32px;height:32px;border-radius:50%;background:#2A2E35;border:1px solid var(--line);color:var(--ink);display:grid;place-items:center;font-size:12px;font-weight:700}
+
+  /* ─── SESSION STRIP ─── */
+  .strip{grid-column:1;display:flex;gap:10px;padding:14px 22px 4px;overflow-x:auto;overflow-y:hidden}
+  .sess{flex:0 0 auto;min-width:200px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 14px;box-shadow:var(--sh);text-align:left;transition:.15s}
+  .sess:hover{transform:translateY(-2px);box-shadow:var(--sh-lg);border-color:#3A3F48}
+  .sess .st{display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim);font-weight:600}
+  .sess .st .now{color:var(--blue-hi)}
+  .sess .nm{font-size:13.5px;font-weight:700;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+  .sess .sb{font-size:11.5px;color:var(--dim);margin-top:2px}
+  .sess.on{border-color:var(--blue-hi);box-shadow:0 0 0 3px rgba(76,157,255,.16),var(--sh)}
+  .sess.new{min-width:46px;width:46px;display:grid;place-items:center;color:var(--blue-hi);font-size:20px;font-weight:600;padding:0}
+
+  /* ─── CHAT COLUMN ─── */
+  .chat{overflow-y:auto;padding:26px 34px 20px;display:flex;flex-direction:column}
+  .day{align-self:center;font-size:11px;font-weight:600;color:var(--dim);background:#262930;border-radius:999px;padding:5px 13px;margin-bottom:18px}
+  .m{max-width:min(680px,86%);margin-bottom:16px}
+  .m .bubble{padding:13px 17px;border-radius:20px;font-size:15px;line-height:1.6}
+  .m.user{align-self:flex-end}
+  .m.user .bubble{background:var(--blue);color:#fff;border-bottom-right-radius:6px}
+  .m.ai{align-self:flex-start}
+  .m.ai .bubble{background:var(--card);border:1px solid var(--line);border-bottom-left-radius:6px;box-shadow:var(--sh)}
+  .m .sender{font-size:11.5px;font-weight:700;color:var(--dim);margin:0 0 6px 4px}
+  .m .ts{font-size:10.5px;color:var(--dim);margin-top:5px;padding:0 4px}
+  .m.user .ts{text-align:right}
+  code{font-family:var(--mono);font-size:.86em;background:#262930;border-radius:5px;padding:1.5px 6px;color:#79B8FF}
+  .m.user .bubble code{background:rgba(255,255,255,.22);color:#fff}
+
+  /* tool card */
+  .tool{margin-top:11px;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#191C21}
+  .tool-h{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--card2);border-bottom:1px solid var(--line)}
+  .tool-h .ic{width:24px;height:24px;border-radius:7px;background:var(--blue-soft);display:grid;place-items:center;flex:0 0 auto}
+  .tool-h .ic svg{width:13px;height:13px;stroke:var(--blue-hi)}
+  .tool-h .nm{font-family:var(--mono);font-size:12px;font-weight:600}
+  .tool-h .nm span{color:var(--dim);font-weight:400}
+  .tool-h .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.06em;display:flex;align-items:center;gap:6px}
+  .badge.ok{color:var(--green)} .badge.run{color:var(--blue-hi)}
+  .badge .sp{width:11px;height:11px;border:2px solid var(--blue-hi);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .tool-b{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;font-size:11.5px;color:var(--dim)}
+  .tool-b .ln{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tool-b .ln b{color:var(--ink);font-weight:600}
+  .link{font-size:11.5px;font-weight:700;color:var(--blue-hi)}
+  .link:hover{text-decoration:underline}
+
+  /* trajectory chip */
+  .traj{align-self:flex-start;margin:-6px 0 16px 4px;display:flex;gap:9px;align-items:center;font-size:12px;font-weight:600;color:var(--dim);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;box-shadow:var(--sh);cursor:pointer;transition:.15s}
+  .traj:hover{color:var(--ink);transform:translateY(-1px);border-color:#3A3F48}
+  .traj .n{background:#262930;border-radius:999px;padding:1px 7px;font-size:10.5px}
+  .traj svg{width:11px;height:11px;stroke:currentColor;transition:.2s}
+
+  /* ─── RIGHT BENTO ─── */
+  .side{grid-column:2;grid-row:2/5;border-left:1px solid var(--line);padding:14px 16px 16px;overflow-y:auto;display:flex;flex-direction:column;gap:11px;background:var(--bg)}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 15px;box-shadow:var(--sh)}
+  .tile h4{font-size:10.5px;font-weight:700;letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+  .tile .big{font-size:26px;font-weight:800;letter-spacing:-.03em;margin-top:6px}
+  .tile .big small{font-size:12px;color:var(--dim);font-weight:600}
+  .tile .sub{font-size:11.5px;color:var(--dim);margin-top:3px}
+  .mbar{height:6px;border-radius:99px;background:#2A2E35;margin-top:9px;overflow:hidden}
+  .mbar i{display:block;height:100%;border-radius:99px;background:var(--blue-hi)}
+  .mbar i.g{background:var(--green)}
+  .models{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+  .model{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:600}
+  .model .d{width:8px;height:8px;border-radius:50%;background:#3A3F47}
+  .model.on .d{background:var(--green);box-shadow:0 0 0 3px rgba(61,220,132,.15)}
+  .model .t{color:var(--dim);font-weight:500;margin-left:auto;font-size:11px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  .two .tile .big{font-size:19px}
+
+  /* ─── COMPOSER ─── */
+  .composer{grid-column:1;padding:10px 34px 18px}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:var(--sh-lg);display:flex;align-items:center;gap:10px;padding:9px 10px 9px 16px}
+  .box:focus-within{border-color:var(--blue-hi);box-shadow:0 0 0 3px rgba(76,157,255,.18),var(--sh-lg)}
+  .box input{flex:1;border:0;outline:0;font-family:var(--sans);font-size:15px;background:transparent;color:var(--ink);padding:9px 0}
+  .box input::placeholder{color:#7A8087}
+  .ico{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--dim);transition:.15s}
+  .ico:hover{background:#262930;color:var(--ink)}
+  .ico svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2}
+  .go{width:40px;height:40px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;box-shadow:0 3px 10px rgba(11,98,214,.45);transition:.15s}
+  .go:hover{transform:scale(1.06);background:#0A56BC}
+  .go svg{width:17px;height:17px;stroke:#fff;fill:none;stroke-width:2.2}
+  .foot{display:flex;justify-content:center;gap:18px;margin-top:8px;font-size:11px;color:var(--dim);font-weight:600}
+  .foot span{display:flex;gap:5px;align-items:center}
+  .foot kbd{font-family:var(--mono);font-size:9.5px;background:#262930;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-weight:600}
+  ::selection{background:var(--blue-hi);color:#0B1016}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#363B44;border-radius:99px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <div class="logo"><span class="sq">N</span> Nexus</div>
+    <div class="modes">
+      <button class="on">Chat</button><button>Grafo</button><button>Editor</button><button>Terminal</button>
+    </div>
+    <div class="h-right">
+      <button class="pill"><span class="green"></span> Auto · gema code ▾</button>
+      <button class="pill">Buscar <kbd>⌘K</kbd></button>
+      <div class="avatar">NX</div>
+    </div>
+  </div>
+</header>
+
+<div class="strip">
+  <button class="sess on">
+    <div class="st"><span class="now">● EN CURSO</span><span>18:42</span></div>
+    <div class="nm">401 tras refresh del token</div><div class="sb">3 turnos · $0.014</div>
+  </button>
+  <button class="sess">
+    <div class="st"><span>COMPLETADA</span><span>17:55</span></div>
+    <div class="nm">5 conceptos de UI</div><div class="sb">12 turnos · $0.09</div>
+  </button>
+  <button class="sess">
+    <div class="st"><span>COMPLETADA</span><span>16:10</span></div>
+    <div class="nm">Benchmark TUI</div><div class="sb">8 turnos · $0.05</div>
+  </button>
+  <button class="sess new" title="Nueva sesión">+</button>
+</div>
+
+<div class="chat">
+  <div class="day">Hoy</div>
+
+  <div class="m user">
+    <div class="bubble">El login devuelve 401 después de refrescar el token. Revísalo y propón un arreglo.</div>
+    <div class="ts">18:42</div>
+  </div>
+
+  <div class="m ai">
+    <div class="sender">Nexus · gema code</div>
+    <div class="bubble">
+      Voy a revisar el flujo de refresh: leo la sesión y corro los tests de auth para reproducirlo.
+
+      <div class="tool">
+        <div class="tool-h">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h7" stroke-width="2.4" stroke-linecap="round"/></svg></span>
+          <span class="nm">read_file <span>· session.py</span></span>
+          <span class="badge ok">✓ OK · 38 ms</span>
+        </div>
+        <div class="tool-b"><span class="ln"><b>src/auth/session.py</b> — 240 líneas</span><button class="link">Ver salida</button></div>
+      </div>
+
+      <div class="tool">
+        <div class="tool-h">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none"><path d="M5 7l5 5-5 5M12 17h7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="nm">run_command <span>· pytest tests/auth</span></span>
+          <span class="badge run"><span class="sp"></span> EJECUTANDO</span>
+        </div>
+        <div class="tool-b"><span class="ln">2 tests fallidos · <b>test_refresh_keeps_session</b></span><button class="link">Ver vivo</button></div>
+      </div>
+
+      Encontré la causa: <code>refresh_token()</code> invalida la sesión antes de emitir el nuevo JWT. Propongo intercambiar el orden y añadir un test de regresión.
+    </div>
+    <div class="ts">18:42 · 4 s</div>
+  </div>
+
+  <div class="traj">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke-width="2.4" stroke-linecap="round"/></svg>
+    Pensó 4 s · usó 2 herramientas <span class="n">4 pasos</span>
+  </div>
+</div>
+
+<div class="side">
+  <div class="tile">
+    <h4>Contexto</h4>
+    <div class="big">12<small>%</small></div>
+    <div class="sub">15.4k de 128k tokens</div>
+    <div class="mbar"><i style="width:12%"></i></div>
+  </div>
+  <div class="two">
+    <div class="tile"><h4>Latencia</h4><div class="big">312<small>ms</small></div><div class="sub">TTFT · óptimo</div></div>
+    <div class="tile"><h4>Costo</h4><div class="big">$0.014</div><div class="sub">sesión</div></div>
+  </div>
+  <div class="tile">
+    <h4>Gemas activas</h4>
+    <div class="models">
+      <div class="model on"><span class="d"></span> code <span class="t">esta sesión</span></div>
+      <div class="model"><span class="d"></span> scholar <span class="t">inactiva</span></div>
+      <div class="model"><span class="d"></span> design <span class="t">inactiva</span></div>
+    </div>
+  </div>
+  <div class="tile">
+    <h4>Estado</h4>
+    <div class="models">
+      <div class="model on"><span class="d"></span> Backend local <span class="t">:8765</span></div>
+      <div class="model on"><span class="d"></span> Cerebro <span class="t">394 items</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="composer">
+  <div class="box">
+    <button class="ico" title="Adjuntar"><svg viewBox="0 0 24 24"><path d="M21 12.5l-8.5 8.5a6 6 0 01-8.5-8.5l9-9a4 4 0 015.7 5.7l-9 9a2 2 0 01-2.8-2.8l8.3-8.3" stroke-linecap="round"/></svg></button>
+    <input type="text" placeholder="Pregunta a Nexus — / comandos, @ archivos" aria-label="Mensaje">
+    <button class="ico" title="Voz"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 013 3v6a3 3 0 01-6 0V6a3 3 0 013-3zM5 11a7 7 0 0014 0M12 18v3" stroke-linecap="round"/></svg></button>
+    <button class="go" title="Enviar"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+  <div class="foot">
+    <span><kbd>↵</kbd> enviar</span><span><kbd>⇧↵</kbd> salto</span><span><kbd>Esc</kbd> detener</span><span><kbd>⌘K</kbd> paleta</span>
+  </div>
+</div>
+
+</body>
+</html>

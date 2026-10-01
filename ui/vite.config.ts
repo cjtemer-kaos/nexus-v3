@@ -13,8 +13,8 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
-      '/api': 'http://127.0.0.1:8765',
-      '/v1': 'http://localhost:8080',
+      // Portable: el destino del backend se define por entorno (sin hardcode).
+      '/api': process.env.NEXUS_API_URL || 'http://127.0.0.1:8765',
     },
   },
 })

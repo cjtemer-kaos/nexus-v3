@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepto 2 — BRIDGE (HUD / Mission Control)</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#050505; --panel:#0A0A0B; --panel2:#0E0F10; --line:#1E2023; --line2:#2A2D31;
+    --ink:#D8D6CF; --dim:#7B7E82; --faint:#4A4D51;
+    --amber:#FFB000; --green:#3DFF8F; --red:#FF5252; --cyan:#57C7FF;
+    --mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--mono);background:var(--bg);color:var(--ink);font-size:13px;display:grid;grid-template-rows:34px 1fr 46px 30px;grid-template-columns:240px 1fr 264px;height:100vh;overflow:hidden}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:99;background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(255,255,255,.012) 2px 4px)}
+  button{font-family:inherit;cursor:pointer}
+
+  /* ─── TICKER ─── */
+  .ticker{grid-column:1/4;display:flex;align-items:center;gap:0;border-bottom:1px solid var(--line2);background:#08090A;font-size:10.5px;letter-spacing:.08em;color:var(--dim);overflow:hidden}
+  .ticker .zone{padding:0 14px;height:100%;display:flex;align-items:center;gap:8px;border-right:1px solid var(--line)}
+  .ticker .id{color:var(--amber);font-weight:700}
+  .ticker .live{color:var(--green)}
+  .ticker .marq{flex:1;overflow:hidden;white-space:nowrap;color:var(--faint);padding-left:14px}
+  .ticker .marq span{display:inline-block;animation:marq 28s linear infinite}
+  @keyframes marq{from{transform:translateX(0)}to{transform:translateX(-60%)}}
+  .ticker .rt{margin-left:auto;border-left:1px solid var(--line);border-right:0;color:var(--ink)}
+
+  /* ─── LEFT: TIMELINE ─── */
+  .left{border-right:1px solid var(--line2);display:flex;flex-direction:column;background:var(--panel);overflow:hidden}
+  .lhead{padding:12px 14px 8px;font-size:10px;letter-spacing:.18em;color:var(--faint);display:flex;justify-content:space-between}
+  .lhead button{background:var(--amber);color:#000;border:0;font-size:10px;font-weight:700;letter-spacing:.1em;padding:5px 9px}
+  .lhead button:hover{filter:brightness(1.15)}
+  .timeline{list-style:none;flex:1;overflow-y:auto;padding:4px 0}
+  .timeline li{position:relative;padding:10px 14px 10px 34px;border-left:2px solid transparent}
+  .timeline li::before{content:"";position:absolute;left:8px;top:16px;width:7px;height:7px;border:1px solid var(--faint);background:var(--panel)}
+  .timeline li+li{border-top:1px solid var(--line)}
+  .timeline .t{font-size:9.5px;color:var(--faint);letter-spacing:.1em}
+  .timeline .n{font-size:12px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .timeline li.on{border-left-color:var(--amber);background:var(--panel2)}
+  .timeline li.on::before{background:var(--amber);border-color:var(--amber);box-shadow:0 0 8px rgba(255,176,0,.6)}
+  .timeline li.on .n{color:var(--ink);font-weight:500}
+  .timeline li.on .t{color:var(--amber)}
+  .lfoot{border-top:1px solid var(--line2);padding:9px 14px;font-size:10px;color:var(--faint);display:flex;justify-content:space-between}
+  .lfoot span{color:var(--green)}
+
+  /* ─── CENTER: LOG STREAM ─── */
+  .center{display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+  .stream{flex:1;overflow-y:auto;padding:20px 26px;font-size:13px;line-height:1.65}
+  .turn{display:grid;grid-template-columns:74px 1fr;gap:14px;padding:12px 0}
+  .turn+.turn{border-top:1px dashed var(--line)}
+  .ts{font-size:10px;color:var(--faint);padding-top:4px}
+  .role{font-size:10px;letter-spacing:.16em;font-weight:700;margin-bottom:5px}
+  .role.usr{color:var(--cyan)} .role.ai{color:var(--amber)}
+  .msg{color:var(--ink);max-width:82ch}
+  .msg .cursor{display:inline-block;width:7px;height:14px;background:var(--amber);vertical-align:-2px;animation:blink .8s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .cmd{margin:8px 0;border:1px solid var(--line2);background:#08090A}
+  .cmd .bar{display:flex;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);background:var(--panel2)}
+  .cmd .glyph{color:var(--amber);font-weight:700}
+  .cmd .st{margin-left:auto;font-size:9.5px;letter-spacing:.12em;font-weight:700}
+  .st.run{color:var(--cyan)} .st.ok{color:var(--green)} .st.err{color:var(--red)}
+  .cmd .out{padding:8px 10px;font-size:11.5px;color:var(--dim);white-space:pre-wrap}
+  .cmd .out b{color:var(--ink);font-weight:500}
+  details.trace{margin-top:10px}
+  details.trace summary{font-size:10.5px;color:var(--faint);letter-spacing:.1em;cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center}
+  details.trace summary::-webkit-details-marker{display:none}
+  details.trace summary::before{content:"[+]";color:var(--amber)}
+  details.trace[open] summary::before{content:"[-]"}
+  details.trace summary:hover{color:var(--amber)}
+  details.trace .steps{margin-top:8px;border-left:1px solid var(--line2);padding-left:14px;font-size:11px;color:var(--dim)}
+  details.trace .steps div{padding:3px 0}
+  details.trace .steps b{color:var(--amber);font-weight:500}
+
+  /* ─── INPUT ─── */
+  .prompt{border-top:1px solid var(--line2);padding:12px 26px;background:var(--panel)}
+  .prompt .row{display:flex;border:1px solid var(--line2);background:#050506}
+  .prompt .ps1{padding:11px 12px;color:var(--amber);font-weight:700;background:#08090A;border-right:1px solid var(--line)}
+  .prompt input{flex:1;border:0;outline:0;background:transparent;color:var(--ink);font-family:var(--mono);font-size:13px;padding:11px 12px}
+  .prompt input::placeholder{color:var(--faint)}
+  .prompt .send{border:0;background:var(--amber);color:#000;font-weight:700;font-size:11px;letter-spacing:.1em;padding:0 18px}
+  .prompt .send:hover{filter:brightness(1.15)}
+  .prompt .sub{display:flex;gap:18px;margin-top:7px;font-size:10px;color:var(--faint);letter-spacing:.06em}
+  .prompt .sub b{color:var(--dim);font-weight:500}
+
+  /* ─── RIGHT: INSTRUMENTS ─── */
+  .right{border-left:1px solid var(--line2);background:var(--panel);overflow-y:auto}
+  .inst-head{padding:12px 14px 8px;font-size:10px;letter-spacing:.18em;color:var(--faint);border-bottom:1px solid var(--line)}
+  .gauge{padding:13px 14px;border-bottom:1px solid var(--line)}
+  .glabel{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:.14em;color:var(--faint)}
+  .gval{font-size:22px;font-weight:700;color:var(--ink);margin:5px 0 7px;letter-spacing:-.02em}
+  .gval small{font-size:11px;color:var(--dim);font-weight:400}
+  .gval.ok{color:var(--green)}
+  .bar{height:5px;background:#15171A;position:relative;overflow:hidden}
+  .bar i{position:absolute;inset:0 auto 0 0;background:var(--amber);box-shadow:0 0 8px rgba(255,176,0,.5)}
+  .bar i.g{background:var(--green);box-shadow:0 0 8px rgba(61,255,143,.4)}
+  .bar u{position:absolute;top:0;bottom:0;width:1px;background:#3A3D41}
+  .sub-g{font-size:9.5px;color:var(--faint);margin-top:6px;letter-spacing:.06em}
+  .queue{padding:13px 14px}
+  .queue h4{font-size:9.5px;letter-spacing:.16em;color:var(--faint);margin-bottom:9px;font-weight:500}
+  .q{display:flex;gap:9px;font-size:10.5px;color:var(--dim);padding:5px 0;border-bottom:1px dashed var(--line)}
+  .q .cd{color:var(--faint)}
+  .q .done{color:var(--green)}
+  .q .active{color:var(--cyan)}
+
+  /* ─── STATUS STRIP ─── */
+  .status{grid-column:1/4;border-top:1px solid var(--line2);display:flex;align-items:center;font-size:10.5px;letter-spacing:.08em;color:var(--dim);background:#08090A}
+  .status .seg{padding:0 15px;height:100%;display:flex;align-items:center;gap:8px;border-right:1px solid var(--line)}
+  .status .led{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px rgba(61,255,143,.8);animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.45}}
+  .status b{color:var(--ink);font-weight:500}
+  .status .rt{margin-left:auto;border-right:0;border-left:1px solid var(--line);color:var(--faint)}
+  .status .rt b{color:var(--amber)}
+  ::selection{background:var(--amber);color:#000}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#232629;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<div class="ticker">
+  <div class="zone id">NEXUS//V3</div>
+  <div class="zone live">● LIVE</div>
+  <div class="zone">NODO LOCAL · 8765</div>
+  <div class="marq"><span>SISTEMAS NOMINALES — MEMORIA 394 CONOCIMIENTOS · 22 GEMAS DISPONIBLES · RUTER THOMPSON ACTIVO · GRAFO 3 INSIGHTS · ÚLTIMO CICLO DREAM 03:00 · &nbsp;&nbsp;&nbsp;SISTEMAS NOMINALES — MEMORIA 394 CONOCIMIENTOS · 22 GEMAS DISPONIBLES ·</span></div>
+  <div class="zone rt" id="clock">18:42:07 Z</div>
+</div>
+
+<div class="left">
+  <div class="lhead"><span>SESIONES // 04</span><button>+ NUEVA</button></div>
+  <ul class="timeline">
+    <li class="on"><div class="t">18:42 · EN CURSO</div><div class="n">401 tras refresh del token</div></li>
+    <li><div class="t">17:55 · COMPLETADA</div><div class="n">5 conceptos de UI</div></li>
+    <li><div class="t">16:10 · COMPLETADA</div><div class="n">Benchmark TUI opencode/codex</div></li>
+    <li><div class="t">AYER · COMPLETADA</div><div class="n">Migración FTS5 → WAL</div></li>
+  </ul>
+  <div class="lfoot">ALCANCE <span>./workspace ./data</span></div>
+</div>
+
+<div class="center">
+  <div class="stream">
+    <div class="turn">
+      <div class="ts">18:42:03</div>
+      <div><div class="role usr">&gt; OPERADOR</div>
+      <div class="msg">El login devuelve 401 después de refrescar el token. Revísalo y propón un arreglo.</div></div>
+    </div>
+    <div class="turn">
+      <div class="ts">18:42:04</div>
+      <div>
+        <div class="role ai">&lt; NEXUS · GEMA CODE</div>
+        <div class="msg">Analizando el flujo de refresh. Ejecuto lectura de sesión y tests de auth:</div>
+
+        <div class="cmd">
+          <div class="bar"><span class="glyph">▸</span><span>read_file · src/auth/session.py</span><span class="st ok">✓ OK 38MS</span></div>
+          <div class="out">path=<b>"src/auth/session.py"</b> · 240 líneas · sha 4f29…</div>
+        </div>
+
+        <div class="cmd">
+          <div class="bar"><span class="glyph">▸</span><span>run_command · pytest tests/auth -x -q</span><span class="st run">◉ RUN 00.8S</span></div>
+          <div class="out">cwd=<b>./workspace</b> · 2 tests fallidos: test_refresh_keeps_session</div>
+        </div>
+
+        <div class="msg">Causa identificada: <b style="color:#FFB000">refresh_token()</b> invalida la sesión antes de emitir el nuevo JWT. Arreglo: interc orden y añadir test de regresión<span class="cursor"></span></div>
+
+        <details class="trace">
+          <summary>TRAZA — 4 PASOS · T 4.2S</summary>
+          <div class="steps">
+            <div><b>01</b> plan · hipótesis: orden de invalidación (1.1s)</div>
+            <div><b>02</b> read_file session.py (38ms)</div>
+            <div><b>03</b> run_command pytest (0.8s) → 2 failed</div>
+            <div><b>04</b> síntesis en curso…</div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="prompt">
+    <div class="row">
+      <div class="ps1">&gt;</div>
+      <input type="text" placeholder="escribe un comando o mensaje…  /help  ·  Esc detiene" aria-label="Prompt">
+      <button class="send">EJECUTAR ⏎</button>
+    </div>
+    <div class="sub"><span>MODo <b>GUÍA</b></span><span>/ <b>comandos</b></span><span>@ <b>archivos</b></span><span>⇧⏎ <b>salto</b></span></div>
+  </div>
+</div>
+
+<div class="right">
+  <div class="inst-head">INSTRUMENTOS</div>
+  <div class="gauge">
+    <div class="glabel"><span>CONTEXTO</span><span>VENTANA</span></div>
+    <div class="gval">12<small>% · 15.4k/128k tok</small></div>
+    <div class="bar"><i style="width:12%"></i><u style="left:75%"></u></div>
+    <div class="sub-g">marca = límite de compactación</div>
+  </div>
+  <div class="gauge">
+    <div class="glabel"><span>LATENCIA TTFT</span><span style="color:#3DFF8F">ÓPTIMA</span></div>
+    <div class="gval ok">312<small> ms</small></div>
+    <div class="bar"><i class="g" style="width:31%"></i></div>
+    <div class="sub-g">objetivo &lt; 700 ms</div>
+  </div>
+  <div class="gauge">
+    <div class="glabel"><span>COSTO SESIÓN</span><span>ACUMULADO</span></div>
+    <div class="gval">$0.014</div>
+    <div class="sub-g">3 turnos · 8.2k tok in · 1.1k out</div>
+  </div>
+  <div class="queue">
+    <h4>COLA DE HERRAMIENTAS</h4>
+    <div class="q"><span class="done">✓</span><span>read_file</span><span class="cd" style="margin-left:auto">38ms</span></div>
+    <div class="q"><span class="active">◉</span><span>run_command</span><span class="cd" style="margin-left:auto">0.8s</span></div>
+    <div class="q"><span class="cd">·</span><span>edit_file</span><span class="cd" style="margin-left:auto">espera</span></div>
+  </div>
+</div>
+
+<div class="status">
+  <div class="seg"><span class="led"></span> ENLACE <b>ESTABLE</b></div>
+  <div class="seg">MODELO <b>AUTO → CODE</b></div>
+  <div class="seg">PERMISOS <b>GUÍA</b></div>
+  <div class="seg">TURNO <b>03</b></div>
+  <div class="seg rt">UPTIME <b>02:14:37</b> · v3.0.0</div>
+</div>
+
+<script>
+  const el=document.getElementById('clock');
+  setInterval(()=>{const d=new Date();el.textContent=d.toTimeString().slice(0,8)+' Z'},1000);
+</script>
+</body>
+</html>
