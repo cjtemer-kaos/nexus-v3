@@ -130,8 +130,8 @@ export type ProvidersResponse = {
   router: { vram_budget_gb?: number; fallback_order?: string[]; strategy?: string }
 }
 
-export async function providersApi(): Promise<ProvidersResponse> {
-  const res = await apiFetch("/api/providers");
+export async function providersApi(refresh = false): Promise<ProvidersResponse> {
+  const res = await apiFetch(`/api/providers${refresh ? "?refresh=1" : ""}`);
   if (!res.ok) throw new Error(`providers ${res.status}`);
   return res.json();
 }

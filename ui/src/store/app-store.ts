@@ -31,7 +31,7 @@ type AppState = {
   providerHealth: Record<string, ProviderStatus>
   isProvidersLoading: boolean
   providersError: string | null
-  refreshProviders: () => Promise<void>
+  refreshProviders: (force?: boolean) => Promise<void>
   setModels: (m: ModelOption[]) => void
   setProviderHealth: (h: Record<string, ProviderStatus>) => void
   // chat
@@ -70,10 +70,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   providerHealth: {} as Record<string, ProviderStatus>,
   isProvidersLoading: true as boolean,
   providersError: null as string | null,
-  refreshProviders: async () => {
+  refreshProviders: async (force = false) => {
     set({ isProvidersLoading: true, providersError: null })
     try {
-      const data = await providersApi()
+      const data = await providersApi(force)
       const health: Record<string, ProviderStatus> = {}
       for (const [k, v] of Object.entries(data.providers)) {
         if (k === 'error') continue

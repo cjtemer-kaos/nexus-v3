@@ -504,6 +504,13 @@ async def _startup():
         _spawn_bg(_bg_zen())
     except Exception:
         pass
+    # Descubrimiento de modelos BYOK (/v1/models) en background — mantiene el
+    # selector al dia sin bloquear el arranque.
+    try:
+        from src.core import provider_models as _pm_startup
+        _spawn_bg(_pm_startup.refresh_all(force=False))
+    except Exception:
+        pass
     # LearningService (re-wiring ciclo #113, colmena #132): orden EXPLICITO
     # post-arranque, sin actor system. Nunca debe tumbar el startup.
     try:
@@ -622,6 +629,7 @@ def _build_router_from_config(cfg: dict):
     # anthropic tienen formatos distintos -> no se registran aqui.
     try:
         from src.core.provider_catalog import PROVIDER_CATALOG
+        from src.core import provider_models as _pm
         for pc in PROVIDER_CATALOG:
             env_name = pc.get("api_key_env") or ""
             if not env_name or pc.get("auth_style") != "bearer":
@@ -634,10 +642,15 @@ def _build_router_from_config(cfg: dict):
                 continue
             pid = pc["id"]
             router.register_provider(pid, CloudProvider(base_url=base[:-3], api_key=key, auth_style="bearer"))
-            router.register_model(ModelRoute(id=pc["default_model"], provider_name=pid))
+            # Registrar TODOS los modelos conocidos: cache en vivo (aunque este
+            # vencida) o, si no hay, el catalogo estatico. Asi el routing cubre
+            # los modelos que el proveedor expone hoy (el catalogo envejece).
+            known = _pm.cached_models(pid, max_age_s=-1) or pc.get("models") or [pc["default_model"]]
+            for mid in known:
+                router.register_model(ModelRoute(id=mid, provider_name=pid))
             if pid not in router.fallback_order:
                 router.fallback_order.append(pid)
-            logger.info(f"BYOK catalogo activo: {pid} ({pc['default_model']})")
+            logger.info(f"BYOK catalogo activo: {pid} ({len(known)} modelos)")
     except Exception as e:
         logger.warning(f"catalogo BYOK no registrado: {e}")
     return router
@@ -700,9 +713,16 @@ async def health():
 
 
 @app.get("/api/providers")
-async def providers_status():
-    """Dynamic provider inventory — only online providers report models. Used by ModelSelector."""
+async def providers_status(refresh: bool = False):
+    """Dynamic provider inventory — only online providers report models. Used by ModelSelector.
+    refresh=1 fuerza re-descubrir /v1/models de los proveedores BYOK (mantiene el selector al dia)."""
     cfg = _state.get("config") or _load_config_safe()
+    if refresh:
+        try:
+            from src.core import provider_models as _pm
+            await _pm.refresh_all(force=True)
+        except Exception as e:
+            logger.debug(f"refresh provider models failed: {e}")
     probe = await _probe_providers(timeout_s=3.0)
     _state["providers_cache"] = probe  # para que /api/health lo exponga sin sondear
     # Build flat model list for UI: only from online providers
@@ -744,12 +764,21 @@ async def providers_status():
             # bonito por defecto: guiones -> espacios, capitaliza
             label = short.replace("-", " ").replace("_", " ").strip().title() or base
         return short, label
+    from src.core import provider_models as _pm2
+    _byok = _pm2.byok_ids()
     for pname, info in probe.items():
         if pname == "error":
             continue
         if not info.get("ok"):
             continue  # offline -> don't expose models
-        for mid in info.get("registered") or []:
+        mids = list(info.get("registered") or [])
+        if pname in _byok:
+            # Proveedor BYOK: sumar la lista EN VIVO de /v1/models (siempre al dia,
+            # el catalogo estatico envejece: ej. opencode-go cambia sus modelos).
+            for m in info.get("models") or []:
+                if _pm2.is_chat_model(m) and m not in mids:
+                    mids.append(m)
+        for mid in mids:
             # Usar modelos CONFIGURADOS (registered) primero, no el catálogo completo
             # en vivo (evita exponer Claude Opus 5 / GPT-6 / etc. en el selector).
             # Deduplicate

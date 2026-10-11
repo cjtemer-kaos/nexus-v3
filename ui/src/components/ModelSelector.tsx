@@ -104,10 +104,10 @@ export function ModelSelector() {
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-xs font-semibold tracking-widest text-[#9BA1AA]">PROVEEDORES DISPONIBLES</span>
               <button
-                onClick={() => refreshProviders()}
+                onClick={() => refreshProviders(true)}
                 aria-label="Actualizar proveedores"
                 className="rounded-lg p-1 hover:bg-[#2C3037] text-[#9BA1AA] hover:text-[#EDEEF0]"
-                title="Re-sondear salud de proveedores"
+                title="Re-descubrir modelos de proveedores (/v1/models)"
               >
                 <RefreshCw className={cn('h-3.5 w-3.5', isProvidersLoading && 'animate-spin')} />
               </button>
@@ -128,7 +128,7 @@ export function ModelSelector() {
                   Re-sondea cuando estén listos.
                 </div>
                 {providersError && <div className="mt-2 text-xs font-mono text-red-400/70 break-all">{providersError}</div>}
-                <button onClick={() => refreshProviders()} className="mt-3 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] px-3 py-1.5 text-xs font-medium text-white">Reintentar detección</button>
+                <button onClick={() => refreshProviders(true)} className="mt-3 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] px-3 py-1.5 text-xs font-medium text-white">Reintentar detección</button>
               </div>
             ) : (
               <>
@@ -185,7 +185,7 @@ export function ModelSelector() {
 
             <div className="border-t border-[#2C3037] bg-[#1E2127] px-3 py-2 text-xs text-[#9BA1AA] flex items-center justify-between">
               <span>{isEmpty ? 'sin modelos' : `${models.length} modelo${models.length !== 1 ? 's' : ''} · ${onlineProviders.length} proveedor${onlineProviders.length !== 1 ? 'es' : ''}`}</span>
-              <span className="text-[#4C9DFF] cursor-pointer hover:text-[#8CC1FF]" onClick={(e) => { e.preventDefault(); refreshProviders() }}>auto-detectar</span>
+              <span className="text-[#4C9DFF] cursor-pointer hover:text-[#8CC1FF]" onClick={(e) => { e.preventDefault(); refreshProviders(true) }}>auto-detectar</span>
             </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
