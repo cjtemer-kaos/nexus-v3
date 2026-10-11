@@ -157,13 +157,14 @@ class SessionLog:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
-            # Ensure FTS table exists even if fts=False we still create schema for compat
-            # Backfill FTS for existing rows missing in FTS (first run)
+            # Backfill FTS una vez (marcador user_version): en una tabla FTS5
+            # external-content, count(*) devuelve el count de la tabla de contenido,
+            # no del indice -> no sirve para detectar desincronizacion.
             try:
-                cnt = self._conn.execute("SELECT count(*) FROM session_fts").fetchone()[0]
-                msg_cnt = self._conn.execute("SELECT count(*) FROM messages").fetchone()[0]
-                if msg_cnt > 0 and cnt == 0:
+                uv = self._conn.execute("PRAGMA user_version").fetchone()[0]
+                if uv < 1:
                     self._conn.execute("INSERT INTO session_fts(session_fts) VALUES ('rebuild')")
+                    self._conn.execute("PRAGMA user_version = 1")
             except Exception:
                 pass
 
@@ -309,11 +310,12 @@ class SessionLog:
                     (query, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
-                # FTS syntax error fallback to LIKE
+                # FTS syntax error fallback to LIKE (escapando %/_ para no tratarlos como comodines)
+                _like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
                 rows = self._conn.execute(
                     "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at FROM messages"
-                    " WHERE content LIKE ? LIMIT ?",
-                    (f"%{query}%", limit),
+                    " WHERE content LIKE ? ESCAPE '\\' LIMIT ?",
+                    (_like, limit),
                 ).fetchall()
         return [Message(*r) for r in rows]
 
@@ -330,10 +332,11 @@ class SessionLog:
                     (query, session_id, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
+                _like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
                 rows = self._conn.execute(
                     "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at FROM messages"
-                    " WHERE session_id=? AND content LIKE ? LIMIT ?",
-                    (session_id, f"%{query}%", limit),
+                    " WHERE session_id=? AND content LIKE ? ESCAPE '\\' LIMIT ?",
+                    (session_id, _like, limit),
                 ).fetchall()
         return [Message(*r) for r in rows]
 
@@ -376,6 +379,30 @@ class SessionLog:
             for m in msgs:
                 self.append(child.id, m)
         return child
+
+    def tree(self, session_id: str) -> dict:
+        """Arbol alrededor de una sesion (pi-style): cadena de ancestros + hijos."""
+        with self._lock:
+            rows = self._conn.execute("SELECT id, parent_session_id FROM sessions").fetchall()
+        parent = {r[0]: r[1] for r in rows}
+        children: dict[str, list[str]] = {}
+        for sid, pid in parent.items():
+            if pid:
+                children.setdefault(pid, []).append(sid)
+        chain: list[str] = []
+        cur = parent.get(session_id)
+        seen = set()
+        while cur and cur not in seen:
+            chain.append(cur)
+            seen.add(cur)
+            cur = parent.get(cur)
+        chain.reverse()
+        return {
+            "ancestors": chain,
+            "session": session_id,
+            "children": children.get(session_id, []),
+            "exists": session_id in parent,
+        }
 
     # ------------------------------------------------------------------
     # Stats / maintenance

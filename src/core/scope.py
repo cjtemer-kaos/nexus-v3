@@ -205,7 +205,8 @@ class Scope:
             raise ScopeDenied(f"ruta denegada por patrones de denegación: {p} (patrones: {self.cfg.deny_patterns})")
         if not self._is_allowed(p):
             raise ScopeDenied(
-                f"ruta fuera de raíces permitidas: {p} (permitidas: {self.cfg.allowed_roots})"
+                f"ruta fuera de raíces permitidas: {p} (permitidas: {self.cfg.allowed_roots}). "
+                f"Para acceso total a la PC, activa Ajustes → Permisos → 'full'."
             )
         return p
 

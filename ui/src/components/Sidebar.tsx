@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles, Bot } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
 
 const nav = [
   { id: 'chat', label: 'Chat', icon: MessageSquare, desc: 'Bucle Agente TDAO' },
+  { id: 'agents', label: 'Ayudantes', icon: Bot, desc: 'LLM por asistente' },
   { id: 'graph', label: 'Grafo', icon: Share2, desc: 'Conocimiento' },
   { id: 'editor', label: 'Editor', icon: FileCode2, desc: 'Alcance FS' },
   { id: 'terminal', label: 'Terminal', icon: Terminal, desc: 'Protegido' },

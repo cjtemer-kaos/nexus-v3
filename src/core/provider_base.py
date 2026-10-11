@@ -82,3 +82,20 @@ class BaseProvider(abc.ABC):
     async def list_models(self) -> list[str]:
         ...
 
+    async def stream(
+        self,
+        messages: list[LLMMessage],
+        tools: list[dict] | None = None,
+        model: str | None = None,
+        **kw: Any,
+    ):
+        """Async generator de deltas: {"type":"text","text":...} y {"type":"final","response":LLMResponse}.
+
+        Default (sin streaming real): delega a chat() y emite el contenido completo de una vez.
+        Los providers con SSE real lo sobreescriben.
+        """
+        resp = await self.chat(messages, tools=tools, model=model, **kw)
+        if getattr(resp, "content", None):
+            yield {"type": "text", "text": resp.content}
+        yield {"type": "final", "response": resp}
+

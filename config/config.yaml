@@ -1,6 +1,8 @@
 project: nexus-v3
 brain:
-  path: ${NEXUS_BRAIN:-./brain}
+  # Brain PROPIO de nexus-v3. NO usar NEXUS_BRAIN (pertenece a supernexus-v2):
+  # son proyectos separados y no deben cruzarse.
+  path: ${NEXUS_V3_BRAIN:-./brain}
   hierarchical_tiers:
     working:
       capacity: 100
@@ -27,17 +29,17 @@ agent_loop:
   heartbeat_ms: 2000
 scope:
   allowed_roots:
-  - ./workspace
-  - ./data
+  - .
   deny_patterns:
   - '**/.env'
   - '**/*.key'
   - '**/brain/*.db-shm'
   - '**/brain/*.db-wal'
+  deny_patterns_full: []
   max_read_bytes: 1048576
-  allow_network: true  # web_fetch harness parity (permission read_only still blocks writes)
+  allow_network: true
   allow_mutating_without_confirm: false
-  permission: workspace_write  # read_only | workspace_write | full (harness parity)
+  permission: workspace_write
 compaction:
   layers:
   - snip
@@ -56,17 +58,18 @@ compaction:
     max_summary_tokens: 800
 providers:
   ollama:
-    # base_url se puede sobre-escribir con la env OLLAMA_HOST (autodeteccion).
     base_url: http://localhost:11434
     timeout_s: 300
-    # Embeddings (OpenAI-compat de Ollama): embed() postea a {base}/v1/embeddings
+    # Velocidad local: mantiene el modelo cargado entre requests (evita recarga).
+    keep_alive: 30m
+    # Opciones de generacion Ollama (num_ctx, temperature, num_predict...).
+    options:
+      num_ctx: 8192
     embed_url: http://localhost:11434
-    # Lista de PREFERENCIA: en el arranque, environment.adapt_models() la
-    # intersecta con los modelos reales de ESTA PC (si no hay match, adopta
-    # los instalados). Portabilidad: copiar a otra PC con otros modelos funciona.
     models:
     - nexus-director-v6
     - qwen3.5-9b
+    - ornith-9b
     - qwen3-vl-8b
     - qwen2.5-coder:7b
     - deepseek-r1:8b
@@ -74,26 +77,26 @@ providers:
     - nemotron-3-nano:4b
     - gemma4
     - nomic-embed-text
-  # NOTA: llama.cpp DESCARTADO (2026-09-28) — vendor/ queda sin uso, todo via Ollama.
-  # El proveedor llamacpp se elimino; si lo re-agregas, autostart es opt-in explicito.
   cloud:
     base_url: https://opencode.ai/zen
     api_key: ${OPENCODE_API_KEY}
     auth_style: bearer
-    auto_discover: true  # detecta gratis vivos (/v1/models → *free) cada 5 min, persiste en data/cloud_free_cache.json
-    models:
-    # Solo space-bunny-free responde 200 (2026-09-28); nemotron/mimo/muse/jev/ling/longcat
-    # estan gated con 403 por plan en Zen. auto_discover + probe filtra 403.
-    - space-bunny-free
-    enabled: true
+    # Zen FREE solo responde dentro de OpenCode (FreeTierError 403 desde el server de
+    # nexus-v3) -> deshabilitado + sin auto-discovery para no perder un intento por turno.
+    auto_discover: false
+    # P3: strict tool schemas (OpenAI) -> tool calls validos al 1er intento (menos reintentos).
+    # Opt-in: algunos endpoints OpenAI-compatibles no soportan strict.
+    strict_tools: false
+    models: []
+    enabled: false
 router:
-  strategy: thompson
-  # 0 = auto-detectar VRAM de la PC (nvidia-smi) o RAM/4 sin GPU. Fijalo si lo necesitas.
+  # PRIORIDAD: Ollama LOCAL SIEMPRE primero. El cloud esta deshabilitado; si se
+  # re-habilita, agregarlo a fallback_order como respaldo (nunca antes que ollama).
+  strategy: tier
   vram_budget_gb: 0
   prefer_speed: false
   fallback_order:
   - ollama
-  - cloud
 hooks:
   phases:
   - pre_tool_use
@@ -103,3 +106,47 @@ hooks:
   - session_start
   - session_end
   security_gate: true
+reminders:
+  min_every_s: 300
+  max_active: 50
+skills:
+  roots:
+  - ./data/skills
+  watch: false
+memory:
+  agent_write_enabled: true
+  learn_min_chars: 12
+  auto_insight_persist: true
+assignment:
+  overrides: {}
+learning:
+  # ANTES de compactar una sesion, destilar lo realizado con el usuario al grafo
+  # (peticiones, herramientas, resultados, errores) -> no perder conocimiento y
+  # liberar contexto. El saber de todas las sesiones queda buscable con recall.
+  distill_on_compact: true
+  # Enriquecer el digest con un LLM: el MODELO se elige por CAPACIDAD segun lo
+  # instalado en ESTA pc (nada hardcodeado). Si falla, queda el digest determinista.
+  distill_llm: true
+  distill_model: ""   # override opcional; vacio = auto por capacidad (fast/general)
+  # Red de seguridad: al cerrar una sesion (o al arrancar el server) destilar las
+  # sesiones con turnos que nunca compactaron, para no perder conocimiento.
+  distill_on_session_end: true
+
+# Rendimiento: aprovecha el Python free-threaded (sin GIL) para multithreading real.
+concurrency:
+  enabled: true
+  # Ejecuta en paralelo las herramientas de SOLO LECTURA de un mismo turno.
+  parallel_tools: true
+  # 0 = auto (free-threaded: nucleos-1; con GIL: min(8,nucleos)).
+  max_threads: 0
+voice:
+  stt_endpoint: http://127.0.0.1:8789
+  stt_timeout_s: 30
+  stt_retries: 2
+  language: es
+  vad_frame_ms: 30
+  vad_threshold: 0.02
+  vad_pre_roll_ms: 400
+  vad_hangover_ms: 300
+  vad_min_speech_ms: 250
+  tts_endpoint: http://127.0.0.1:4123

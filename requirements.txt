@@ -1,0 +1,23 @@
+# Nexus v3 — runtime core (harness funcional). Pin laxo, portable.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+httpx>=0.27
+PyYAML>=6.0
+jsonschema>=4.20
+python-dotenv>=1.0
+numpy>=1.26
+psutil>=5.9
+websockets>=12
+mcp>=1.0
+aiohttp>=3.9
+aiosqlite>=0.19
+
+# --- dev ---
+pytest>=8.0
+
+# --- extras opcionales (descomentar segun capacidad de la PC) ---
+# voz local (fallback in-process si no hay STT HTTP): faster-whisper, sounddevice, piper-tts
+# herramientas de vision: opencv-python, mss, pytesseract
+# RAG lancedb: lancedb, aiosqlite
+# entrenamiento: torch, transformers, peft, trl, datasets
+# upscale/vision: basicsr, gfpgan, realesrgan

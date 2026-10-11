@@ -5,15 +5,26 @@
 **Desktop:** Electron 32 — main spawns Python harness (`src/api/server.py`) on free port, kills on `window-all-closed`, single-instance lock, tray, NSIS installer
 
 ## Estructura
-- `src/core/` — harness (session, agent-loop, tools, scope, compaction)
+- `src/core/` — harness (session, agent-loop, tools, scope, compaction, hooks, event-store, mcp-client)
 - `src/brain/` — cerebro local (`./brain/knowledge_graph.db` + `rag_index.db`) — portable, configurable via `NEXUS_BRAIN`
-- `src/mcp/` — MCP bridge para PC y agentes
+- `src/bridges/mcp_bridge_server.py` — MCP bridge (expone tools del harness por MCP); `src/core/mcp_client.py` — cliente MCP (consume servidores del bundle)
 - `src/api/server.py` — FastAPI harness backend (sirve `ui/dist` + `/api/*`)
 - `electron/` — Electron main + preload (TypeScript, contextIsolation, sandbox, single-instance, tray)
 - `ui/` — React 19 + Vite + Tailwind + shadcn
 - `providers/` — Ollama, llama.cpp, nube (auto-detect, API key programable)
+- `_attic/` — código muerto de v2 movido aquí (no se trackea; reversible)
 
 Nada harcodeado, todo vía `config.yaml` + env, distribuible.
+
+## Estado (auditoría 2026-10-11)
+Ver `AUDIT.md`. Resumen: el harness del blueprint está **cableado en producción** (compaction + hooks + event-store + gate de seguridad load-bearing + validación de argumentos + log por call + MCP cliente) y se purgó el código muerto (178 módulos de v2 → `_attic/`). Suite: **288 tests** + 6 evals, verde.
+
+## Instalación
+```bash
+pip install -r requirements.txt      # runtime core
+pip install -e ".[dev,voice,vision]" # extras opcionales
+python -m src.cli.main --check-config
+```
 
 ## Desktop App (Electron)
 

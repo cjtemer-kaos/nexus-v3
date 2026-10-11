@@ -89,6 +89,8 @@ export function ProvidersPanel() {
       // Normalize models: string comma -> array handled server side, but send arrays
       const providers: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(cfg.providers)) {
+        // no enviar providers inyectados/vacios (evita pisar su config con {})
+        if (!v || Object.keys(v as object).length === 0) continue
         const copy: Record<string, unknown> = { ...v }
         // models as array
         if (typeof copy.models === 'string') {
@@ -118,8 +120,9 @@ export function ProvidersPanel() {
   if (!cfg) return null
 
   const order = ['llamacpp', 'ollama', 'cloud'] as const
-  // ensure all present
-  for (const k of order) if (!cfg.providers[k]) cfg.providers[k] = {} as any
+  // copia normalizada: NO mutar cfg.providers (anti-pattern React + el PUT enviaba {} y pisaba config)
+  const providers: Record<string, any> = { ...(cfg.providers || {}) }
+  for (const k of order) if (!providers[k]) providers[k] = {}
 
   return (
     <div className="space-y-4">
@@ -135,7 +138,7 @@ export function ProvidersPanel() {
       {order.map((key) => {
         const meta = PROVIDER_META[key]
         const I = meta.icon
-        const p = cfg.providers[key] || {}
+        const p = providers[key] || {}
         const t = tests[key]
         const enabled = (p.enabled as boolean | undefined) ?? true // default true for ollama/llamacpp, cloud false but UI shows toggle
         const isCloud = key === 'cloud'

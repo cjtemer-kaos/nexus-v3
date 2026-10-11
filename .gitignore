@@ -22,12 +22,14 @@ venv/
 .ruff_cache/
 
 # Data / brain â€” runtime data ignorado, seed/schema si se trackea via brain/! Negation
+data/
 data/session.db
 data/session.db-*
 data/spill/
 brain/*.db
 brain/*.db-*
-brain/*.bak
+brain/*.bak*
+brain/learnings.md
 !brain/.gitkeep
 !brain/README.md
 workspace/
@@ -69,3 +71,8 @@ data/heldout.json
 
 # Uploads de usuario (runtime)
 data/uploads/
+
+# --- Auditoria profesional (2026-10-11) ---
+# Codigo muerto de v2 movido a _attic/ (reversible, no se trackea).
+_attic/
+pytest_out.txt

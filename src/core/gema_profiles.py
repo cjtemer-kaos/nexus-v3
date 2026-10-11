@@ -351,3 +351,36 @@ def filter_tools(all_tool_names: list[str], profile: GemaProfile) -> list[str]:
     allowed = set(profile.tools)
     blocked = set(profile.disallowed_tools)
     return [t for t in all_tool_names if t in allowed and t not in blocked]
+
+
+def list_gemas() -> list[dict]:
+    """Catálogo de gemas para la UI (nombre, descripción, tools, hint)."""
+    return [
+        {
+            "name": p.name,
+            "description": p.description,
+            "system_prompt": p.system_prompt_suffix,
+            "tools": list(p.tools) if p.tools is not None else None,
+            "temperature": p.temperature,
+            "max_turns": p.max_turns,
+            "model_hint": p.model_hint,
+            "planning": p.planning,
+        }
+        for p in GEMA_PROFILES.values()
+    ]
+
+
+HINT_BY_MODEL_HINT: dict[str, str | None] = {"speed": "simple", "quality": "coding", "balanced": None}
+
+
+def hint_for_gema(gema: str) -> str | None:
+    """Mapea el model_hint de una gema al hint del router (simple|coding|...)."""
+    prof = GEMA_PROFILES.get(gema)
+    if prof is None:
+        return None
+    return HINT_BY_MODEL_HINT.get(prof.model_hint)
+
+
+def system_prompt_for_gema(gema: str) -> str:
+    prof = GEMA_PROFILES.get(gema)
+    return prof.system_prompt_suffix if prof else ""

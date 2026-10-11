@@ -4,6 +4,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel'
 import { GraphView } from '@/components/graph/GraphView'
 import { FileEditor } from '@/components/editor/FileEditor'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
+import { AgentsPanel } from '@/components/agents/AgentsPanel'
 import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ const viewLabels: Record<string, string> = {
   graph: 'Grafo',
   editor: 'Editor',
   terminal: 'Terminal',
+  agents: 'Ayudantes',
 }
 
 type SearchResult = { role: string; content: string }
@@ -154,6 +156,7 @@ export default function App() {
           {view==='graph' && <GraphView />}
           {view==='editor' && <FileEditor />}
           {view==='terminal' && <TerminalPanel />}
+          {view==='agents' && <AgentsPanel />}
         </main>
 
         {/* estado inferior */}

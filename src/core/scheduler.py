@@ -222,7 +222,7 @@ class TaskScheduler:
         elif task.schedule_type == "cron" and task.cron_expression:
             try:
                 from croniter import croniter
-                cron = croniter(task.cronic_expression, datetime.now())
+                cron = croniter(task.cron_expression, datetime.now())
                 return cron.get_next(float)
             except ImportError:
                 logger.warning("croniter no instalado")

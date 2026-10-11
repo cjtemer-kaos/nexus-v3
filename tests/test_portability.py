@@ -134,7 +134,7 @@ def test_data_home_inside_project(monkeypatch):
 def test_brain_path_default_inside_project(monkeypatch):
     from src.brain.link import brain_path
 
-    monkeypatch.delenv("NEXUS_BRAIN", raising=False)
+    monkeypatch.delenv("NEXUS_V3_BRAIN", raising=False)
     bp = brain_path().resolve()
     assert bp == (ROOT / "brain").resolve()
 

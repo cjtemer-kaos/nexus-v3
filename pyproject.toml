@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus-v3"
+version = "3.0.0a1"
+description = "Nexus v3 — harness de agentes (TDA/O, sesiones WAL+FTS5, compactacion 4 capas, grafo de conocimiento)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+    "jsonschema>=4.20",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "psutil>=5.9",
+    "websockets>=12",
+    "mcp>=1.0",
+    "aiohttp>=3.9",
+    "aiosqlite>=0.19",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+voice = ["faster-whisper", "sounddevice", "piper-tts"]
+vision = ["opencv-python", "mss", "pytesseract"]
+rag = ["lancedb", "aiosqlite"]
+train = ["torch", "transformers", "peft", "trl", "datasets"]
+
+[project.scripts]
+nexus-v3 = "src.cli.main:main"
+
+[tool.setuptools]
+packages = [
+    "src",
+    "src.api",
+    "src.brain",
+    "src.bridges",
+    "src.cli",
+    "src.core",
+    "src.mcp",
+    "src.providers",
+    "src.security",
+    "src.tools",
+]

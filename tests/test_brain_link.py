@@ -18,11 +18,11 @@ from src.brain.link import (
 
 @pytest.fixture
 def no_nexus_brain():
-    """Simula el pop de NEXUS_BRAIN del run_tests (linea 577) y restaura."""
-    orig = os.environ.pop("NEXUS_BRAIN", None)
+    """Simula el pop de NEXUS_V3_BRAIN del run_tests (linea 577) y restaura."""
+    orig = os.environ.pop("NEXUS_V3_BRAIN", None)
     yield
     if orig is not None:
-        os.environ["NEXUS_BRAIN"] = orig
+        os.environ["NEXUS_V3_BRAIN"] = orig
 
 
 def test_brain_path_default():
@@ -45,11 +45,11 @@ def test_is_linked_to_v2():
 
 
 def test_nexus_brain_env_override(tmp_path):
-    orig = os.environ.get("NEXUS_BRAIN")
+    orig = os.environ.get("NEXUS_V3_BRAIN")
     try:
         (Path(tmp_path) / "cerebro.db").write_bytes(b"\x00" * 1024)
         (Path(tmp_path) / "nexus_memory.db").write_bytes(b"\x00" * 512)
-        os.environ["NEXUS_BRAIN"] = str(tmp_path)
+        os.environ["NEXUS_V3_BRAIN"] = str(tmp_path)
         bp2 = brain_path()
         assert str(bp2) == str(tmp_path) or str(bp2) == Path(tmp_path).resolve().as_posix()
         bi2 = get_brain_info()
@@ -62,9 +62,9 @@ def test_nexus_brain_env_override(tmp_path):
         health.get("cerebro.db", {}).get("readable")  # archivos fake: solo informativo (paridad run_tests)
     finally:
         if orig is None:
-            os.environ.pop("NEXUS_BRAIN", None)
+            os.environ.pop("NEXUS_V3_BRAIN", None)
         else:
-            os.environ["NEXUS_BRAIN"] = orig
+            os.environ["NEXUS_V3_BRAIN"] = orig
 
 
 def test_config_path_expansion(no_nexus_brain):
@@ -72,7 +72,7 @@ def test_config_path_expansion(no_nexus_brain):
 
     cfg = load_config()
     raw_path = cfg.get("brain", {}).get("path")
-    # config.yaml usa ${NEXUS_BRAIN:-./brain}
+    # config.yaml usa ${NEXUS_V3_BRAIN:-./brain}
     assert raw_path is not None
     brain_path()
 

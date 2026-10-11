@@ -134,8 +134,14 @@ def main(argv=None) -> int:
     parser.add_argument("--check-config", action="store_true", help="Validar config.yaml + enlace cerebro + pruebas humo imports")
     parser.add_argument("--probe-providers", action="store_true", help="Probar salud Ollama/llama.cpp/nube")
     parser.add_argument("--help-config", action="store_true", help="Mostrar rutas de configuración")
+    parser.add_argument("--setup", action="store_true", help="Doctor de portabilidad (otra PC con Ollama)")
+    parser.add_argument("--check", action="store_true", help="setup: solo audita, no instala nada")
+    parser.add_argument("--fix", action="store_true", help="setup: instala lo instalable (ollama pull)")
     args = parser.parse_args(argv)
 
+    if args.setup:
+        from src.core.onboarding import run_setup
+        return run_setup(fix=bool(args.fix and not args.check))
     if args.check_config:
         return cmd_check_config(args)
     if args.probe_providers:

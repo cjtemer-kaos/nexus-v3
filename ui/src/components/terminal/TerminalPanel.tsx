@@ -52,7 +52,7 @@ export function TerminalPanel() {
         <span className="text-xs font-mono text-[#EDEEF0]">nexus · {cwd} — Alcance jail</span>
         {busy && <span className="ml-2 text-xs text-amber-400 animate-pulse">ejecutando…</span>}
         <div className="ml-auto flex gap-1">
-          <Button variant="ghost" size="xs" onClick={()=>navigator.clipboard.writeText(terminalLines.join('\n'))}><Copy className="h-3.5 w-3.5" /></Button>
+          <Button variant="ghost" size="xs" aria-label="Copiar salida" onClick={()=>{ navigator.clipboard.writeText(terminalLines.join('\n')).catch(()=>{}) }}><Copy className="h-3.5 w-3.5" /></Button>
           <Button variant="ghost" size="xs" aria-label="Limpiar terminal" onClick={()=> clearTerminal()}><Trash2 className="h-3.5 w-3.5" /></Button>
           <Button variant="ghost" size="xs"><Maximize2 className="h-3.5 w-3.5" /></Button>
         </div>
@@ -82,7 +82,7 @@ export function TerminalPanel() {
           />
         </div>
         <div className="mt-3 text-[11px] text-[#9BA1AA] border-t border-[#2C3037] pt-2">
-          Shell real — cada comando corre en <span className="text-[#EDEEF0] font-mono">{cwd}</span> vía <span className="text-amber-400">POST /api/exec</span> con <span className="text-amber-400">Scope.check_path</span> (jail {`./workspace, ./data`}). CWD fijo, red bloqueada por config.
+          Shell — cada comando corre en <span className="text-[#EDEEF0] font-mono">{cwd}</span> vía <span className="text-amber-400">POST /api/exec</span>. En modo jail se bloquea encadenar/redirigir (<span className="font-mono">; | &amp; &gt; $()</span>) y rutas fuera de <span className="font-mono">./workspace, ./data</span>. Para shell completo: Ajustes → Permisos → <span className="text-[#EDEEF0]">full</span>.
         </div>
       </div>
     </div>

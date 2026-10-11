@@ -4,7 +4,7 @@ import { providersApi, sessionsApi, createSessionApi, sessionMessagesApi } from 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
 
-type View = 'chat' | 'graph' | 'editor' | 'terminal'
+type View = 'chat' | 'graph' | 'editor' | 'terminal' | 'agents'
 
 export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string; images?: string[] }
 
@@ -42,6 +42,7 @@ type AppState = {
   createSession: () => void
   messages: ChatMessage[]
   addMessage: (m: ChatMessage) => void
+  updateMessage: (id: string, content: string) => void
   setMessages: (m: ChatMessage[]) => void
   loadMessages: (sessionId: string) => Promise<void>
   // editor
@@ -123,6 +124,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((st) => ({
           sessions: [...st.sessions, { id: s.id, title: s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
           activeSession: s.id,
+          messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
         }))
       } catch {
         // fallback local sin server
@@ -135,6 +137,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   messages: [] as ChatMessage[],
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
+  updateMessage: (id, content) => set((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, content } : m)) })),
   setMessages: (messages) => set({ messages }),
   loadMessages: async (sessionId) => {
     if (!sessionId) return
@@ -150,7 +153,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           toolName: m.tool_name || undefined,
           timestamp: m.created_at ? fmtTime(m.created_at) : '',
         }))
-      set({ messages: mapped })
+      // Merge: no pisar mensajes locales (recién enviados) que aún no están en el server.
+      set((s) => {
+        const serverIds = new Set(mapped.map((m) => m.id))
+        const sig = new Set(mapped.map((m) => `${m.role}\u0000${m.content}`))
+        const localOnly = s.messages.filter(
+          (m) => !serverIds.has(m.id) && !m.id.startsWith(`${sessionId}-`) && !sig.has(`${m.role}\u0000${m.content}`),
+        )
+        return { messages: [...mapped, ...localOnly] }
+      })
     } catch {
       // server caído o sesión local (fallback) → buffer vacío, nunca mensajes ajenos
       if (get().activeSession !== sessionId) return
@@ -161,20 +172,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeTab: 0,
   setActiveTab: (activeTab) => set({ activeTab }),
   updateTab: (i, content) => set((s) => { const tabs = [...s.tabs]; tabs[i] = { ...tabs[i], content, dirty: true }; return { tabs } }),
-  openFile: (path, content = '# new file\n') => set((s) => ({
-    tabs: [...s.tabs, {
-      path,
-      content,
-      dirty: false,
-      language: path.endsWith('.py') ? 'python'
-        : path.endsWith('.yaml') || path.endsWith('.yml') ? 'yaml'
-        : path.endsWith('.json') ? 'json'
-        : path.endsWith('.md') ? 'markdown'
-        : path.endsWith('.txt') ? 'plaintext'
-        : 'typescript',
-    }],
-    activeTab: s.tabs.length,
-  })),
+  openFile: (path, content = '# new file\n') => set((s) => {
+    const existing = s.tabs.findIndex((t) => t.path === path)
+    if (existing >= 0) {
+      // ya abierto: no duplicar pestaña; solo activarla (y refrescar contenido si vino explícito)
+      const tabs = content === '# new file\n' ? s.tabs : s.tabs.map((t, i) => (i === existing ? { ...t, content } : t))
+      return { tabs, activeTab: existing }
+    }
+    return {
+      tabs: [...s.tabs, {
+        path,
+        content,
+        dirty: false,
+        language: path.endsWith('.py') ? 'python'
+          : path.endsWith('.yaml') || path.endsWith('.yml') ? 'yaml'
+          : path.endsWith('.json') ? 'json'
+          : path.endsWith('.md') ? 'markdown'
+          : path.endsWith('.txt') ? 'plaintext'
+          : 'typescript',
+      }],
+      activeTab: s.tabs.length,
+    }
+  }),
   closeTab: (i) => set((s) => {
     if (s.tabs.length <= 1) return s
     const tabs = s.tabs.filter((_, idx) => idx !== i)

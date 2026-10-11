@@ -60,7 +60,10 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
   const srRef = useRef<SpeechRecognitionLike | null>(null)
   const timerRef = useRef<number>(0)
 
-  const { levelRef } = useAudioLevel(phase === 'listening')
+  const { levelRef, error: audioError } = useAudioLevel(phase === 'listening')
+
+  // VAD visual: si el medidor de nivel falla (sin permiso/contexto inseguro),
+  // se informa en el overlay en vez de fallar en silencio.
 
   useEffect(() => {
     let alive = true
@@ -72,7 +75,7 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
 
   const cleanup = useCallback(() => {
     window.clearTimeout(timerRef.current)
-    try { recRef.current?.state === 'recording' && recRef.current.stop() } catch { /* noop */ }
+    try { if (recRef.current?.state === 'recording') recRef.current.stop() } catch { /* noop */ }
     recRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
@@ -99,10 +102,12 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
     try {
       const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' })
       const res = await voiceSttApi(blob, navigator.language.slice(0, 2) || 'es')
+      if (cancelledRef.current) return // desmontado/cancelado durante el await
       const text = (res.text || '').trim()
-      if (text) onTranscript(text)
+      if (text) { onTranscript(text); setPhase('idle'); setHint('') }
       else fail('No se entendió el audio — repite más cerca del micrófono')
     } catch (e) {
+      if (cancelledRef.current) return
       const msg = (e as Error).message || String(e)
       if (msg.includes('501') && getSR()) { startSR(); return }
       fail(msg.slice(0, 160))
@@ -168,7 +173,7 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
       setInterim('')
       if (cancelledRef.current) return
       const text = finalText.trim()
-      if (text) onTranscript(text)
+      if (text) { onTranscript(text); setPhase('idle'); setHint('') }
       else fail('No se escuchó nada')
     }
     srRef.current = sr
@@ -240,6 +245,13 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
             <div className="max-w-[240px] text-center text-xs text-[#9BA1AA]">
               {phase === 'error' ? 'Error de voz' : labelFor(phase, hint)}
               {interim && <div className="mt-1 font-medium text-[#EDEEF0]">“{interim}”</div>}
+              {audioError && phase === 'listening' && (
+                <div className="mt-1 text-[11px] text-[#FFB020]">
+                  {audioError === 'permission-denied'
+                    ? 'Medidor de nivel sin permiso de micrófono (la grabación sigue activa)'
+                    : 'Medidor de nivel no disponible (la grabación sigue activa)'}
+                </div>
+              )}
             </div>
             {phase === 'error' && <div className="flex items-center gap-1 text-[11px] text-[#FF6259]"><AlertTriangle className="h-3 w-3" /> {hint}</div>}
             {(phase === 'listening' || phase === 'connecting') && (

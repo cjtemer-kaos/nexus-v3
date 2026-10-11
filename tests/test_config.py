@@ -25,16 +25,16 @@ def test_check_config():
 
 
 def test_env_expansion(tmp_path):
-    orig = os.environ.get("NEXUS_BRAIN")
+    orig = os.environ.get("NEXUS_V3_BRAIN")
     try:
-        os.environ["NEXUS_BRAIN"] = "/tmp/test_brain_expansion"
+        os.environ["NEXUS_V3_BRAIN"] = "/tmp/test_brain_expansion"
         cfg_exp = load_config()
         assert "/tmp" in str(cfg_exp.get("brain", {}).get("path"))
     finally:
         if orig is None:
-            os.environ.pop("NEXUS_BRAIN", None)
+            os.environ.pop("NEXUS_V3_BRAIN", None)
         else:
-            os.environ["NEXUS_BRAIN"] = orig
+            os.environ["NEXUS_V3_BRAIN"] = orig
 
 
 def test_validate_config_invalid_missing_db_path():

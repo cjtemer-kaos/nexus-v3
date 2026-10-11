@@ -7,7 +7,7 @@ Human approval between execution rounds with timeout/escalation.
 import asyncio
 import logging
 from typing import Dict, List, Optional, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from src.core.bounded_history import BoundedHistory
@@ -68,6 +68,9 @@ class ApprovalRequest:
     response_comment: str = ""
     timeout_seconds: int = 300
     escalation_policy: str = "reject"
+    # PASO 2 plan-mode: kind + opciones de UI (Approve / Keep planning).
+    kind: str = ""
+    options: list = field(default_factory=list)
 
     def __post_init__(self):
         if not self.created_at:
@@ -112,6 +115,23 @@ class ApprovalGate:
                 logger.error(f"Approval notification callback error: {e}")
 
         logger.info(f"Approval requested: {req.id} - {task[:60]}")
+        return req
+
+    async def request_plan_review(self, plan: str, timeout: int | None = None, escalation: str = "reject") -> ApprovalRequest:
+        """Review de un plan: opciones Approve / Keep planning.
+
+        La escalación se fuerza a ``reject`` para planes aunque el caller pida
+        otra cosa (un plan jamás se auto-aprueba por timeout).
+        """
+        _ = escalation  # ignorado a propósito: planes siempre reject
+        req = await self.request_approval(
+            task="plan-review",
+            description=f"[plan-review] Opciones: Approve / Keep planning\n{plan or ''}"[:4000],
+            timeout=timeout,
+            escalation="reject",
+        )
+        req.kind = "plan-review"
+        req.options = ["Approve", "Keep planning"]
         return req
 
     async def respond(self, request_id: str, approved: bool, responder: str = "human", comment: str = "") -> bool:

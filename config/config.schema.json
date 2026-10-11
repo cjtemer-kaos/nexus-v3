@@ -27,7 +27,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "description": "May contain ${NEXUS_BRAIN:-./brain}"
+          "description": "May contain ${NEXUS_V3_BRAIN:-./brain} (brain propio de nexus-v3; NEXUS_BRAIN pertenece a otro proyecto)"
         },
         "hierarchical_tiers": {
           "type": "object",
@@ -167,6 +167,12 @@
             "type": "string"
           }
         },
+        "deny_patterns_full": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "max_read_bytes": {
           "type": "integer",
           "minimum": 1024
@@ -261,6 +267,13 @@
             },
             "timeout_s": {
               "type": "number"
+            },
+            "keep_alive": {
+              "type": "string"
+            },
+            "options": {
+              "type": "object",
+              "additionalProperties": true
             },
             "models": {
               "type": "array",
@@ -414,6 +427,106 @@
         "security_gate": {
           "type": "boolean"
         }
+      },
+      "additionalProperties": false
+    },
+    "reminders": {
+      "type": "object",
+      "properties": {
+        "min_every_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_active": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "skills": {
+      "type": "object",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "watch": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "agent_write_enabled": {
+          "type": "boolean"
+        },
+        "learn_min_chars": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "auto_insight_persist": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "assignment": {
+      "type": "object",
+      "properties": {
+        "overrides": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "concurrency": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "parallel_tools": { "type": "boolean" },
+        "max_threads": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "learning": {
+      "type": "object",
+      "properties": {
+        "distill_on_compact": {
+          "type": "boolean"
+        },
+        "distill_llm": {
+          "type": "boolean"
+        },
+        "distill_model": {
+          "type": "string"
+        },
+        "distill_on_session_end": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "voice": {
+      "type": "object",
+      "properties": {
+        "stt_endpoint": { "type": "string" },
+        "stt_timeout_s": { "type": "number", "minimum": 1 },
+        "stt_retries": { "type": "integer", "minimum": 0 },
+        "language": { "type": "string" },
+        "vad_frame_ms": { "type": "integer", "minimum": 10 },
+        "vad_threshold": { "type": "number", "minimum": 0 },
+        "vad_pre_roll_ms": { "type": "integer", "minimum": 0 },
+        "vad_hangover_ms": { "type": "integer", "minimum": 0 },
+        "vad_min_speech_ms": { "type": "integer", "minimum": 0 },
+        "tts_endpoint": { "type": "string" }
       },
       "additionalProperties": false
     }

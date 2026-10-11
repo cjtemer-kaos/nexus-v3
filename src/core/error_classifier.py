@@ -32,6 +32,13 @@ _SKIP_PATTERNS = [
     r"not critical", r"optional", r"skip", r"already exists", r"duplicate",
 ]
 
+# Denegaciones de alcance/seguridad (scope.py en español + hook block + read_only).
+# Sin esto caen al default REPLAN y el agente reintenta lo que deberia abortar/omitir.
+_SCOPE_DENY_PATTERNS = [
+    r"scope denied", r"permission denied", r"denegad", r"bloquead", r"hook bloqu",
+    r"read_only", r"read-only", r"fuera de (alcance|ra[ií]ces)", r"no permitid", r"no autorizad",
+]
+
 # Replan: bad params, validation, schema mismatch — retry with different args
 _REPLAN_PATTERNS = [
     r"invalid (param|argument|value|tool)", r"missing (param|field|required)",
@@ -52,9 +59,12 @@ def classify_error(tool: str, err: str, *, context: dict | None = None) -> Error
     """
     if not err:
         return ErrorAction.RETRY
-    # ScopeDenied is fatal for this tool call
-    if "scope denied" in err.lower():
-        return ErrorAction.ABORT if "network" in err.lower() or "permission" in err.lower() else ErrorAction.SKIP
+    # Denegacion de alcance/seguridad: ABORT si es de red/permiso, si no SKIP.
+    if _matches(err, _SCOPE_DENY_PATTERNS):
+        _low = err.lower()
+        # "red" como subcadena matchea 'rendered'/'redacted': exigir frase de red.
+        _is_net = (" de red" in _low) or ("permitir_red" in _low) or ("network" in _low)
+        return ErrorAction.ABORT if (_is_net or "permission" in _low) else ErrorAction.SKIP
     if _matches(err, _FATAL_PATTERNS):
         # Some fatals are SKIP if tool is optional
         if context and context.get("optional"):

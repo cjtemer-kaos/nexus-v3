@@ -59,8 +59,8 @@ app = FastAPI(title="Nexus v3 Harness", version="3.0.0-alpha")
 # CORS for Electron renderer (file:// and localhost)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -76,7 +76,9 @@ _LOCAL_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 
 @app.middleware("http")
 async def _origin_guard(request: Request, call_next):
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+    # GET con efecto lateral (corre el agente) también pasa por el guard de origen.
+    _mutating_get = request.method == "GET" and request.url.path.startswith("/api/chat/stream")
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") or _mutating_get:
         origin = request.headers.get("origin")
         if origin:
             try:
@@ -92,6 +94,19 @@ async def _origin_guard(request: Request, call_next):
 
 # Lazy singletons populated on startup
 _state: dict[str, Any] = {}
+
+# Referencias a tasks background (evita que el GC las recolecte a mitad de ejecucion).
+_BG_TASKS: set = set()
+
+
+def _spawn_bg(coro) -> None:
+    """Lanza una coroutine en background reteniendo su referencia."""
+    try:
+        _t = asyncio.create_task(coro)
+        _BG_TASKS.add(_t)
+        _t.add_done_callback(_BG_TASKS.discard)
+    except Exception:
+        pass
 
 
 def _load_config_safe() -> dict:
@@ -135,11 +150,298 @@ def _session_log():
     return _state["session_log"]
 
 
+def _event_store():
+    if "event_store" not in _state:
+        try:
+            from src.core.event_store import EventStore
+            from src.core.config import load_config
+            cfg = load_config()
+            db = cfg.get("session", {}).get("event_db_path", "./data/event_store.db")
+            p = Path(db)
+            if not p.is_absolute():
+                p = _PROJECT_ROOT / p
+            _state["event_store"] = EventStore(str(p))
+        except Exception as e:
+            logger.warning(f"EventStore init failed, using memory: {e}")
+            from src.core.event_store import EventStore
+            _state["event_store"] = EventStore(":memory:")
+    return _state["event_store"]
+
+
+def _agent_registry():
+    if "agents" not in _state:
+        from src.core.agent_registry import AgentRegistry
+        _state["agents"] = AgentRegistry(_PROJECT_ROOT / "data" / "agents" / "registry.json")
+    return _state["agents"]
+
+
+def _assign_overrides(cfg: dict | None) -> dict:
+    try:
+        return ((cfg or {}).get("assignment", {}) or {}).get("overrides", {}) or {}
+    except Exception:
+        return {}
+
+
+def _build_compaction(cfg: dict):
+    from src.core.compaction import CompactionPipeline
+    ccfg = dict((cfg or {}).get("compaction", {}) or {})
+    budget = dict(ccfg.get("budget", {}) or {})
+    pp = Path(budget.get("persist_dir", "./data/spill"))
+    if not pp.is_absolute():
+        pp = _PROJECT_ROOT / pp
+    budget["persist_dir"] = str(pp)
+    ccfg["budget"] = budget
+    return CompactionPipeline(ccfg)
+
+
+def _build_hooks(cfg: dict):
+    from src.core.hooks_engine import HooksEngine, HookResult, HookAction
+    hooks = HooksEngine((cfg or {}).get("hooks", {}) or {})
+    if hooks.security_gate:
+        try:
+            from src.core.prompt_security import is_suspicious_content as _susp
+        except Exception:
+            _susp = None
+        if _susp is not None:
+            def _scan_tool(phase, payload):
+                args = payload.get("args") or {}
+                tool = payload.get("tool", "")
+                for v in args.values():
+                    try:
+                        res = _susp(v) if isinstance(v, str) and v else None
+                        if isinstance(res, dict) and res.get("is_suspicious"):
+                            return HookResult(action=HookAction.STOP, message=f"entrada sospechosa bloqueada en {tool} (prompt_security)")
+                    except Exception:
+                        continue
+                return HookResult(action=HookAction.CONTINUE)
+            hooks.on("pre_tool_use", _scan_tool)
+    return hooks
+
+
+def _parse_json_items(text: str) -> list[dict]:
+    """Extrae un array JSON de objetos {title, content, category, tags} de la respuesta del LLM."""
+    import json as _j
+    import re as _re
+    if not text:
+        return []
+    m = _re.search(r"\[[\s\S]*\]", text)
+    raw = m.group(0) if m else text
+    try:
+        data = _j.loads(raw)
+    except Exception:
+        return []
+    out: list[dict] = []
+    if isinstance(data, list):
+        for it in data:
+            if isinstance(it, dict) and str(it.get("content") or "").strip():
+                tags = it.get("tags")
+                out.append({
+                    "title": str(it.get("title") or "")[:120],
+                    "content": str(it["content"]).strip()[:1500],
+                    "category": str(it.get("category") or "lesson").strip()[:40],
+                    "tags": [str(t) for t in tags] if isinstance(tags, list) else [],
+                })
+    return out
+
+
+async def _distill_llm_extract(cfg: dict, digest: str, forced_model: str | None) -> list[dict]:
+    """Extrae hechos/lecciones del digest con un modelo elegido POR CAPACIDAD (según lo instalado).
+
+    Fiable: candidatos por prioridad, timeout por intento, validación JSON y fallback.
+    """
+    from src.core.provider_base import LLMMessage
+    from src.core.model_assign import assign_model
+    router = _get_router(cfg)
+    cands: list[str] = []
+    if forced_model:
+        cands.append(forced_model)
+    try:
+        a = assign_model(router, model_hint="speed")
+        if a.get("model"):
+            cands.append(a["model"])
+    except Exception:
+        pass
+    try:
+        r = router.resolve()
+        if r is not None:
+            cands.append(r.model)
+    except Exception:
+        pass
+    seen: set[str] = set()
+    cands = [c for c in cands if c and not (c in seen or seen.add(c))]
+    if not cands:
+        return []
+    prompt = ("Extrae del siguiente resumen de una sesión de trabajo los HECHOS y LECCIONES "
+              "reutilizables para el futuro. Devuelve SOLO un array JSON de objetos con claves "
+              "title, content, category, tags. Máximo 8. category en {lesson,concept,fix,config,decision}. "
+              "content: 1-3 frases autosuficientes (sin 'él'/'eso'). Responde en español.")
+    msgs = [LLMMessage(role="system", content=prompt), LLMMessage(role="user", content=digest[:6000])]
+    for mdl in cands[:3]:
+        try:
+            resp = await asyncio.wait_for(router.chat(msgs, model=mdl), timeout=120)
+            items = _parse_json_items(resp.content or "")
+            if items:
+                return items
+        except Exception as e:
+            logger.debug("distill llm modelo %s falló: %s", mdl, e)
+            continue
+    return []
+
+
+def _wordset(s: str) -> set[str]:
+    import re as _re
+    return set(_re.findall(r"\w{4,}", (s or "").lower()))
+
+
+def _near_dup(km, content: str, threshold: float = 0.5) -> bool:
+    """True si el grafo ya tiene un nodo muy parecido (Jaccard de palabras >= umbral)."""
+    ws = _wordset(content)
+    if len(ws) < 3:
+        return False
+    # fts_search re-tokeniza y une con AND, asi que una query "w1 OR w2" nunca matchea.
+    # Buscar una vez por palabra clave y unir los hits.
+    hits: list = []
+    for w in sorted(ws)[:8]:
+        try:
+            hits += km.fts_search(w, limit=6) or []
+        except Exception:
+            pass
+    for hit in hits:
+        hw = _wordset(hit.get("content") or hit.get("title") or "")
+        if not hw:
+            continue
+        if len(ws & hw) / max(len(ws | hw), 1) >= threshold:
+            return True
+    return False
+
+
+async def _distill_enrich(cfg: dict, session_id: str, forced_model: str | None, learn_fn) -> int:
+    """Enriquecimiento LLM del digest (background-safe). Devuelve #items guardados (con dedup)."""
+    from src.core.session_distill import build_session_digest
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        msgs = _session_log().get_messages(session_id, limit=800)
+        dict_msgs = [{"role": m.role, "content": m.content, "tool_name": m.tool_name} for m in msgs]
+        digest = build_session_digest(session_id, dict_msgs)["content"]
+        items = await _distill_llm_extract(cfg, digest, forced_model)
+        km = get_knowledge_memory()
+        saved = 0
+        for it in items:
+            if _near_dup(km, it.get("content", "")):
+                continue  # ya existe algo muy parecido -> no duplicar el grafo
+            learn_fn(it["content"], topic_key="", category=it.get("category", "lesson"),
+                     tags=it.get("tags", []), title=it.get("title", ""))
+            saved += 1
+        return saved
+    except Exception as e:
+        logger.debug("distill enrich falló: %s", e)
+        return 0
+
+
+async def _distill_run(cfg: dict, session_id: str, *, wait_llm: bool, llm_timeout: float | None = None) -> dict:
+    """Destila una sesión: digest determinista (siempre) + enriquecimiento LLM por capacidad."""
+    from src.core.session_distill import distill_session
+    from src.core.knowledge_memory import get_knowledge_memory
+    lc = (cfg or {}).get("learning", {}) or {}
+    use_llm = bool(lc.get("distill_llm", True))
+    forced_model = (lc.get("distill_model") or "").strip() or None
+    msgs = _session_log().get_messages(session_id, limit=800)
+    dict_msgs = [{"role": m.role, "content": m.content, "tool_name": m.tool_name} for m in msgs]
+    km = get_knowledge_memory()
+
+    def _learn(content, *, topic_key="", category="general", tags=None, title=""):
+        return km.learn(content, topic_key=topic_key, category=category,
+                        tags=tags or [], title=title, source="session-distill")
+
+    res = distill_session(session_id, dict_msgs, _learn)  # determinista: siempre fiable
+    if use_llm and res.get("turns"):
+        if wait_llm:
+            try:
+                if llm_timeout:
+                    res["llm_items"] = await asyncio.wait_for(
+                        _distill_enrich(cfg, session_id, forced_model, _learn), timeout=llm_timeout)
+                else:
+                    res["llm_items"] = await _distill_enrich(cfg, session_id, forced_model, _learn)
+            except asyncio.TimeoutError:
+                # Determinista ya guardado; el LLM sigue en background (no re-correr todo).
+                _spawn_bg(_distill_enrich(cfg, session_id, forced_model, _learn))
+                res["llm_enrichment"] = "background(timeout)"
+        else:
+            _spawn_bg(_distill_enrich(cfg, session_id, forced_model, _learn))
+            res["llm_enrichment"] = "background"
+    logger.info("distill sesión %s -> %s piezas (%s turnos)", session_id, res.get("distilled"), res.get("turns"))
+    return res
+
+
+def _build_distill_hook(cfg: dict):
+    """Hook pre-compactación (async): destila al grafo sin bloquear el turno.
+
+    El digest determinista se guarda ya; el enriquecimiento LLM corre en background
+    (nunca detiene el loop ni la compactación).
+    """
+    try:
+        lc = (cfg or {}).get("learning", {}) or {}
+    except Exception:
+        lc = {}
+    if not bool(lc.get("distill_on_compact", True)):
+        return None
+
+    async def _hook(session_id: str):
+        try:
+            return await _distill_run(cfg, session_id, wait_llm=False)
+        except Exception as e:
+            logger.debug("distill hook falló: %s", e)
+    return _hook
+
+
+def _session_distilled(session_id: str) -> bool:
+    """True si la sesión ya tiene su nodo consolidado en el grafo."""
+    try:
+        from src.core.knowledge_memory import get_knowledge_memory
+        conn = get_knowledge_memory()._connect()
+        row = conn.execute("select 1 from nodes where topic_key=? limit 1",
+                           (f"session/{session_id}",)).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+async def _distill_orphan_sessions(limit: int = 50) -> int:
+    """Red de seguridad: destila sesiones con turnos que nunca compactaron (al arrancar)."""
+    cfg = _state.get("config") or _load_config_safe()
+    lc = (cfg or {}).get("learning", {}) or {}
+    if not bool(lc.get("distill_on_session_end", True)):
+        return 0
+    n = 0
+    try:
+        for s in _session_log().list_sessions(limit=limit):
+            sid = getattr(s, "id", None)
+            if not sid or _session_distilled(sid):
+                continue
+            if not _session_log().get_messages(sid, limit=1):
+                continue
+            await _distill_run(cfg, sid, wait_llm=False)
+            n += 1
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        logger.debug("distill orphan catch-up falló: %s", e)
+    if n:
+        logger.info("distill catch-up: %d sesiones destiladas al arrancar", n)
+    return n
+
+
 @app.on_event("startup")
 async def _startup():
     logger.info("Starting Nexus v3 harness backend")
     _state["config"] = _load_config_safe()
     _state["brain"] = _brain_info_safe()
+    # Concurrencia adaptativa: el agent loop lee NEXUS_PARALLEL_TOOLS (config concurrency.parallel_tools)
+    try:
+        import os as _os
+        _cc = (_state["config"].get("concurrency", {}) or {})
+        _os.environ["NEXUS_PARALLEL_TOOLS"] = "1" if _cc.get("parallel_tools", True) else "0"
+    except Exception:
+        pass
     # Resumen de entorno: qué hay en ESTA PC (SO, Ollama, modelos, brain)
     try:
         from src.core import environment as _env
@@ -159,6 +461,12 @@ async def _startup():
         logger.info(f"SessionLog ready: {_state['brain'].get('brain_path')}")
     except Exception as e:
         logger.warning(f"SessionLog startup warning: {e}")
+    # Red de seguridad: destilar sesiones con turnos que nunca compactaron (background)
+    try:
+        import asyncio as _asyncio_d
+        _spawn_bg(_distill_orphan_sessions())
+    except Exception:
+        pass
     # llama.cpp DESCARTADO (2026-09-28): autostart solo si config lo pide explicito.
     # Sin bloque llamacpp en config -> ni se intenta.
     try:
@@ -193,7 +501,7 @@ async def _startup():
             except Exception as e:
                 logger.debug(f"Zen bg discovery failed: {e}")
         import asyncio as _asyncio
-        _asyncio.create_task(_bg_zen())
+        _spawn_bg(_bg_zen())
     except Exception:
         pass
     # LearningService (re-wiring ciclo #113, colmena #132): orden EXPLICITO
@@ -221,6 +529,26 @@ async def _shutdown():
         logger.info("llama.cpp gestionados detenidos")
     except Exception as e:
         logger.warning(f"llama shutdown: {e}")
+    try:
+        # Cerrar el router AHORA (el cierre diferido no corre al parar el loop).
+        r = _state.pop("router", None)
+        _state.pop("router_sig", None)
+        if r is not None:
+            _close_router(r)
+        for _rr in _RETIRED_ROUTERS:
+            _close_router(_rr)
+        _RETIRED_ROUTERS.clear()
+    except Exception:
+        pass
+    # Drenar tasks background y de cierre diferido (evita fugas de sockets/FDs al salir).
+    try:
+        _all = list(_BG_TASKS) + list(_CLOSE_TASKS)
+        for _t in _all:
+            _t.cancel()
+        if _all:
+            await asyncio.gather(*_all, return_exceptions=True)
+    except Exception:
+        pass
 
 
 def _build_router_from_config(cfg: dict):
@@ -257,18 +585,26 @@ def _build_router_from_config(cfg: dict):
             )
         else:
             logger.warning(f"Ollama no responde en {_base} — se registran los modelos de config (se resuelven en cada call)")
-        router.register_provider("ollama", OllamaProvider(base_url=_base, timeout_s=oc.get("timeout_s", 300)))
+        router.register_provider("ollama", OllamaProvider(
+            base_url=_base, timeout_s=oc.get("timeout_s", 300),
+            keep_alive=oc.get("keep_alive", "30m"),
+            options=oc.get("options") or {},
+        ))
         for m in _resolved:
             router.register_model(ModelRoute(id=m, provider_name="ollama"))
     if "llamacpp" in prov_cfg:
         lc = prov_cfg["llamacpp"]
-        router.register_provider("llamacpp", LlamaCppProvider(base_url=lc.get("base_url", "http://localhost:8080"), fallback_url=lc.get("fallback_url"), timeout_s=lc.get("timeout_s", 300)))
+        router.register_provider("llamacpp", LlamaCppProvider(
+            base_url=lc.get("base_url", "http://localhost:8080"),
+            fallback_url=lc.get("fallback_url"), timeout_s=lc.get("timeout_s", 300),
+            max_tokens=lc.get("max_tokens", 2048), options=lc.get("options") or {},
+        ))
         for m in lc.get("models", []) or []:
             router.register_model(ModelRoute(id=m, provider_name="llamacpp"))
     if "cloud" in prov_cfg:
         cc = prov_cfg["cloud"]
         if cc.get("enabled"):
-            router.register_provider("cloud", CloudProvider(base_url=cc.get("base_url"), api_key=cc.get("api_key"), auth_style=cc.get("auth_style", "bearer")))
+            router.register_provider("cloud", CloudProvider(base_url=cc.get("base_url"), api_key=cc.get("api_key"), auth_style=cc.get("auth_style", "bearer"), strict_tools=cc.get("strict_tools", False)))
             for m in cc.get("models", []) or []:
                 router.register_model(ModelRoute(id=m, provider_name="cloud"))
     # DECK: proveedores BYOK del catalogo — se registran solo con key en env/.env.
@@ -301,6 +637,7 @@ def _build_router_from_config(cfg: dict):
 async def _probe_providers(timeout_s: float = 2.5) -> dict:
     """Live health probe — returns {name: {ok, models, status, error}} without mutating global router."""
     cfg = _state.get("config") or _load_config_safe()
+    router = None
     try:
         router = _build_router_from_config(cfg if isinstance(cfg, dict) else {})
         # Antes de health: sincroniza gratis vivos (usa cache TTL 5m, no golpea Zen cada segundo)
@@ -328,6 +665,10 @@ async def _probe_providers(timeout_s: float = 2.5) -> dict:
     except Exception as e:
         logger.warning(f"probe providers failed: {e}")
         return {"error": str(e)}
+    finally:
+        # Cerrar el router temporal (evita fuga de httpx/FDs: /api/health se poléa)
+        if router is not None:
+            _close_router(router)
 
 
 @app.get("/api/health")
@@ -401,7 +742,7 @@ async def providers_status():
             continue
         if not info.get("ok"):
             continue  # offline -> don't expose models
-        for mid in info.get("registered") or info.get("models") or []:
+        for mid in info.get("registered") or []:
             # Usar modelos CONFIGURADOS (registered) primero, no el catálogo completo
             # en vivo (evita exponer Claude Opus 5 / GPT-6 / etc. en el selector).
             # Deduplicate
@@ -466,7 +807,18 @@ async def cloud_free_models(force: bool = False, verify: bool = False):
 
 @app.get("/api/config")
 async def get_config():
-    cfg = _state.get("config") or _load_config_safe()
+    """Config para UI. Nunca expone secretos: enmascara api_key resueltas."""
+    import copy as _copy
+    try:
+        cfg = _copy.deepcopy(_state.get("config") or _load_config_safe())
+    except Exception:
+        cfg = dict(_state.get("config") or {})
+    try:
+        for _name, _p in (cfg.get("providers") or {}).items():
+            if isinstance(_p, dict) and _p.get("api_key"):
+                _p["api_key"] = _mask_api_key(str(_p.get("api_key")))
+    except Exception:
+        pass
     return JSONResponse(cfg)
 
 
@@ -499,14 +851,9 @@ async def get_providers_config():
         if "api_key" in m:
             raw_key = str(m["api_key"] or "")
             m["api_key_masked"] = _mask_api_key(raw_key)
-            # expose whether key is set via env ref
             m["_has_env_key"] = raw_key.startswith("${")
-            # Don't send raw expanded key if it's an env ref resolved; keep ref
-            # For UI editing, send empty if env-resolved, or masked
-            if raw_key.startswith("${"):
-                m["api_key"] = ""  # must re-enter to override env
-            else:
-                m["api_key"] = raw_key
+            # Nunca devolver la clave en claro: solo la referencia ${ENV} o vacio.
+            m["api_key"] = raw_key if raw_key.startswith("${") else ""
         masked[name] = m
     return {"providers": masked, "router": raw.get("router") or {}}
 
@@ -536,6 +883,8 @@ async def put_providers_config(request: Request):
             for k, v in pval.items():
                 if k == "api_key_masked" or k == "_has_env_key":
                     continue
+                if v is None:
+                    v = ""  # None == vacio (no clobber con null)
                 if k == "api_key" and (v == "" or v is None):
                     # Keep existing if was env ref or masked placeholder
                     if existing.get("api_key", "").startswith("${"):
@@ -571,8 +920,9 @@ async def put_providers_config(request: Request):
         if errs:
             raise HTTPException(status_code=400, detail={"validation_errors": errs})
         save_config(raw)
-        # Refresh cached config
+        # Refresh cached config + invalidar router (providers cambiaron)
         _state["config"] = _load_config_safe()
+        _invalidate_router()
         return {"ok": True, "providers": raw["providers"], "router": raw.get("router")}
     except HTTPException:
         raise
@@ -595,6 +945,19 @@ async def test_provider(request: Request):
     fallback_url = (body.get("fallback_url") or "").strip().rstrip("/") or None
     if not base_url:
         raise HTTPException(status_code=400, detail="base_url required")
+    # Anti-SSRF mínimo: solo http(s) y bloquear metadata cloud (sin IPs hardcodeadas).
+    # (No bloqueamos loopback/privado: el harness es local y prueba ollama/llamacpp locales.)
+    for _u in (base_url, fallback_url):
+        if not _u:
+            continue
+        if not _u.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail=f"base_url debe ser http(s): {_u}")
+        _host = (_urlparse(_u).hostname or "").lower()
+        _is_meta = (_host.endswith("metadata.google.internal")
+                    or _host.startswith("169.254.")      # link-local
+                    or _host.startswith("100.100.100."))  # alibaba metadata
+        if _is_meta:
+            raise HTTPException(status_code=400, detail="base_url no permitida (metadata cloud)")
     # Resolve env ref if api_key is ${VAR}
     if isinstance(api_key, str) and api_key.startswith("${"):
         import re, os
@@ -642,7 +1005,6 @@ async def test_provider(request: Request):
 # ---- Knowledge Graph (knowledge_graph.db via brain link) ----
 import sqlite3
 
-_GRAPH_CACHE: dict[str, Any] = {"ts": 0, "data": None}
 
 def _compute_pagerank(node_ids: list[int], edges: list[tuple[int,int]], damping: float = 0.85, iters: int = 18) -> dict[int, float]:
     n = len(node_ids)
@@ -684,10 +1046,11 @@ def _detect_communities(node_ids: list[int], edges: list[tuple[int,int]], iters:
     # init each node its own label
     label: dict[int, int] = {nid: nid for nid in node_ids}
     import random
-    # sort to make deterministic but shuffle each iter
+    # Semilla fija: comunidades reproducibles entre requests y sesiones.
+    rng = random.Random(20260101)
     for _ in range(iters):
         order = node_ids[:]
-        random.shuffle(order)
+        rng.shuffle(order)
         for nid in order:
             nbrs = adj.get(nid) or []
             if not nbrs:
@@ -709,7 +1072,17 @@ def _detect_communities(node_ids: list[int], edges: list[tuple[int,int]], iters:
     remap = {old: new for new, old in enumerate(sorted_comms)}
     return {nid: remap[lbl] for nid, lbl in label.items()}
 
-def _load_graph_data(limit: int = 300, q: str = "", category: str = "", community: str = "", min_importance: int = 0, include_isolated: bool = False) -> dict:
+def _load_graph_data(
+    limit: int = 300,
+    q: str = "",
+    category: str = "",
+    community: str = "",
+    min_importance: int = 0,
+    include_isolated: bool = False,
+    relation: str = "",
+    min_weight: float = 0.0,
+    centrality: str = "hybrid",
+) -> dict:
     from src.brain.link import brain_path
     db_path = brain_path() / "knowledge_graph.db"
     if not db_path.exists():
@@ -723,6 +1096,7 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
         rows = cur.fetchall()
         cur.execute("SELECT id, from_node, to_node, relation, weight, note FROM edges")
         edge_rows = cur.fetchall()
+        total_edge_count = len(edge_rows)
         con.close()
     except Exception as e:
         return {"nodes": [], "edges": [], "stats": {"total_nodes": 0, "total_edges": 0, "error": str(e)}, "communities": []}
@@ -734,8 +1108,14 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
     for r in edge_rows:
         try:
             u = int(r["from_node"]); v = int(r["to_node"])
+            rel = r["relation"] or "relates_to"
+            weight = float(r["weight"] or 0.5)
+            if relation and relation != "all" and rel != relation:
+                continue
+            if weight < min_weight:
+                continue
             raw_edges.append((u, v))
-            edge_objs.append({"id": r["id"], "source": u, "target": v, "relation": r["relation"] or "relates_to", "weight": r["weight"] or 0.5, "label": r["relation"] or "relates_to"})
+            edge_objs.append({"id": r["id"], "source": u, "target": v, "relation": rel, "weight": weight, "label": rel})
         except Exception:
             continue
 
@@ -752,8 +1132,8 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
     comm_map = _detect_communities(all_node_ids, raw_edges)
 
     # Prepare node list with computed fields
-    PALETTE = ["#8b5cf6","#06b6d4","#f59e0b","#10b981","#ef4444","#ec4899","#6366f1","#84cc16","#14b8a6","#f97316","#a855f7","#0ea5e9"]
-    CATEGORY_COLOR: dict[str,str] = {"general":"#6b7280","architecture":"#8b5cf6","concept":"#06b6d4","deploy":"#f59e0b","fix":"#10b981","fact":"#ec4899","lesson":"#84cc16"}
+    PALETTE = ["#4C9DFF", "#3DDC84", "#FFC857", "#61C5D9", "#FF756D", "#A7B8CC", "#7AABFF", "#66C2A5", "#F2A65A", "#83B8FF", "#C5A3FF", "#6DD3CE"]
+    CATEGORY_COLOR: dict[str,str] = {"general":"#788493","architecture":"#4C9DFF","concept":"#61C5D9","deploy":"#FFC857","fix":"#3DDC84","fact":"#F2A65A","lesson":"#A7B8CC"}
 
     nodes_tmp: list[dict] = []
     for r in rows:
@@ -814,7 +1194,12 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
             filtered = [n for n in filtered if n["degree"] > 0]
 
     # Sort by pagerank+degree combo, take top limit
-    filtered.sort(key=lambda n: (n["pagerank"]*100 + n["degree"]*0.15 + n["importance"]*0.02), reverse=True)
+    if centrality == "degree":
+        filtered.sort(key=lambda n: (n["degree"], n["pagerank"], n["importance"]), reverse=True)
+    elif centrality == "pagerank":
+        filtered.sort(key=lambda n: (n["pagerank"], n["degree"], n["importance"]), reverse=True)
+    else:
+        filtered.sort(key=lambda n: (n["pagerank"]*100 + n["degree"]*0.15 + n["importance"]*0.02), reverse=True)
     visible_nodes = filtered[:limit]
     visible_ids = set(n["id"] for n in visible_nodes)
 
@@ -827,13 +1212,16 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
     all_categories = sorted(set(r["category"] or "general" for r in rows))
     stats = {
         "total_nodes": len(rows),
-        "total_edges": len(edge_objs),
+        "total_edges": total_edge_count,
+        "filtered_edges": len(edge_objs),
         "visible_nodes": len(visible_nodes),
         "visible_edges": len(visible_edges),
         "communities": len(set(comm_map.values())) if comm_map else 0,
-        "avg_degree": round(sum(deg.values())/len(all_node_ids), 2) if all_node_ids else 0,
+        "avg_degree": round(sum(deg.values())/(2*len(all_node_ids)), 2) if all_node_ids else 0,
         "max_pagerank": max(pr_map.values()) if pr_map else 0,
         "categories": all_categories,
+        "relations": sorted({str(r["relation"] or "relates_to") for r in edge_rows}),
+        "centrality": centrality if centrality in ("hybrid", "degree", "pagerank") else "hybrid",
     }
     # community summary
     from collections import Counter
@@ -843,11 +1231,31 @@ def _load_graph_data(limit: int = 300, q: str = "", category: str = "", communit
     return {"nodes": visible_nodes, "edges": visible_edges, "stats": stats, "communities": communities}
 
 @app.get("/api/graph")
-async def graph(limit: int = 300, q: str = "", category: str = "", community: str = "", min_importance: int = 0, include_isolated: str = "false"):
+@app.get("/api/knowledge/graph")
+async def graph(
+    limit: int = 300,
+    q: str = "",
+    search: str = "",
+    category: str = "",
+    community: str = "",
+    min_importance: int = 0,
+    include_isolated: str = "false",
+    relation: str = "",
+    min_weight: float = 0.0,
+    centrality: str = "hybrid",
+):
     inc = include_isolated.lower() in ("1","true","yes")
     # clamp limit
     limit = max(10, min(2000, limit))
-    data = _load_graph_data(limit=limit, q=q.strip(), category=category.strip(), community=community.strip(), min_importance=min_importance, include_isolated=inc)
+    min_weight = max(0.0, min(1.0, min_weight))
+    if centrality not in ("hybrid", "degree", "pagerank"):
+        centrality = "hybrid"
+    data = _load_graph_data(
+        limit=limit, q=(q or search).strip(), category=category.strip(),
+        community=community.strip(), min_importance=min_importance,
+        include_isolated=inc, relation=relation.strip(), min_weight=min_weight,
+        centrality=centrality,
+    )
     return JSONResponse(data)
 
 @app.post("/api/embed")
@@ -956,6 +1364,7 @@ async def graph_node(node_id: int):
                 "direction": "out" if int(r["from_node"]) == node_id else "in"
             })
         con.close()
+        # GET no debe mutar: se quitó el touch(node_id) — cross-site <img>/crawlers inflaban access_count.
         return JSONResponse({
             "id": row["id"], "title": row["title"], "category": row["category"], "source": row["source"], "importance": row["importance"],
             "tags": row["tags"], "content": row["content"], "content_hash": row["content_hash"], "created_at": row["created_at"], "updated_at": row["updated_at"], "access_count": row["access_count"],
@@ -963,6 +1372,129 @@ async def graph_node(node_id: int):
         })
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---- Método OPCODE: vía única de escritura de conocimiento ----
+@app.post("/api/learn/direct")
+async def learn_direct(request: Request):
+    """Vía ÚNICA de escritura de conocimiento (paridad OPCODE v2).
+
+    Body: {content, topic?, category?, tags?, type?, importance?}
+    -> 4 destinos: grafo(FTS5+entities+auto-edges) + RAG + markdown
+       + observation (best-effort). topic -> UPSERT (revision_count++).
+    """
+    body = await _json_body(request)
+    content = (body.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content required")
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        res = await asyncio.to_thread(
+            lambda: get_knowledge_memory().learn(
+                content,
+                topic_key=body.get("topic") or body.get("topic_key") or "",
+                category=body.get("category") or "general",
+                tags=body.get("tags") or [],
+                title=body.get("title") or "",
+                source=body.get("source") or "api",
+                importance=int(body.get("importance") or 5),
+            )
+        )
+        return JSONResponse(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/graph/status")
+async def graph_status():
+    """Estado del grafo OPCODE: nodos, aristas, topic/nodos, FTS, entidades."""
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        st = await asyncio.to_thread(lambda: get_knowledge_memory().status())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        from src.core import rag as _rag
+        st["rag_chunks"] = _rag.stats().get("chunks", 0)
+    except Exception:
+        st["rag_chunks"] = -1
+    return JSONResponse(st)
+
+
+@app.get("/api/graph/search")
+async def graph_search(q: str, limit: int = 20):
+    """Búsqueda FTS5 (bm25) sobre los nodos del grafo."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q required")
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        results = await asyncio.to_thread(
+            lambda: get_knowledge_memory().fts_search(
+                q.strip(), max(1, min(100, limit))
+            )
+        )
+        return {"query": q, "results": results, "count": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/graph/entities")
+async def graph_entities(limit: int = 30):
+    """Top entidades extraídas (mención + nodos que las comparten)."""
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        ents = await asyncio.to_thread(
+            lambda: get_knowledge_memory().get_entities(max(1, min(200, limit)))
+        )
+        return {"entities": ents, "count": len(ents)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/graph/related/{node_id}")
+async def graph_related(node_id: int, limit: int = 30):
+    """Vecinos de un nodo (paridad find_related v2)."""
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        res = await asyncio.to_thread(
+            lambda: get_knowledge_memory().find_related(
+                node_id, max(1, min(200, limit))
+            )
+        )
+        if "error" in res:
+            raise HTTPException(status_code=404, detail=res["error"])
+        return JSONResponse(res)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/graph/path/{node_a}/{node_b}")
+async def graph_path(node_a: int, node_b: int, max_depth: int = 4):
+    """Ruta BFS mínima entre dos nodos (sin dirección, hasta 12 saltos)."""
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        return await asyncio.to_thread(
+            lambda: get_knowledge_memory().find_path(
+                node_a, node_b, max_depth=max(1, min(12, max_depth))
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/graph/maintain")
+async def graph_maintain():
+    """brain_guard-lite: dedupe hashes, self-loops, tope MAX_EDGES."""
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        res = await asyncio.to_thread(lambda: get_knowledge_memory().maintain())
+        return JSONResponse(res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -991,7 +1523,7 @@ async def list_sessions(limit: int = 50):
 
 @app.post("/api/sessions")
 async def create_session(request: Request):
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = await _json_body(request, required=False)
     project = body.get("project", "default") if isinstance(body, dict) else "default"
     parent_id = body.get("parent_id") if isinstance(body, dict) else None
     slog = _session_log()
@@ -1015,7 +1547,7 @@ async def get_messages(session_id: str, limit: int = 100, offset: int = 0):
 
 @app.post("/api/sessions/{session_id}/messages")
 async def append_message(session_id: str, request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     role = body.get("role", "user")
     content = body.get("content", "")
     if not content:
@@ -1031,7 +1563,7 @@ async def append_message(session_id: str, request: Request):
 async def search_session(session_id: str, q: str, limit: int = 20):
     slog = _session_log()
     try:
-        results = slog.search(q, limit=limit)
+        results = slog.search_session(session_id, q, limit=limit)
         out = []
         for m in results:
             if hasattr(m, "role"):
@@ -1057,7 +1589,7 @@ async def learning_stats():
 @app.post("/api/learning/record")
 async def learning_record(request: Request):
     """Registro manual de un turno (en v2 este endpoint daba 500)."""
-    body = await request.json()
+    body = await _json_body(request)
     task = body.get("task") or ""
     if not task:
         raise HTTPException(status_code=400, detail="task required")
@@ -1100,7 +1632,7 @@ async def skill_opt_heldout():
 
 @app.post("/api/skill-opt/heldout")
 async def skill_opt_set_heldout(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     cases = body.get("cases") or []
     from src.core.learning_service import get_learning_service
     try:
@@ -1112,7 +1644,7 @@ async def skill_opt_set_heldout(request: Request):
 
 @app.post("/api/skill-opt/propose")
 async def skill_opt_propose(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     desc = body.get("description") or ""
     if not desc:
         raise HTTPException(status_code=400, detail="description required")
@@ -1131,7 +1663,7 @@ async def skill_opt_validate(request: Request):
     Fail-closed: si el provider no responde, los casos fallan y el cambio se
     rechaza (no se persiste).
     """
-    body = await request.json()
+    body = await _json_body(request)
     change_id = body.get("change_id") or ""
     if not change_id:
         raise HTTPException(status_code=400, detail="change_id required")
@@ -1166,11 +1698,30 @@ async def dream_run():
 
 
 # ---- FS (Scope-guarded) ----
+def _rel(p) -> str:
+    """Ruta relativa al proyecto (POSIX) o absoluta si está fuera (no lanza)."""
+    try:
+        return str(Path(p).relative_to(_PROJECT_ROOT)).replace("\\", "/")
+    except Exception:
+        return str(p).replace("\\", "/")
+
+
 def _get_scope():
     from src.core.config import load_config
     # Fase 8: delega en _build_scope (canonico) — antes habia dos copias de la
     # construccion de Scope que podian divergir.
     return _build_scope(load_config())
+
+async def _json_body(request: Request, required: bool = True):
+    """Parsea el body JSON del request. Body invalido -> 400 (no 500).
+    required=False devuelve {} si el body falta o es invalido (endpoints opcionales)."""
+    try:
+        return await request.json()
+    except Exception:
+        if required:
+            raise HTTPException(status_code=400, detail="invalid json")
+        return {}
+
 
 @app.get("/api/fs/list")
 async def fs_list(path: str = "./workspace"):
@@ -1192,7 +1743,7 @@ async def fs_list(path: str = "./workspace"):
                 continue
             entries.append({
                 "name": child.name,
-                "path": str(child.relative_to(_PROJECT_ROOT)).replace("\\", "/"),
+                "path": _rel(child),
                 "type": "dir" if child.is_dir() else "file",
                 "size": child.stat().st_size if child.is_file() else 0,
             })
@@ -1243,10 +1794,9 @@ async def fs_write(request: Request):
     scope = _get_scope()
     try:
         p = scope.check_path(path)
-        # ensure parent exists
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # scope check for write (mutating)
+        # auth de escritura PRIMERO, luego crear directorios (no crear dirs si se deniega)
         scope.check_tool("write_file", {"path": path, "content": content})
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return {"ok": True, "path": path, "size": len(content.encode("utf-8"))}
     except ScopeDenied as e:
@@ -1280,6 +1830,51 @@ def _blocked_command(cmd: str) -> str | None:
     return None
 
 
+# Fase 11: jail real de exec (best-effort, no sandbox de SO). En modo no-'full'
+# se prohibe encadenar/redirigir/sustituir (permite escapar a otro comando o a
+# una ruta externa) y se valida que cada token tipo-ruta caiga dentro de
+# allowed_roots resolviendo contra el cwd. Con permission='full' se permite
+# shell completo (el usuario lo activa explicitamente en Ajustes -> Permisos).
+_EXEC_META = re.compile(r"[;&|`<>]|\$\(|\$\{|\r|\n")
+_EXEC_PATHY = re.compile(r"[\\/]|^[A-Za-z]:")
+
+
+def _exec_jail(cmd: str, cwd_p, scope) -> str | None:
+    """Motivo de bloqueo del comando, o None si esta permitido en el jail."""
+    from src.core.scope import ScopeDenied
+    perm = getattr(scope.cfg, "permission", "workspace_write") or "workspace_write"
+    if perm == "full":
+        return None
+    m = _EXEC_META.search(cmd or "")
+    if m:
+        return (
+            f"encadenamiento/redireccion/sustitucion bloqueado en modo jail ({m.group(0)!r}). "
+            f"Activa Ajustes -> Permisos -> 'full' para shell completo."
+        )
+    try:
+        import shlex
+        toks = shlex.split(cmd or "", posix=False)
+    except Exception:
+        toks = (cmd or "").split()
+    for raw in toks:
+        t = raw.strip("\"'")
+        if not t or t.startswith("-"):
+            continue
+        if not (_EXEC_PATHY.search(t) or t.startswith("..")):
+            continue
+        p = Path(t)
+        if not p.is_absolute():
+            p = cwd_p / p
+        try:
+            scope.check_path(p)
+        except ScopeDenied:
+            return (
+                f"ruta fuera del jail: {t!r} (permitidas: {scope.cfg.allowed_roots}). "
+                f"Activa 'full' para acceso total a la PC."
+            )
+    return None
+
+
 @app.post("/api/exec")
 async def exec_cmd(request: Request):
     from src.core.scope import ScopeDenied
@@ -1290,7 +1885,10 @@ async def exec_cmd(request: Request):
         raise HTTPException(status_code=400, detail="invalid json")
     command = (body.get("command") or body.get("cmd") or "").strip()
     cwd = (body.get("cwd") or "./workspace").strip() or "./workspace"
-    timeout_s = int(body.get("timeout", 15))
+    try:
+        timeout_s = int(body.get("timeout", 15))
+    except (TypeError, ValueError):
+        timeout_s = 15
     timeout_s = max(1, min(60, timeout_s))
     if not command:
         raise HTTPException(status_code=400, detail="command required")
@@ -1299,6 +1897,7 @@ async def exec_cmd(request: Request):
         raise HTTPException(status_code=403, detail=f"comando bloqueado por política ({_blk})")
     scope = _get_scope()
     try:
+        scope.check_tool("exec", {"command": command})
         cwd_p = scope.check_path(cwd)
         if not cwd_p.exists():
             cwd_p.mkdir(parents=True, exist_ok=True)
@@ -1306,6 +1905,9 @@ async def exec_cmd(request: Request):
             raise HTTPException(status_code=400, detail="cwd debe ser directorio dentro de allowed_roots")
     except ScopeDenied as e:
         raise HTTPException(status_code=403, detail=str(e))
+    _jail = _exec_jail(command, cwd_p, scope)
+    if _jail is not None:
+        raise HTTPException(status_code=403, detail=_jail)
     try:
         # ejecutar con shell — cwd jailado
         proc = await asyncio.to_thread(
@@ -1316,7 +1918,7 @@ async def exec_cmd(request: Request):
         # truncar salida gigante (20k chars)
         if len(out) > 20000:
             out = out[:20000] + "\n... [truncado]"
-        return {"ok": proc.returncode == 0, "exit_code": proc.returncode, "output": out, "cwd": str(cwd_p.relative_to(_PROJECT_ROOT)).replace("\\","/")}
+        return {"ok": proc.returncode == 0, "exit_code": proc.returncode, "output": out, "cwd": _rel(cwd_p)}
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail=f"timeout {timeout_s}s")
     except Exception as e:
@@ -1333,15 +1935,15 @@ async def slash_list():
 @app.post("/api/slash")
 async def slash_exec(request: Request):
     from src.core.slash_commands import registry as slash_reg
-    body = await request.json()
+    body = await _json_body(request)
     raw = body.get("command") or body.get("raw") or ""
     ctx = body.get("ctx") or {}
     res = await slash_reg.execute(raw, ctx)
     if res.data.get("action") == "set_permission":
         perm = res.data.get("permission")
         try:
-            from src.core.config import load_config, save_config
-            cfg = load_config()
+            from src.core.config import load_raw_config, save_config
+            cfg = load_raw_config()
             cfg.setdefault("scope", {})["permission"] = perm
             save_config(cfg)
         except Exception as e:
@@ -1349,8 +1951,8 @@ async def slash_exec(request: Request):
     if res.data.get("action") == "set_plan_mode":
         on = res.data.get("on")
         try:
-            from src.core.config import load_config, save_config
-            cfg = load_config()
+            from src.core.config import load_raw_config, save_config
+            cfg = load_raw_config()
             if on is True:
                 cfg.setdefault("scope", {})["permission"] = "read_only"
             elif on is False:
@@ -1370,7 +1972,7 @@ async def todos_get(session_id: str = ""):
 
 @app.post("/api/todos")
 async def todos_post(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     sid = body.get("session_id") or body.get("sessionId") or ""
     todos = body.get("todos")
     if not sid or todos is None:
@@ -1390,12 +1992,12 @@ async def permission_get():
 
 @app.put("/api/permission")
 async def permission_put(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     perm = (body.get("permission") or "").lower()
     if perm not in ("read_only", "workspace_write", "full"):
         raise HTTPException(status_code=400, detail="permission must be read_only|workspace_write|full")
-    from src.core.config import load_config, save_config
-    cfg = load_config()
+    from src.core.config import load_raw_config, save_config
+    cfg = load_raw_config()
     cfg.setdefault("scope", {})["permission"] = perm
     save_config(cfg)
     return {"ok": True, "permission": perm}
@@ -1446,13 +2048,31 @@ def _upload_path(file_id: str) -> Path | None:
 @app.post("/api/upload")
 async def upload_post(file: UploadFile = File(...)):
     """Sube un adjunto (imagen o archivo) -> {id, url, name, mime, is_image, size}."""
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="archivo vacio")
-    if len(data) > _UPLOADS_MAX_BYTES:
-        raise HTTPException(status_code=413, detail=f"archivo muy grande (max {_UPLOADS_MAX_BYTES} bytes)")
     import mimetypes as _mt
     from uuid import uuid4
+    limit = _UPLOADS_MAX_BYTES
+    # Chequeo temprano de tamaño si el framework lo expone (sin bufferizar todo).
+    try:
+        if getattr(file, "size", None) and int(file.size) > limit:
+            raise HTTPException(status_code=413, detail=f"archivo muy grande (max {limit} bytes)")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    # Leer por chunks y abortar temprano al pasar el limite (evita presion de memoria).
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=f"archivo muy grande (max {limit} bytes)")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    if not data:
+        raise HTTPException(status_code=400, detail="archivo vacio")
     fid = uuid4().hex[:8]
     fname = _safe_filename(file.filename or "archivo")
     (_uploads_dir() / f"{fid}_{fname}").write_bytes(data)
@@ -1542,7 +2162,15 @@ async def voice_status():
 @app.post("/api/voice/stt")
 async def voice_stt(request: Request):
     """Transcribe audio crudo del navegador (webm/ogg/wav) -> {text, ...}."""
+    try:
+        _cl = int(request.headers.get("content-length", "0") or 0)
+    except Exception:
+        _cl = 0
+    if _cl > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="audio demasiado grande (max 25MB)")
     audio = await request.body()
+    if len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="audio demasiado grande (max 25MB)")
     if not audio:
         raise HTTPException(status_code=400, detail="audio required")
     ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -1578,7 +2206,7 @@ async def voice_stt(request: Request):
 @app.post("/api/voice/tts")
 async def voice_tts(request: Request):
     """Sintetiza voz (Piper local) -> WAV bytes."""
-    body = await request.json()
+    body = await _json_body(request)
     text = str(body.get("text") or "").strip()[:4000]
     if not text:
         raise HTTPException(status_code=400, detail="text required")
@@ -1618,6 +2246,8 @@ def _read_env_file() -> dict[str, str]:
 
 def _write_env_key(key: str, value: str) -> None:
     """Upsert (o borra si value vacio) de KEY=value en el .env raiz."""
+    # Sanitizar: sin CR/LF (evita inyeccion de lineas/vars en .env) + cap de longitud.
+    value = (value or "").replace("\r", "").replace("\n", "").strip()[:8192]
     lines = _ENV_FILE.read_text(encoding="utf-8-sig").splitlines() if _ENV_FILE.exists() else []
     out = [ln for ln in lines if not ln.strip().startswith(f"{key}=")]
     if value:
@@ -1670,7 +2300,7 @@ async def keys_get():
 @app.put("/api/keys")
 async def keys_put(request: Request):
     """Guarda/borra una API key en .env (raiz) + os.environ (efectivo al instante)."""
-    body = await request.json()
+    body = await _json_body(request)
     env_name = str(body.get("env") or "")
     value = str(body.get("value") or "").strip()
     if not _ENV_NAME_RE.match(env_name):
@@ -1702,6 +2332,89 @@ def _build_router(cfg: dict):
     return _build_router_from_config(cfg)
 
 
+_CLOSE_TASKS: set = set()
+_RETIRED_ROUTERS: list = []
+
+
+def _close_router(router) -> None:
+    """Cierra los AsyncClient httpx de los providers (evita fuga de FDs)."""
+    try:
+        providers = router.providers()
+    except Exception:
+        return
+    for p in providers.values():
+        close = getattr(p, "aclose", None) or getattr(p, "close", None)
+        if close is None:
+            continue
+        try:
+            res = close()
+            if asyncio.iscoroutine(res):
+                try:
+                    loop = asyncio.get_running_loop()
+                    _t = loop.create_task(res)
+                    _CLOSE_TASKS.add(_t)
+                    _t.add_done_callback(_CLOSE_TASKS.discard)
+                except RuntimeError:
+                    # Sin loop en ejecucion: cerrar sincronicamente (evita coroutine sin await).
+                    try:
+                        asyncio.run(res)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+def _schedule_router_close(router, delay_s: float = 30.0) -> None:
+    """Cierra un router DIFERIDO: no cerrarlo mientras requests en vuelo lo usan."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _close_router(router)
+        return
+
+    async def _later():
+        await asyncio.sleep(delay_s)
+        _close_router(router)
+
+    try:
+        _t = loop.create_task(_later())
+        _CLOSE_TASKS.add(_t)
+        _t.add_done_callback(_CLOSE_TASKS.discard)
+    except Exception:
+        pass
+
+
+def _get_router(cfg: dict):
+    """Router cacheado por firma de config (no reconstruir por request)."""
+    import hashlib as _hl
+    import json as _j
+    try:
+        sig = _hl.md5(_j.dumps(
+            {"p": (cfg or {}).get("providers", {}), "r": (cfg or {}).get("router", {})},
+            sort_keys=True, default=str,
+        ).encode()).hexdigest()
+    except Exception:
+        sig = ""
+    cached = _state.get("router")
+    if cached is not None and _state.get("router_sig") == sig:
+        return cached
+    if cached is not None:
+        # RETIRAR sin cerrar: cerrar aqui mataba requests en vuelo (flap de firma).
+        # Los routers retirados se cierran al shutdown.
+        _RETIRED_ROUTERS.append(cached)
+    router = _build_router(cfg)
+    _state["router"] = router
+    _state["router_sig"] = sig
+    return router
+
+
+def _invalidate_router() -> None:
+    r = _state.pop("router", None)
+    _state.pop("router_sig", None)
+    if r is not None:
+        _RETIRED_ROUTERS.append(r)
+
+
 def _full_access_roots() -> tuple[str, ...]:
     """Raices para permission=full: todas las unidades existentes (Windows) o / (POSIX).
     Sin letras de unidad hardcodeadas — se detectan en runtime."""
@@ -1720,35 +2433,105 @@ def _full_access_roots() -> tuple[str, ...]:
     return tuple(roots) or ("/",)
 
 
-def _build_scope(cfg: dict):
+def _build_scope(cfg: dict, agent_id: str | None = None):
     """Scope jail desde config.scope (allowed_roots + deny_patterns + permission).
 
     Fase DECK: antes no se pasaba permission= y ScopeConfig quedaba en el default
     workspace_write -> 'full' no liberaba nada. Con permission=full se anaden
     todas las unidades y la red.
+
+    Aislamiento por ayudante: si agent_id, su workspace propio reemplaza ./workspace
+    como raiz escribible (./data sigue compartido para sesiones/spill/cerebro).
     """
     from src.core.scope import Scope, ScopeConfig
     scope_cfg = cfg.get("scope", {})
     permission = str(scope_cfg.get("permission", "workspace_write"))
-    roots = tuple(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
+    roots = list(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
+    if agent_id:
+        try:
+            ws = _agent_registry().resolve(agent_id).get("workspace_abs")
+            if ws and ws not in roots:
+                roots.insert(0, ws)
+        except Exception:
+            pass
+    roots = tuple(roots)
     allow_net = bool(scope_cfg.get("allow_network", False))
+    deny = tuple(scope_cfg.get("deny_patterns", ["**/.env", "**/*.key"]))
     if permission == "full":
         roots = roots + tuple(r for r in _full_access_roots() if r not in roots)
         allow_net = True
+        # Acceso total: el usuario lo pidió -> sin deny por defecto (configurable).
+        deny = tuple(scope_cfg.get("deny_patterns_full", []))
     return Scope(ScopeConfig(
         allowed_roots=roots,
-        deny_patterns=tuple(scope_cfg.get("deny_patterns", ["**/.env"])),
+        deny_patterns=deny,
         max_read_bytes=int(scope_cfg.get("max_read_bytes", 1_048_576)),
         allow_network=allow_net,
-        allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)),
+        allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)) or permission == "full",
         permission=permission,
     ), project_root=_PROJECT_ROOT)
 
 
-def _build_registry(scope, session_id: str):
+async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None, cfg: dict, router) -> str:
+    """Ejecuta un ayudante/gema como sub-loop aislado y devuelve su salida (JSON).
+
+    El LLM se asigna automáticamente (model_assign) según lo disponible en la PC,
+    salvo que el ayudante tenga un modelo explícito. El sub-loop NO recibe las tools
+    de delegación (evita recursión) y corre en el scope del ayudante (workspace propio).
+    """
+    import json as _j
+    import uuid as _uuid
+    from src.core.agent_loop import AgentLoop
+    from src.core.model_assign import assign_model
+    try:
+        from src.core.gema_profiles import system_prompt_for_gema, hint_for_gema
+    except Exception:
+        def system_prompt_for_gema(_g):  # type: ignore
+            return ""
+        def hint_for_gema(_g):  # type: ignore
+            return None
+    agent = _agent_registry().resolve(agent_id) if agent_id else None
+    use_gema = (gema or (agent or {}).get("gema") or "").strip()
+    sys_prompt = (agent or {}).get("system_prompt") or ""
+    if use_gema and not sys_prompt:
+        sys_prompt = system_prompt_for_gema(use_gema)
+    assign = assign_model(router, gema=use_gema, explicit=(agent or {}).get("model") or None, overrides=_assign_overrides(cfg))
+    model = assign.get("model") or None
+    hint = hint_for_gema(use_gema) if use_gema else None
+    sid = f"helper-{use_gema or (agent or {}).get('id') or 'x'}-{_uuid.uuid4().hex[:8]}"
+    slog = _session_log()
+    try:
+        slog.create_session(project=f"helper:{use_gema or 'agent'}", session_id=sid)
+    except Exception:
+        pass
+    scope = _build_scope(cfg, agent_id)
+    sub_reg = _build_registry(scope, sid, cfg, router=router, helpers=False)
+    loop = AgentLoop(
+        provider_router=router, tool_registry=sub_reg, scope=scope, session_log=slog,
+        event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
+        distill_hook=_build_distill_hook(cfg),
+        max_iterations=int((cfg.get("agent_loop", {}) or {}).get("max_iterations", 25)),
+    )
+    res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None)
+    return _j.dumps({
+        "gema": use_gema, "agent": (agent or {}).get("id"),
+        "model": model, "provider": assign.get("provider"), "assign_reason": assign.get("reason"),
+        "success": res.success, "output": res.final_output,
+    }, ensure_ascii=False)
+
+
+def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True):
     """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
     from src.core.tool_registry import ToolRegistry
     registry = ToolRegistry()
+
+    def _tool_call_log(rec: dict) -> None:
+        try:
+            _event_store().append_event(kind="tool_call", data=rec, session_id=session_id)
+        except Exception:
+            pass
+
+    registry.call_log = _tool_call_log
     # --- Real tools for AgentLoop (Scope-guarded, no mock) ---
     def echo_tool(text: str) -> str:
         return text
@@ -1788,7 +2571,7 @@ def _build_registry(scope, session_id: str):
                 scope.check_path(str(child))
             except Exception:
                 continue
-            entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": str(child.relative_to(_PROJECT_ROOT)).replace("\\", "/")})
+            entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
         return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
 
     def exec_tool(command: str, cwd: str = "./workspace", timeout: int = 15) -> str:
@@ -1800,11 +2583,15 @@ def _build_registry(scope, session_id: str):
         _blk = _blocked_command(cmd)
         if _blk is not None:
             raise PermissionError(f"comando bloqueado por politica ({_blk})")
+        scope.check_tool("exec", {"command": cmd})
         cwd_p = scope.check_path(cwd or "./workspace")
         if not cwd_p.exists():
             cwd_p.mkdir(parents=True, exist_ok=True)
         if not cwd_p.is_dir():
             raise NotADirectoryError("cwd debe ser directorio dentro de allowed_roots")
+        _jail = _exec_jail(cmd, cwd_p, scope)
+        if _jail is not None:
+            raise PermissionError(_jail)
         timeout = max(1, min(60, int(timeout)))
         proc = _sp.run(cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1832,21 +2619,191 @@ def _build_registry(scope, session_id: str):
     def web_fetch(url: str, timeout: int = 12) -> str:
         """Fetch URL and return text (Scope network gate applies). Truncates to 15k."""
         scope.check_tool("web_fetch", {"url": url})
-        import urllib.request, re
+        # NO tragar ImportError (fail closed) + validar CADA hop de redirect (evita SSRF via 302).
+        from src.tools.web_fetch import is_safe_url
+        import urllib.request, urllib.error, urllib.parse, re
         timeout = max(2, min(30, int(timeout)))
-        req = urllib.request.Request(url, headers={"User-Agent": "Nexus-v3/1.0 web_fetch"})
+        _opener = urllib.request.build_opener()
+        _opener.add_handler(type("_NoRedir", (urllib.request.HTTPRedirectHandler,), {
+            "redirect_request": lambda self, *a, **k: None}))
+        current = url
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data = r.read(15000)
-                ctype = r.headers.get("content-type","")
-                text = data.decode("utf-8", errors="replace")
-                if "text/html" in ctype:
-                    text = re.sub(r"<[^>]+>", " ", text)
-                    text = re.sub(r"\s+", " ", text)
-                return text[:15000]
+            for _hop in range(6):
+                if not is_safe_url(current):
+                    raise PermissionError(f"URL bloqueada (SSRF/metadata/privada): {current}")
+                req = urllib.request.Request(current, headers={"User-Agent": "Nexus-v3/1.0 web_fetch"})
+                try:
+                    with _opener.open(req, timeout=timeout) as r:
+                        data = r.read(15000)
+                        ctype = r.headers.get("content-type", "")
+                        text = data.decode("utf-8", errors="replace")
+                        if "text/html" in ctype:
+                            text = re.sub(r"<[^>]+>", " ", text)
+                            text = re.sub(r"\s+", " ", text)
+                        return text[:15000]
+                except urllib.error.HTTPError as he:
+                    if he.code in (301, 302, 303, 307, 308) and he.headers.get("Location"):
+                        current = urllib.parse.urljoin(current, he.headers["Location"])
+                        continue
+                    raise
+            raise RuntimeError("web_fetch: demasiados redirects")
+        except (PermissionError, RuntimeError):
+            raise
         except Exception as e:
             raise RuntimeError(f"web_fetch failed: {e}")
     registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
+
+    # --- learn (Método OPCODE: vía única de escritura de conocimiento) ---
+    async def learn_tool(content: str, topic_key: str = "", category: str = "general",
+                         tags: str = "") -> str:
+        """Persist knowledge in the knowledge graph (OPCODE method).
+
+        Use AFTER learning something durable: findings, decisions, preferences,
+        lessons. content = the knowledge (1-3 sentences or short block);
+        topic_key = stable slug for evolving topics (e.g. 'auth/jwt-rotation')
+        enables UPSERT (revision++); tags = comma-separated."""
+        import json as _j
+        from src.core.knowledge_memory import get_knowledge_memory
+        mem = ((cfg or {}).get("memory", {}) or {})
+        if not mem.get("agent_write_enabled", True):
+            return _j.dumps({"ok": False, "skipped": "memory.agent_write_enabled=false"}, ensure_ascii=False)
+        _c = (content or "").strip()
+        _min = int(mem.get("learn_min_chars", 1))
+        if len(_c) < _min:
+            raise ValueError(f"content demasiado corto para learn (min {_min} caracteres)")
+        tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        res = await asyncio.to_thread(
+            lambda: get_knowledge_memory().learn(
+                content.strip(), topic_key=(topic_key or "").strip(),
+                category=(category or "general").strip(), tags=tag_list,
+                title=content.strip().split("\n")[0][:80], source="agent",
+            )
+        )
+        return _j.dumps(res, ensure_ascii=False)
+    registry.register_function(
+        learn_tool, name="learn",
+        description="Persist knowledge in the knowledge graph (OPCODE: vía única de escritura). Use after learning something durable: findings, decisions, lessons.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "content": {"type": "string", "description": "The knowledge to persist (short block)."},
+            "topic_key": {"type": "string", "description": "Stable slug for evolving topics (UPSERT). Empty = append with dedupe."},
+            "category": {"type": "string", "description": "general|concept|lesson|architecture|fix|fact"},
+            "tags": {"type": "string", "description": "Comma-separated tags."},
+        }, "required": ["content"], "additionalProperties": False},
+    )
+
+    async def recall_tool(query: str, limit: int = 5) -> str:
+        """Search prior knowledge in the local graph before answering from history."""
+        import json as _j
+        from src.core.knowledge_memory import get_knowledge_memory
+        hits = await asyncio.to_thread(
+            lambda: get_knowledge_memory().fts_search(
+                query, limit=max(1, min(10, int(limit)))
+            )
+        )
+        return _j.dumps({"query": query, "results": hits}, ensure_ascii=False)
+    registry.register_function(
+        recall_tool, name="recall",
+        description="Search the local knowledge graph with FTS5 before answering questions about prior decisions, preferences, lessons, or project history.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "query": {"type": "string", "description": "Keywords for prior knowledge."},
+            "limit": {"type": "integer", "description": "Maximum results (1-10)."},
+        }, "required": ["query"], "additionalProperties": False},
+    )
+
+    def mcp_list(server: str = "") -> str:
+        """Lista los servidores MCP del bundle y sus tools (server vacío = solo servidores)."""
+        import json as _j
+        from src.core.mcp_client import get_mcp_client
+        cli = get_mcp_client(_PROJECT_ROOT)
+        if not server:
+            return _j.dumps({"servers": cli.list_servers()}, ensure_ascii=False)
+        return _j.dumps({"server": server, "tools": cli.list_tools(server)}, ensure_ascii=False)
+    registry.register_function(
+        mcp_list, name="mcp_list",
+        description="Lista servidores MCP del bundle portable y sus tools. server='' lista servidores; server='<nombre>' lista sus tools (arranca el servidor just-in-time).",
+        category="mcp",
+        parameters={"type": "object", "properties": {
+            "server": {"type": "string", "description": "Nombre del servidor MCP (vacío = listar servidores)."},
+        }, "required": [], "additionalProperties": False},
+    )
+
+    async def mcp_call(server: str, tool: str, arguments: dict | None = None) -> str:
+        """Llama una tool de un servidor MCP del bundle (stdio, just-in-time)."""
+        import json as _j
+        from src.core.mcp_client import get_mcp_client
+        cli = get_mcp_client(_PROJECT_ROOT)
+        res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
+        return _j.dumps(res, ensure_ascii=False)
+    registry.register_function(
+        mcp_call, name="mcp_call",
+        description="Llama una tool de un servidor MCP del bundle. Usa mcp_list para descubrir server/tool/args.",
+        category="mcp",
+        parameters={"type": "object", "properties": {
+            "server": {"type": "string", "description": "Nombre del servidor MCP."},
+            "tool": {"type": "string", "description": "Nombre de la tool."},
+            "arguments": {"type": "object", "description": "Argumentos de la tool (JSON)."},
+        }, "required": ["server", "tool"], "additionalProperties": False},
+    )
+
+    if helpers and router is not None:
+        def gema_list() -> str:
+            """Lista las gemas especializadas y el LLM que se les asignaría automáticamente."""
+            import json as _j
+            from src.core.gema_profiles import list_gemas
+            from src.core.model_assign import assign_model
+            out = []
+            for g in list_gemas():
+                a = assign_model(router, gema=g["name"], model_hint=g.get("model_hint", ""), overrides=_assign_overrides(cfg))
+                out.append({"name": g["name"], "description": g["description"], "model_hint": g.get("model_hint"),
+                            "assigned_model": a.get("model"), "provider": a.get("provider")})
+            return _j.dumps({"gemas": out}, ensure_ascii=False)
+        registry.register_function(
+            gema_list, name="gema_list",
+            description="Lista las gemas especializadas disponibles y el LLM que se les asignaría según lo disponible en la PC.",
+            category="local",
+            parameters={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        )
+
+        def agent_list() -> str:
+            """Lista los ayudantes configurados y el LLM que usarían (explícito o auto-asignado)."""
+            import json as _j
+            from src.core.model_assign import assign_model
+            out = []
+            for a in _agent_registry().list():
+                asg = assign_model(router, gema=a.get("gema", ""), explicit=a.get("model") or None, overrides=_assign_overrides(cfg))
+                out.append({"id": a.get("id"), "name": a.get("name"), "gema": a.get("gema", ""),
+                            "model": a.get("model") or "", "assigned_model": asg.get("model"), "provider": asg.get("provider")})
+            return _j.dumps({"agents": out}, ensure_ascii=False)
+        registry.register_function(
+            agent_list, name="agent_list",
+            description="Lista los ayudantes configurados y el LLM que usarían. Delega con agent_run.",
+            category="local",
+            parameters={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        )
+
+        async def gema_run(gema: str, task: str) -> str:
+            """Delega una tarea a una gema especializada (sub-loop aislado, LLM auto-asignado)."""
+            return await _helper_run(task, gema=gema, cfg=(cfg or {}), router=router)
+        registry.register_function(
+            gema_run, name="gema_run",
+            description="Delega una tarea a una gema especializada. El LLM se asigna automáticamente según lo disponible. Usa gema_list para ver las gemas.",
+            category="local",
+            parameters={"type": "object", "properties": {"gema": {"type": "string"}, "task": {"type": "string"}},
+                        "required": ["gema", "task"], "additionalProperties": False},
+        )
+
+        async def agent_run(agent_id: str, task: str) -> str:
+            """Delega una tarea a un ayudante configurado (su gema/prompt/LLM y workspace aislado)."""
+            return await _helper_run(task, agent_id=agent_id, cfg=(cfg or {}), router=router)
+        registry.register_function(
+            agent_run, name="agent_run",
+            description="Delega una tarea a un ayudante por id; usa su system prompt, su LLM y su workspace aislado. Usa agent_list para verlos.",
+            category="local",
+            parameters={"type": "object", "properties": {"agent_id": {"type": "string"}, "task": {"type": "string"}},
+                        "required": ["agent_id", "task"], "additionalProperties": False},
+        )
     return registry
 
 
@@ -1872,17 +2829,33 @@ async def _learning_record(task: str, session_id: str, result,
 
 
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
-                          model: str | None = None, force_tools: bool = False):
+                          model: str | None = None, force_tools: bool = False,
+                          agent_id: str | None = None, on_delta=None):
     """Un run de AgentLoop con la construccion estandar (config segura)."""
     from src.core.config import load_config
     from src.core.agent_loop import AgentLoop
     cfg = _load_config_safe()
-    router = _build_router(cfg)
-    scope = _build_scope(cfg)
-    registry = _build_registry(scope, session_id)
-    loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log())
+    router = _get_router(cfg)
+    scope = _build_scope(cfg, agent_id)
+    registry = _build_registry(scope, session_id, cfg, router=router)
+    agent = _agent_registry().resolve(agent_id) if agent_id else None
+    _gema = (agent or {}).get("gema") or ""
+    _sys = (agent or {}).get("system_prompt") or ""
+    if _gema:
+        try:
+            from src.core.gema_profiles import system_prompt_for_gema, hint_for_gema
+            if not _sys:
+                _sys = system_prompt_for_gema(_gema)
+            if not hint:
+                hint = hint_for_gema(_gema) or hint
+        except Exception:
+            pass
+    loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
+                     event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
     result = await loop.run(task=message, session_id=session_id, hint=hint,
-                            force_tools=force_tools, model=model)
+                            force_tools=force_tools,
+                            model=model or (agent or {}).get("model") or None,
+                            system_prompt=_sys or None, on_delta=on_delta)
     await _learning_record(message, session_id, result, hint=hint, model=model)
     return result
 
@@ -1894,13 +2867,15 @@ async def chat(request: Request):
     Body: { message: str, session_id?: str, hint?: str, model?: str }
     Runs one AgentLoop iteration. If providers unavailable, echoes with diagnostics.
     """
-    body = await request.json()
+    body = await _json_body(request)
     message = body.get("message") or body.get("content") or ""
     attachments = body.get("attachments") or []
     if not message and not attachments:
         raise HTTPException(status_code=400, detail="message required")
     session_id = body.get("session_id")
     hint = body.get("hint")
+    agent_id = body.get("agent_id")
+    _agent_cfg = _agent_registry().resolve(agent_id) if agent_id else None
     # DECK: materializar adjuntos -> imagenes data-URI (vision) + contexto textual
     images: list[str] = []
     if attachments:
@@ -1918,8 +2893,9 @@ async def chat(request: Request):
         hint = infer_hint(message)
     # Ensure session
     slog = _session_log()
+    _project = agent_id or "default"
     if not session_id:
-        sess = slog.create_session(project="default")
+        sess = slog.create_session(project=_project)
         session_id = sess.id
     else:
         # Ensure exists: get_messages devuelve [] para sesión inexistente (NO lanza),
@@ -1927,9 +2903,9 @@ async def chat(request: Request):
         try:
             if slog.get_session(session_id) is None:
                 # Crear con el id del cliente => estable entre turnos (memoria multi-turno).
-                sess = slog.create_session(project="default", session_id=session_id)
+                sess = slog.create_session(project=_project, session_id=session_id)
         except Exception:
-            sess = slog.create_session(project="default")
+            sess = slog.create_session(project=_project)
             session_id = sess.id
 
     # El mensaje del usuario y la respuesta del asistente los persiste el AgentLoop
@@ -1940,7 +2916,7 @@ async def chat(request: Request):
         from src.core.agent_loop import AgentLoop
 
         cfg = load_config()
-        router = _build_router(cfg)
+        router = _get_router(cfg)
 
         # Quick health probe with short timeout — don't block chat if providers offline
         health = {}
@@ -1949,22 +2925,38 @@ async def chat(request: Request):
                 health = await asyncio.wait_for(router.health_all(), timeout=3.0)
             except Exception:
                 health = {}
-        any_healthy = any(health.values()) if isinstance(health, dict) else False
+        any_healthy = any(
+            (v.get("ok") if isinstance(v, dict) else bool(v))
+            for v in (health.values() if isinstance(health, dict) else [])
+        )
         # If no provider resolves at all (no models registered), go fallback immediately
         # Otherwise attempt AgentLoop even if health check failed — loop will error and fallback will handle
         if not router.resolve(task_hint=hint or message) and not any_healthy:
             raise RuntimeError("no healthy provider — echo fallback")
 
         # Scope + tools (mismo helper que /v1, /ws y /stream)
-        scope = _build_scope(cfg)
-        registry = _build_registry(scope, session_id)
+        scope = _build_scope(cfg, agent_id)
+        registry = _build_registry(scope, session_id, cfg, router=router)
 
+        _gema = (_agent_cfg or {}).get("gema") or ""
+        _sys = (_agent_cfg or {}).get("system_prompt") or ""
+        if _gema:
+            try:
+                from src.core.gema_profiles import system_prompt_for_gema, hint_for_gema
+                if not _sys:
+                    _sys = system_prompt_for_gema(_gema)
+                if not hint:
+                    hint = hint_for_gema(_gema) or hint
+            except Exception:
+                pass
 
-        loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog)
+        loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog,
+                         event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
-                                model=body.get("model"),
-                                images=images or None)
+                                model=body.get("model") or (_agent_cfg or {}).get("model") or None,
+                                images=images or None,
+                                system_prompt=_sys or None)
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
@@ -1982,6 +2974,7 @@ async def chat(request: Request):
             "reply": result.final_output,
             "todos": _t,
             "permission": perm_snap,
+            "agent": (_agent_cfg or {}).get("id"),
             "success": result.success,
             "iterations": result.iterations,
             "steps": [
@@ -1997,6 +2990,154 @@ async def chat(request: Request):
         fallback = f"[offline echo] Recibido: {message}\n\n(Providers no disponibles o error: {e}. El arnés está en modo offline. Configura Ollama :11434 y reintenta.)"
         slog.append(session_id, Message(role="assistant", content=fallback))
         return {"session_id": session_id, "reply": fallback, "success": True, "mode": "echo_fallback", "error": str(e)}
+
+
+@app.get("/api/gemas")
+async def list_gemas_endpoint():
+    from src.core.gema_profiles import list_gemas
+    return {"gemas": list_gemas()}
+
+
+@app.get("/api/models/assign")
+async def assign_model_endpoint(gema: str = "", agent: str = "", model: str = ""):
+    from src.core.model_assign import assign_model
+    cfg = _load_config_safe()
+    router = _get_router(cfg)
+    explicit = model or None
+    if agent and not explicit:
+        a = _agent_registry().get(agent)
+        explicit = (a or {}).get("model") or None
+        gema = gema or (a or {}).get("gema") or ""
+    mh = ""
+    if gema:
+        try:
+            from src.core.gema_profiles import GEMA_PROFILES
+            p = GEMA_PROFILES.get(gema)
+            mh = p.model_hint if p else ""
+        except Exception:
+            mh = ""
+    return {"assign": assign_model(router, gema=gema, model_hint=mh, explicit=explicit, overrides=_assign_overrides(cfg))}
+
+
+@app.get("/api/agents")
+async def list_agents():
+    return {"agents": _agent_registry().list()}
+
+
+@app.get("/api/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    a = _agent_registry().get(agent_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="ayudante no encontrado")
+    return {"agent": a}
+
+
+@app.post("/api/agents")
+async def create_agent(request: Request):
+    body = await _json_body(request)
+    try:
+        agent = _agent_registry().create(
+            name=body.get("name") or "",
+            model=body.get("model", ""), provider=body.get("provider", ""),
+            system_prompt=body.get("system_prompt", ""), description=body.get("description", ""),
+            emoji=body.get("emoji", ""), color=body.get("color", ""), gema=body.get("gema", ""),
+            toolsets=body.get("toolsets", []), skills=body.get("skills", []), mcp=body.get("mcp", []),
+        )
+        return {"ok": True, "agent": agent}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/agents/{agent_id}")
+async def update_agent(agent_id: str, request: Request):
+    body = await _json_body(request)
+    try:
+        return {"ok": True, "agent": _agent_registry().update(agent_id, body or {})}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="ayudante no encontrado")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    try:
+        _agent_registry().delete(agent_id)
+        return {"ok": True}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="ayudante no encontrado")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/distill")
+async def distill_session_endpoint(session_id: str):
+    """Destila una sesión al grafo a demanda (determinista + enriquecimiento LLM, idempotente)."""
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    res = await _distill_run(_load_config_safe(), session_id, wait_llm=True, llm_timeout=75)
+    return {"ok": True, "result": res}
+
+
+@app.post("/api/sessions/{session_id}/end")
+async def end_session_endpoint(session_id: str):
+    """Cierra una sesión: destila su conocimiento al grafo (red de seguridad, background)."""
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    res = await _distill_run(_load_config_safe(), session_id, wait_llm=False)
+    return {"ok": True, "result": res}
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def fork_session_endpoint(session_id: str):
+    """Crea una rama (hijo) de la sesion — sesiones en arbol (pi-style)."""
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    child = _session_log().fork(session_id)
+    return {"ok": True, "session": child.to_dict() if hasattr(child, "to_dict") else {"id": child.id}}
+
+
+@app.post("/api/sessions/{session_id}/branch")
+async def branch_session_endpoint(session_id: str, copy_messages: bool = False):
+    """Rama con (opcional) copia de mensajes — sesiones en arbol (pi-style)."""
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    child = _session_log().branch(session_id, copy_messages=copy_messages)
+    return {"ok": True, "session": child.to_dict() if hasattr(child, "to_dict") else {"id": child.id}}
+
+
+@app.get("/api/sessions/{session_id}/tree")
+async def session_tree_endpoint(session_id: str):
+    """Arbol de la sesion: ancestros + hijos (pi-style)."""
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    return _session_log().tree(session_id)
+
+
+@app.get("/api/runtime")
+async def runtime_endpoint():
+    """Estado de eficiencia: concurrencia (free-threaded, workers) + tuning de providers."""
+    out: dict = {}
+    try:
+        from src.core.concurrency import info as _ci
+        out["concurrency"] = _ci()
+    except Exception as e:
+        out["concurrency"] = {"error": str(e)[:120]}
+    try:
+        cfg = _state.get("config") or _load_config_safe()
+        provs = (cfg.get("providers", {}) or {})
+        out["tuning"] = {
+            "ollama": {"keep_alive": (provs.get("ollama", {}) or {}).get("keep_alive", "30m"),
+                       "options": (provs.get("ollama", {}) or {}).get("options", {})},
+            "llamacpp": {"max_tokens": (provs.get("llamacpp", {}) or {}).get("max_tokens", 2048),
+                         "cache_prompt": True},
+            "cloud": {"strict_tools": (provs.get("cloud", {}) or {}).get("strict_tools", False)},
+            "sticky_model": __import__("os").environ.get("NEXUS_STICKY_MODEL", "1"),
+            "parallel_tools": __import__("os").environ.get("NEXUS_PARALLEL_TOOLS", "1"),
+        }
+    except Exception as e:
+        out["tuning"] = {"error": str(e)[:120]}
+    return out
 
 
 # ---- Static SPA ----
@@ -2024,6 +3165,8 @@ async def openai_chat_completions(req: Request):
     messages = body.get("messages") or []
     user_text = ""
     for m in reversed(messages):
+        if not isinstance(m, dict):
+            continue
         if m.get("role") == "user":
             c = m.get("content")
             if isinstance(c, list):
@@ -2031,7 +3174,7 @@ async def openai_chat_completions(req: Request):
             else:
                 user_text = str(c or "")
             break
-    if not user_text and messages:
+    if not user_text and messages and isinstance(messages[-1], dict):
         c = messages[-1].get("content")
         user_text = " ".join(str(p.get("text","")) for p in c if isinstance(p, dict)) if isinstance(c, list) else str(c or "")
     model = body.get("model") or "auto"
@@ -2053,7 +3196,7 @@ async def openai_chat_completions(req: Request):
     except Exception as e:
         import logging as _lg
         _lg.getLogger("nexus-v3").exception("openai compat error: %s", e)
-        reply = f"Error: {e}"
+        reply = "Error: no se pudo completar la solicitud (ver logs del servidor)."
     model_id = model if model != "auto" else "nexus-v3"
     if not stream:
         return JSONResponse({"id":"chatcmpl-nexus","object":"chat.completion","created":0,"model":model_id,"choices":[{"index":0,"message":{"role":"assistant","content": reply},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}})
@@ -2070,7 +3213,7 @@ async def openai_models():
     cfg = _load_config_safe()
     try:
         # Fase 8: from_config no existe; listar via list_models() del router real.
-        router = _build_router(cfg)
+        router = _get_router(cfg)
         models = [r.id for r in (router.list_models() or []) if getattr(r, "id", None)]
         if not models:
             models = ["auto", "nexus-v3"]
@@ -2079,6 +3222,16 @@ async def openai_models():
     return JSONResponse({"object":"list","data":[{"id":m,"object":"model","created":0,"owned_by":"nexus"} for m in models]})
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
+    # Guardia anti cross-site WebSocket hijacking: CORS/middleware http NO cubren WS.
+    origin = ws.headers.get("origin")
+    if origin:
+        try:
+            host = _urlparse(origin).hostname or ""
+        except Exception:
+            host = ""
+        if host not in _LOCAL_ORIGIN_HOSTS:
+            await ws.close(code=1008)
+            return
     await ws.accept()
     # Fase 8: sesion por conexion (antes: run() sin session_id + APIs inexistentes).
     try:
@@ -2114,38 +3267,94 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
-@app.get("/api/chat/stream")
-async def sse_chat(request: Request, message: str = "", model: str = "auto"):
+def _sse_stream_response(message: str, session_id: str, model: str):
     async def gen():
         import json as _js3
+        import asyncio as _aio
+        q: _aio.Queue = _aio.Queue()
+
+        async def _on_delta(text: str):
+            if text:
+                await q.put({"delta": text})
+
+        task = None
         try:
-            # Fase 8: misma construccion estandar; sesion por request.
+            # Fase 8: misma construccion estandar + streaming (pi).
             from src.core.provider_router import infer_hint
-            sess = _session_log().create_session(project="sse")
-            result = await _run_agent_once(
+            slog = _session_log()
+            # Reusar la sesion activa si se pidio y existe; si no, crear una.
+            sess = slog.get_session(session_id) if session_id else None
+            if sess is None:
+                sess = slog.create_session(project="sse")
+            task = _aio.create_task(_run_agent_once(
                 message,
                 session_id=sess.id,
                 hint=infer_hint(message),
                 model=None if model == "auto" else model,
-            )
+                on_delta=_on_delta,
+            ))
+            while not task.done():
+                try:
+                    item = await _aio.wait_for(q.get(), timeout=0.25)
+                    yield f"data: {_js3.dumps(item, ensure_ascii=False)}\n\n"
+                except _aio.TimeoutError:
+                    continue
+            while not q.empty():
+                yield f"data: {_js3.dumps(q.get_nowait(), ensure_ascii=False)}\n\n"
+            result = await task
             reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
         except Exception as e:
             reply = f"Error: {e}"
+        finally:
+            # Si el cliente desconecta (GeneratorExit), cancelar el run para no fugarlo.
+            if task is not None and not task.done():
+                task.cancel()
+                import contextlib as _ctx
+                with _ctx.suppress(BaseException):
+                    await task
         yield f"data: {_js3.dumps({'reply': reply}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/chat/stream")
+async def sse_chat_get(message: str = "", model: str = "auto", session_id: str = ""):
+    return _sse_stream_response(message, session_id, model)
+
+
+@app.post("/api/chat/stream")
+async def sse_chat_post(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _sse_stream_response(
+        str(body.get("message", "")),
+        str(body.get("session_id", "") or ""),
+        str(body.get("model", "auto") or "auto"),
+    )
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def _spa_fallback(full_path: str, request: Request):
         # Let /api already matched; this handles SPA routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="not found")
-        # Serve existing static file if present
-        candidate = _UI_DIST / full_path
-        if candidate.is_file():
-            return FileResponse(str(candidate))
+        if not _UI_DIST.exists():
+            raise HTTPException(status_code=404, detail="not found")
+        # Contencion: solo servir archivos DENTRO de _UI_DIST (evita path traversal).
+        base = _UI_DIST.resolve()
+        try:
+            candidate = (base / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(base):
+                return FileResponse(str(candidate))
+        except Exception:
+            pass
+        # Solo rutas SPA (sin extension) caen a index.html; assets faltantes -> 404 real.
+        import os as _os
+        if _os.path.splitext(full_path)[1]:
+            raise HTTPException(status_code=404, detail="not found")
         # Fallback to index.html for client-side routing
-        return FileResponse(str(_UI_DIST / "index.html"))
+        return FileResponse(str(base / "index.html"))
 
 
 if not _UI_DIST.exists():
@@ -2156,13 +3365,38 @@ if not _UI_DIST.exists():
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Nexus v3 harness backend")
+    p.add_argument("command", nargs="?", default="serve", choices=["serve", "setup"],
+                   help="serve: arranca el backend (defecto). setup: doctor de portabilidad a otra PC")
     p.add_argument("--port", type=int, default=8765, help="Port to listen on (0=random)")
     p.add_argument("--host", type=str, default="127.0.0.1")
+    p.add_argument("--check", action="store_true", help="setup: solo audita, no instala nada")
+    p.add_argument("--fix", action="store_true", help="setup: instala lo instalable (ollama pull)")
     return p.parse_args(argv)
+
+
+def _ensure_local_brain() -> str:
+    """Keep nexus-v3 self-contained: use its own ./brain by default.
+
+    An ambient ``NEXUS_BRAIN`` may belong to another project on the same
+    machine, which would silently link their brains. Only a v3-scoped override
+    (``NEXUS_V3_BRAIN``) is honoured; otherwise the project brain wins.
+    """
+    import os as _os
+    override = (_os.environ.get("NEXUS_V3_BRAIN") or "").strip()
+    brain = override or str(_PROJECT_ROOT / "brain")
+    _os.environ["NEXUS_V3_BRAIN"] = brain
+    _os.environ["NEXUS_BRAIN"] = brain
+    return brain
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.command == "setup":
+        from src.core.onboarding import run_setup
+        # --check (o sin flags) = solo audita; --fix = instala lo instalable.
+        return run_setup(fix=bool(args.fix and not args.check))
+    brain = _ensure_local_brain()
+    print(f"[nexus-v3] brain: {brain}")
     # If port 0, let uvicorn pick? Instead find free port ourselves
     if args.port == 0:
         import socket

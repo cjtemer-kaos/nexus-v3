@@ -18,6 +18,7 @@ Proveedores soportados:
 - Google Gemini (cloud)
 """
 
+import asyncio
 import logging
 import os
 import time

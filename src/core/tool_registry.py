@@ -98,6 +98,42 @@ def _infer_schema(fn: Callable) -> dict:
     return schema
 
 
+_JSON_TYPES = {
+    "string": str, "integer": int, "number": (int, float), "boolean": bool,
+    "array": list, "object": dict,
+}
+
+
+def validate_args(name: str, args: dict, schema: dict) -> dict:
+    """Valida args contra JSON Schema (ligero). Devuelve args normalizados; lanza ValueError."""
+    if not isinstance(schema, dict) or not schema:
+        return args
+    props = schema.get("properties", {}) or {}
+    required = schema.get("required", []) or []
+    for key in required:
+        if key not in args or args[key] is None:
+            raise ValueError(f"{name}: falta argumento requerido '{key}'")
+    if not schema.get("additionalProperties", True):
+        extra = [k for k in args if k not in props]
+        if extra:
+            raise ValueError(f"{name}: argumentos no permitidos {extra}")
+    for key, val in list(args.items()):
+        spec = props.get(key)
+        if not isinstance(spec, dict) or val is None:
+            continue
+        want = spec.get("type")
+        expected = _JSON_TYPES.get(want) if isinstance(want, str) else None
+        if expected is not None and not isinstance(val, expected):
+            if want == "integer" and isinstance(val, bool):
+                raise ValueError(f"{name}: '{key}' debe ser integer")
+            if isinstance(expected, tuple) or want in ("number",):
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    continue
+            if want in ("string", "integer", "number", "boolean", "array", "object"):
+                raise ValueError(f"{name}: '{key}' debe ser {want}, recibido {type(val).__name__}")
+    return args
+
+
 # ---------------------------------------------------------------------------
 # ToolRegistry
 # ---------------------------------------------------------------------------
@@ -232,12 +268,24 @@ class ToolRegistry:
             }
 
     # ---- dispatch ----
-    async def dispatch(self, name: str, args: dict[str, Any] | None = None, scope=None, hooks=None) -> Any:
-        """Guarded dispatch: scope check → hooks pre → exec → hooks post → metrics."""
+    async def dispatch(self, name: str, args: dict[str, Any] | None = None, scope=None, hooks=None, call_log=None) -> Any:
+        """Guarded dispatch: validate → scope → hooks pre → exec → hooks post → metrics → log."""
+        if call_log is None:
+            call_log = getattr(self, "call_log", None)
         args = args or {}
         entry = self.get(name)
         if not entry or not entry.handler:
             raise KeyError(f"herramienta no encontrada o sin manejador: {name}")
+
+        try:
+            args = validate_args(name, args, entry.parameters)
+        except ValueError:
+            if call_log is not None:
+                try:
+                    call_log({"tool": name, "args": args, "outcome": "invalid_args", "success": False})
+                except Exception:
+                    pass
+            raise
 
         # Scope guard
         if scope is not None:
@@ -250,13 +298,27 @@ class ToolRegistry:
                     if callable(check_fn):
                         check_fn(name, args)
             except Exception as e:
-                # Re-raise as ScopeDenied-equivalent
+                if call_log is not None:
+                    try:
+                        call_log({"tool": name, "args": args, "outcome": "scope_denied", "success": False, "error": str(e)})
+                    except Exception:
+                        pass
                 raise
 
-        # Hooks pre
+        # Hooks pre (load-bearing: STOP/COMPACT bloquea en código)
         if hooks is not None and hasattr(hooks, "emit"):
             try:
-                await hooks.emit("pre_tool_use", {"tool": name, "args": args})
+                _hr = await hooks.emit("pre_tool_use", {"tool": name, "args": args})
+                _act = str(getattr(getattr(_hr, "action", None), "value", getattr(_hr, "action", "")))
+                if _act in ("stop", "compact"):
+                    raise PermissionError(f"hook bloqueó {name}: {getattr(_hr, 'message', '') or 'política de seguridad'}")
+            except PermissionError:
+                if call_log is not None:
+                    try:
+                        call_log({"tool": name, "args": args, "outcome": "hook_blocked", "success": False})
+                    except Exception:
+                        pass
+                raise
             except Exception as e:
                 logger.debug(f"hooks pre_tool_use error: {e}")
 
@@ -294,6 +356,13 @@ class ToolRegistry:
                         last_error="" if success else error_msg[:500],
                     )
                     self._tools[name] = updated
+            if call_log is not None:
+                try:
+                    call_log({"tool": name, "args": args, "outcome": "ok" if success else "error",
+                              "success": success, "latency_ms": round(dt_ms, 2),
+                              "error": "" if success else error_msg[:300]})
+                except Exception:
+                    pass
             # Hooks post
             if hooks is not None and hasattr(hooks, "emit"):
                 try:

@@ -291,10 +291,14 @@ class SessionManager:
     def _load_session(self, session_id: str) -> Optional[Session]:
         with self._lock:
             conn = self._get_conn()
+            _prev_rf = conn.row_factory
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            c.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
-            row = c.fetchone()
+            try:
+                c.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+                row = c.fetchone()
+            finally:
+                conn.row_factory = _prev_rf  # restaurar (conn :memory: es compartida)
             self._release_conn(conn)
             if not row:
                 return None
@@ -313,8 +317,9 @@ class SessionManager:
         import uuid
         sid = session_id or str(uuid.uuid4())[:8]
         session = Session(id=sid, project=project, parent_session_id=parent_id)
-        self._sessions[sid] = session
-        self._active_session_id = sid
+        with self._lock:
+            self._sessions[sid] = session
+            self._active_session_id = sid
         self._save_session(session)
         logger.info(f"Session created: {sid} (project: {project})")
         return session
@@ -326,8 +331,9 @@ class SessionManager:
         if sid:
             session = self._load_session(sid)
             if session:
-                self._sessions[sid] = session
-                self._active_session_id = sid
+                with self._lock:
+                    self._sessions[sid] = session
+                    self._active_session_id = sid
                 return session
         return self.create_session()
 

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText } from 'lucide-react'
+import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText, Database } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, apiFetch, uploadApi, type UploadResult } from '@/lib/api'
+import { chatApi, chatStreamApi, apiFetch, uploadApi, type UploadResult } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 
 type Pending = { key: string; file: File; preview?: string }
@@ -20,14 +20,21 @@ export function ChatPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isStreaming, setIsStreaming] = useState(false)
+  const busyRef = useRef(false)  // guard anti doble-send (el state no es sincrónico)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
   const [lastSteps, setLastSteps] = useState<any[]|null>(null)
   const [lastTodos, setLastTodos] = useState<any|null>(null)
   const [showTraj, setShowTraj] = useState(false)
+  const [distillMsg, setDistillMsg] = useState<string | null>(null)
 
   // Historial: al cambiar de sesión (o al cargar la primera) traer mensajes del server
-  useEffect(() => { void loadMessages(activeSession) }, [activeSession, loadMessages])
+  useEffect(() => {
+    // Resetear estado de streaming al cambiar de sesión (no bloquear la nueva).
+    setIsStreaming(false)
+    busyRef.current = false
+    void loadMessages(activeSession)
+  }, [activeSession, loadMessages])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isStreaming, lastSteps, lastTodos])
 
@@ -104,7 +111,8 @@ export function ChatPanel() {
   /* ── envío ────────────────────────────────────────────────── */
 
   const send = async () => {
-    if ((!input.trim() && pending.length === 0) || isStreaming) return
+    if ((!input.trim() && pending.length === 0) || isStreaming || busyRef.current) return
+    busyRef.current = true
     const text = input.trim()
 
     // subir adjuntos pendientes
@@ -160,13 +168,44 @@ export function ChatPanel() {
     setIsStreaming(true)
     try {
       const model = selectedModel && selectedModel !== 'auto' ? selectedModel : undefined
-      const res: any = await chatApi(text, activeSession || undefined, undefined, model,
-        uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })))
-      if (res.steps?.length) setLastSteps(res.steps)
-      if (res.todos) setLastTodos(res.todos)
-      // si el usuario cambió de sesión mientras respondía, el historial de la sesión
-      // destino se recarga con loadMessages — no mezclar la respuesta aquí
-      if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: res.reply, timestamp: now() })
+      const { updateMessage } = useAppStore.getState()
+      const msgId = (Date.now() + 1).toString()
+      let acc = ''
+      let placed = false
+      const pushDelta = (t: string) => {
+        if (!stillActive()) return
+        acc += t
+        if (!placed) { addMessage({ id: msgId, role: 'assistant', content: acc, timestamp: now() }); placed = true }
+        else updateMessage(msgId, acc)
+      }
+      // Streaming solo si no hay adjuntos (el stream no los soporta); si falla, cae al POST.
+      let streamed = false
+      if (uploads.length === 0) {
+        try {
+          const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, onDelta: pushDelta })
+          const finalReply = sres.reply || acc || '[sin respuesta]'
+          if (stillActive()) {
+            if (placed) updateMessage(msgId, finalReply)
+            else addMessage({ id: msgId, role: 'assistant', content: finalReply, timestamp: now() })
+          }
+          streamed = true
+        } catch {
+          streamed = false
+        }
+      }
+      if (!streamed) {
+        const res: any = await chatApi(text, activeSession || undefined, undefined, model,
+          uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })))
+        if (res.steps?.length && stillActive()) setLastSteps(res.steps)
+        if (res.todos && stillActive()) setLastTodos(res.todos)
+        // si el usuario cambió de sesión mientras respondía, el historial de la sesión
+        // destino se recarga con loadMessages — no mezclar la respuesta aquí
+        if (stillActive()) {
+          // si ya se mostraron deltas, ACTUALIZAR (no duplicar con el mismo id)
+          if (placed) updateMessage(msgId, res.reply)
+          else addMessage({ id: msgId, role: 'assistant', content: res.reply, timestamp: now() })
+        }
+      }
     } catch (e) {
       const msg = (e as Error).message || String(e)
       let reply: string
@@ -180,9 +219,24 @@ export function ChatPanel() {
       await new Promise(r => setTimeout(r, 500))
       if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
     } finally {
+      busyRef.current = false
       setIsStreaming(false)
     }
   }
+
+  const distillNow = useCallback(async () => {
+    const { activeSession } = useAppStore.getState()
+    if (!activeSession) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
+    setDistillMsg('destilando…')
+    try {
+      const r: any = await apiFetch(`/api/sessions/${activeSession}/distill`, { method: 'POST' })
+      const res = r?.result || {}
+      setDistillMsg(`destilado: ${res.distilled ?? 0} piezas · ${res.llm_items ?? 0} items LLM`)
+    } catch (e: any) {
+      setDistillMsg(`error: ${e?.message || 'falló'}`)
+    }
+    setTimeout(() => setDistillMsg(null), 4000)
+  }, [])
 
   return (
     <div className="flex h-full flex-col">
@@ -226,7 +280,7 @@ export function ChatPanel() {
               <div className={cn('mt-1.5 flex items-center gap-2 text-[11px]', m.role === 'user' ? 'text-[#B9DBFF] justify-end' : 'text-[#9BA1AA]')}>
                 <span>{m.timestamp}</span>
                 <button
-                  onClick={() => { navigator.clipboard.writeText(m.content); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
+                  onClick={() => { void navigator.clipboard.writeText(m.content).catch(()=>{}); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
                   aria-label={copied===m.id ? 'Copiado' : 'Copiar mensaje'}
                   className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-[#EDEEF0]"
                 >
@@ -239,7 +293,7 @@ export function ChatPanel() {
         ))}
         {(lastTodos && lastTodos.todos?.length > 0) && (
           <div className="rounded-xl border border-[#4C9DFF]/20 bg-[#4C9DFF]/10 p-3 text-xs">
-            <div className="flex items-center gap-2 font-semibold text-[#8CC1FF]"><ListTodo className="h-3.5 w-3.5" /> Todos: {lastTodos.counts.completed}/{lastTodos.todos.length} completados</div>
+            <div className="flex items-center gap-2 font-semibold text-[#8CC1FF]"><ListTodo className="h-3.5 w-3.5" /> Todos: {lastTodos.counts?.completed ?? 0}/{lastTodos.todos.length} completados</div>
             <div className="mt-2 space-y-1">{lastTodos.todos.map((td:any,i:number)=>(<div key={i} className="flex gap-2"><span className={td.status==='completed'?'text-[#3DDC84]':td.status==='in_progress'?'text-[#FFB86B]':'text-[#9BA1AA]'}>{td.status==='completed'?'●':td.status==='in_progress'?'◐':'○'}</span><span className={td.status==='completed'?'line-through text-[#9BA1AA]':''}>{td.content}</span><span className="ml-auto text-[#9BA1AA]">{td.status}</span></div>))}</div>
           </div>
         )}
@@ -303,7 +357,7 @@ export function ChatPanel() {
             ref={textareaRef}
             value={input}
             onChange={(e)=>{ const v=e.target.value; setInput(v); if(v.startsWith('/')){ setSlashOpen(true); setSlashQuery(v.slice(1).split(' ')[0]) } else setSlashOpen(false) }}
-            onKeyDown={(e)=>{ if(e.key==='Escape' && slashOpen){ e.preventDefault(); setSlashOpen(false); return } if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send() }}}
+            onKeyDown={(e)=>{ if(e.key==='Escape' && slashOpen){ e.preventDefault(); setSlashOpen(false); return } if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing){ e.preventDefault(); send() }}}
             placeholder="Mensaje a Nexus…  / comandos · Ctrl+V adjunta · Shift+Enter salto"
             rows={1}
             aria-label="Mensaje a Nexus"
@@ -318,8 +372,12 @@ export function ChatPanel() {
         </div>
         <div className="mt-2 flex items-center justify-between text-xs text-[#9BA1AA]">
           <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3 text-[#4C9DFF]" /> Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas</span>
-          <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · Ctrl+V adjuntos</span>
+          <span className="flex items-center gap-2">
+            <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · Ctrl+V adjuntos</span>
+            <button onClick={distillNow} title="Destilar esta sesión al grafo de conocimiento" aria-label="Destilar sesión al grafo" className="flex items-center gap-1.5 rounded-lg border border-[#2C3037] bg-[#22262D] px-2 py-1 text-xs text-[#9BA1AA] hover:text-[#EDEEF0]"><Database className="h-3 w-3" /> Destilar</button>
+          </span>
         </div>
+        {distillMsg && <div className="mt-2 text-xs text-[#4C9DFF]">{distillMsg}</div>}
         {attachToast && <div className="mt-2 text-xs text-[#FFB86B]">{attachToast}</div>}
       </div>
     </div>

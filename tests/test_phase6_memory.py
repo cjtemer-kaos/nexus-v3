@@ -1,6 +1,6 @@
 """Fase 6 - Brain link + memoria (criterio BLUEPRINT §13).
 
-Criterio: lee el brain configurado (NEXUS_BRAIN si está seteada,
+Criterio: lee el brain configurado (NEXUS_V3_BRAIN si está seteada,
 si no ./brain del proyecto); fallback local.
 Cubre: brain link (lectura + fallback local), hierarchical_memory,
 rag_engine (embeddings via Ollama local), multi_signal_retrieval.
@@ -18,7 +18,7 @@ from src.brain.link import brain_path
 _BRAIN_DIR = brain_path()
 _CEREBRO = _BRAIN_DIR / "cerebro.db"
 _BRAIN_READY = _CEREBRO.exists() and _CEREBRO.stat().st_size > 1_000_000
-_ENV_BRAIN = os.environ.get("NEXUS_BRAIN", "")
+_ENV_BRAIN = os.environ.get("NEXUS_V3_BRAIN", "")
 
 
 # --------------------------------------------------------------------------
@@ -65,11 +65,11 @@ def test_brain_health_readable():
 
 
 # --------------------------------------------------------------------------
-# Fallback local: sin NEXUS_BRAIN -> ./brain del proyecto
+# Fallback local: sin NEXUS_V3_BRAIN -> ./brain del proyecto
 # --------------------------------------------------------------------------
 
 def test_fallback_local_brain(monkeypatch, tmp_path):
-    monkeypatch.delenv("NEXUS_BRAIN", raising=False)
+    monkeypatch.delenv("NEXUS_V3_BRAIN", raising=False)
     from src.brain.link import DEFAULT_BRAIN, brain_exists, brain_path
 
     bp = brain_path()
@@ -79,8 +79,12 @@ def test_fallback_local_brain(monkeypatch, tmp_path):
     assert brain_exists() is True
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[1] / "brain" / "knowledge_graph.db").exists(),
+    reason="knowledge_graph.db no disponible (gitignored) — se crea en runtime",
+)
 def test_fallback_local_brain_has_graph_db(monkeypatch):
-    monkeypatch.delenv("NEXUS_BRAIN", raising=False)
+    monkeypatch.delenv("NEXUS_V3_BRAIN", raising=False)
     from src.brain.link import knowledge_graph_db
 
     kg = knowledge_graph_db()

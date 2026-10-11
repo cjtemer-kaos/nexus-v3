@@ -46,6 +46,7 @@ def test_vite_build():
     assert r2.returncode == 0, f"returncode={r2.returncode} stdout={r2.stdout[-800:]} stderr={r2.stderr[-800:]}"
 
 
+@pytest.mark.skipif(not (UI_DIR / "dist" / "index.html").exists(), reason="ui/dist no construido (gitignored) — correr npm run build")
 def test_dist_artifacts():
     dist = UI_DIR / "dist"
     assert (dist / "index.html").exists()

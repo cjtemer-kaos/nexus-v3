@@ -17,14 +17,21 @@ logger = logging.getLogger(__name__)
 class WorkspaceTools:
     """Herramientas de workspace (CRUD de archivos)"""
 
-    def __init__(self, workspace_root: Optional[str] = None):
+    def __init__(self, workspace_root: Optional[str] = None, scope=None):
         if workspace_root is None:
             workspace_root = str(Path(__file__).parent.parent.parent / "data")
         self.root = Path(workspace_root)
+        self._scope = scope
+
+    def _check(self, p: Path) -> Path:
+        """Jail opcional: si se inyecta un Scope, valida la ruta final (default deny)."""
+        if self._scope is not None:
+            return self._scope.check_path(str(p))
+        return p
 
     def read_file(self, path: str, offset: int = 1, limit: int = 2000) -> Dict:
         """Lee archivo con paginacion"""
-        filepath = Path(path) if Path(path).is_absolute() else self.root / path
+        filepath = self._check(Path(path) if Path(path).is_absolute() else self.root / path)
         if not filepath.exists():
             return {"error": f"File not found: {path}"}
 
@@ -59,7 +66,7 @@ class WorkspaceTools:
                 f"PATH FALLBACK: original was drive root '{path}'; "
                 f"writing to '{resolved}' instead (drive roots need admin on Windows)."
             )
-        filepath = Path(resolved) if Path(resolved).is_absolute() else self.root / resolved
+        filepath = self._check(Path(resolved) if Path(resolved).is_absolute() else self.root / resolved)
         if mkdirp:
             filepath.parent.mkdir(parents=True, exist_ok=True)
 
@@ -103,7 +110,7 @@ class WorkspaceTools:
         # Path detector: warn if location seems weird
         warnings = self._validate_path(str(base))
 
-        target = base / filename
+        target = self._check(base / filename)
         if target.exists() and not overwrite:
             return {
                 "error": f"file already exists: {target}",

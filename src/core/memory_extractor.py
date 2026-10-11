@@ -285,7 +285,11 @@ class MemoryExtractor:
             added += 1
 
         if added > 0:
-            self._save_memories(existing)
+            # Merge con TODAS las memorias: no pisar otros owners ni las sin owner.
+            _all = self._load_memories()
+            _ids = {e.get("id") for e in _all}
+            _merged = list(_all) + [e for e in existing if e.get("id") not in _ids]
+            self._save_memories(_merged)
             self._extractions_since_audit += added
             logger.info(f"[memory-extract] +{added} hechos extraídos")
 

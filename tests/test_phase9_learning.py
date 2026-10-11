@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -35,15 +36,19 @@ def isolated(tmp_path, monkeypatch):
     from src.core.event_store import EventStore
     from src.core.learning_graph import LearningGraph, reset_singleton
     from src.core.learning_service import LearningService
+    from src.core.knowledge_memory import KnowledgeMemory
     from src.core.skill_opt import SkillOptimizer
 
     reset_singleton()
     events = EventStore(db_path=tmp_path / "events.db")
     graph = LearningGraph(db_path=tmp_path / "graph.db")
+    knowledge_memory = KnowledgeMemory(
+        db_path=tmp_path / "knowledge_graph.db", rag_index=False
+    )
     skillopt = SkillOptimizer(state_path=tmp_path / "skill_opt_state.json",
                               heldout_path=tmp_path / "heldout.json")
     svc = LearningService(events=events, graph=graph, skill_opt=skillopt,
-                          interval_s=999.0)
+                          knowledge_memory=knowledge_memory, interval_s=999.0)
     return svc, tmp_path
 
 
@@ -93,9 +98,20 @@ def test_batch_cycle_alimenta_grafo_con_supersedes(isolated):
     edges = svc.graph.get_edges()
     assert any(e.relationship.value == "SUPERSEDES" for e in edges)
 
+    # El insight también debe quedar en el grafo durable que consulta GraphView.
+    kg = svc.knowledge_memory
+    assert kg.status()["nodes"] == 2
+    with sqlite3.connect(str(tmp_path / "knowledge_graph.db")) as con:
+        typed = con.execute(
+            "SELECT count(*) FROM edges WHERE relation='supersedes'"
+        ).fetchone()[0]
+    assert typed == 1
+    assert svc.stats()["knowledge_graph"]["nodes"] == 2
+
     # mismo patron dos veces => dedupe (experiencia, no duplicado)
     svc._store_pattern("k3", "[high_quality|coding] model=a score=0.95")
     assert len(svc.graph.list_nodes("CONCEPT")) == 2
+    assert kg.status()["nodes"] == 2
 
 
 def test_self_learning_batch_process(isolated):
@@ -123,6 +139,30 @@ def test_self_learning_batch_process(isolated):
     n = conn.execute("SELECT COUNT(*) FROM learning_records").fetchone()[0]
     conn.close()
     assert n >= 1
+    assert svc.knowledge_memory.status()["nodes"] >= 1
+
+
+def test_graph_maintenance_scheduler(isolated, monkeypatch):
+    svc, _ = isolated
+    calls = []
+
+    class FakeKnowledgeMemory:
+        def maintain(self):
+            calls.append("maintain")
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        "src.core.knowledge_memory.get_knowledge_memory",
+        lambda: FakeKnowledgeMemory(),
+    )
+
+    async def go():
+        await svc.start(enable_dream=False, graph_maintenance_interval_s=0.01)
+        await asyncio.sleep(0.04)
+        await svc.stop()
+
+    _run(go())
+    assert calls, "maintenance scheduler should run after its configured interval"
 
 
 def test_skillopt_gate_heldout(isolated):

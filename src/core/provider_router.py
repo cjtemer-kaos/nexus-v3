@@ -302,35 +302,7 @@ class ProviderRouter:
         **kw: Any,
     ) -> LLMResponse:
         """Try providers in fallback_order until one succeeds. Records Thompson stats."""
-        # Build ordered list of (provider, model) to try
-        attempts: list[tuple[str, str]] = []
-        if model:
-            # Solo probar proveedores que REALMENTE tienen ese modelo registrado;
-            # si se intenta llamacpp con un modelo cloud, llama.cpp genera con el
-            # modelo cargado (lento) en vez de enrutar a la nube.
-            owners = {m.provider_name for m in self._models if m.id == model}
-            if not owners:
-                # Modelo no registrado: probar en fallback_order (p. ej. cloud-only)
-                owners = set(self.fallback_order)
-            for pname in self.fallback_order:
-                if pname in owners and pname in self._providers:
-                    attempts.append((pname, model))
-        else:
-            routed = self.resolve(task_hint=hint, prefer_speed=kw.get("prefer_speed", False))
-            if routed:
-                # Start with routed, then remaining fallback
-                attempts.append((routed.route.provider_name, routed.model))
-                for pname in self.fallback_order:
-                    if pname != routed.route.provider_name and pname in self._providers:
-                        # Find a model for that provider at similar tier
-                        hint_tier = HINT_MAPPING.get((hint or "none").lower(), 0)
-                        cands = [m for m in self._models if m.provider_name == pname and m.effective_tier() >= hint_tier]
-                        m_id = cands[0].id if cands else (self._models[0].id if self._models else "default")
-                        attempts.append((pname, m_id))
-            else:
-                for pname in self.fallback_order:
-                    if pname in self._providers:
-                        attempts.append((pname, "default"))
+        attempts = self._attempts(model, hint, kw.pop("prefer_speed", False))
 
         last_err: Exception | None = None
         for pname, m_id in attempts:
@@ -348,6 +320,59 @@ class ProviderRouter:
                 logger.warning(f"fallo chat enrutador {pname}/{m_id}: {e}")
                 continue
         raise RuntimeError(f"todos los proveedores fallaron (pista={hint}): {last_err}")
+
+    def _attempts(self, model: str | None, hint: str | None, prefer_speed: bool) -> list[tuple[str, str]]:
+        """Ordena (provider, model) a probar: routing explicito por modelo o resolve+fallback."""
+        attempts: list[tuple[str, str]] = []
+        if model:
+            owners = {m.provider_name for m in self._models if m.id == model}
+            if not owners:
+                owners = set(self.fallback_order)
+            ordered = [p for p in self.fallback_order if p in owners and p in self._providers]
+            ordered += [p for p in owners if p in self._providers and p not in ordered]
+            for pname in ordered:
+                attempts.append((pname, model))
+        else:
+            routed = self.resolve(task_hint=hint, prefer_speed=prefer_speed)
+            if routed:
+                attempts.append((routed.route.provider_name, routed.model))
+                for pname in self.fallback_order:
+                    if pname != routed.route.provider_name and pname in self._providers:
+                        hint_tier = HINT_MAPPING.get((hint or "none").lower(), 0)
+                        cands = [m for m in self._models if m.provider_name == pname and m.effective_tier() >= hint_tier]
+                        m_id = cands[0].id if cands else (self._models[0].id if self._models else "default")
+                        attempts.append((pname, m_id))
+            else:
+                for pname in self.fallback_order:
+                    if pname in self._providers:
+                        attempts.append((pname, "default"))
+        return attempts
+
+    async def stream(self, messages, tools=None, model=None, hint=None, **kw):
+        """Streaming con fallback: yield de eventos del primer provider que funcione."""
+        attempts = self._attempts(model, hint, kw.pop("prefer_speed", False))
+        last_err: Exception | None = None
+        for pname, m_id in attempts:
+            provider = self._providers.get(pname)
+            if not provider:
+                continue
+            started = False
+            try:
+                async for ev in provider.stream(messages, tools=tools, model=m_id, **kw):
+                    started = True
+                    yield ev
+                self._record_success(pname)
+                return
+            except Exception as e:
+                self._record_fail(pname)
+                if started:
+                    # Ya emitimos tokens de este provider: NO caer a otro (mezclaria salidas).
+                    logger.warning(f"stream {pname}/{m_id} falló a mitad: {e}")
+                    raise
+                last_err = e
+                logger.warning(f"fallo stream enrutador {pname}/{m_id}: {e}")
+                continue
+        raise RuntimeError(f"todos los proveedores fallaron (stream, pista={hint}): {last_err}")
 
     def _record_success(self, provider_name: str) -> None:
         s = self._stats.setdefault(provider_name, {"success": 1, "fail": 1})

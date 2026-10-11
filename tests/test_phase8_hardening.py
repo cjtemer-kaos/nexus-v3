@@ -382,8 +382,10 @@ def test_chat_stream_sse_uses_standard_loop(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_run(message, session_id, hint=None, model=None, force_tools=False):
+    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None):
         captured.update(message=message, session_id=session_id, model=model)
+        if on_delta is not None:
+            await on_delta("respuesta ")
         return SimpleNamespace(final_output="respuesta sse", success=True)
 
     class FakeSlog:
@@ -409,7 +411,7 @@ def test_v1_models_lists_real_routes(monkeypatch):
         def list_models(self, min_tier=0):
             return [SimpleNamespace(id="modelo-a"), SimpleNamespace(id="modelo-b")]
 
-    monkeypatch.setattr(srv, "_build_router", lambda cfg: FakeRouter())
+    monkeypatch.setattr(srv, "_get_router", lambda cfg: FakeRouter())
     client = TestClient(srv.app)
     r = client.get("/v1/models")
     assert r.status_code == 200

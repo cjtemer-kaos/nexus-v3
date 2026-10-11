@@ -17,9 +17,9 @@ Aqui el ciclo se cablea en orden explicito y SIN depender del actor system:
          router_state.json) + SelfLearningLoop batch (cada 120s -> SQLite
          learning_loop.db en el brain). El batch NO re-envia outcomes al router
          (adaptive_router=None) para evitar doble conteo.
-  Paso 3 (insights ExpeL): patrones del batch -> LearningGraph nodo CONCEPT,
-         aristas SUPERSEDES cuando un insight nuevo reemplaza al anterior de la
-         misma familia.
+  Paso 3 (insights ExpeL): patrones del batch -> LearningGraph nodo CONCEPT y
+          KnowledgeMemory durable; aristas SUPERSEDES tipadas al reemplazar
+          un insight de la misma familia.
   Paso 4 (SkillOpt): skill_opt.py — cambios de harness solo se persisten si
          validan held-out (fail-closed).
   Scheduler: dream_distill con intervalo real (default 24h), off en tests.
@@ -28,6 +28,7 @@ Todo lo que toca el camino de chat es fire-and-forget con try/except: el
 aprendizaje NUNCA puede romper una respuesta.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -38,6 +39,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _DREAM_INTERVAL_S = 86400.0  # 24h (v2 solo lo prometia en el docstring)
+_GRAPH_MAINTENANCE_INTERVAL_S = 21600.0  # Método OPCODE: cada 6h
 
 
 class LearningService:
@@ -52,6 +54,7 @@ class LearningService:
         judge: Any = None,
         learning_loop: Any = None,
         skill_opt: Any = None,
+        knowledge_memory: Any = None,
         interval_s: float = 120.0,
     ):
         from src.core.event_store import EventStore
@@ -64,6 +67,7 @@ class LearningService:
         self.router = router if router is not None else AdaptiveRouter()
         self.judge = judge if judge is not None else get_judge()
         self.graph = graph  # lazy: get_learning_graph() en primer patron
+        self.knowledge_memory = knowledge_memory
         self.skill_opt = skill_opt if skill_opt is not None else SkillOptimizer()
         # adaptive_router=None A PROPOSITO: el outcome ya se registro en
         # record_turn(); pasarlo aqui duplicaria cada muestra de Thompson.
@@ -94,35 +98,85 @@ class LearningService:
             return SimpleNamespace(confidence=0.5, action="ACCEPT")
 
     def _store_pattern(self, key: str, pattern: str) -> None:
-        """memory_store_fn del batch -> paso 3: grafo con SUPERSEDES."""
+        """Persistir cada insight en LearningGraph y en el grafo de conocimiento."""
         if not pattern:
             return
+        m = re.match(r"^\[([^\]]+)\]", pattern)
+        family = f"family={m.group(1)}" if m else "family=general"
+        is_new_insight = True
         try:
             from src.core.learning_graph import NodeType, get_learning_graph
             g = self.graph if self.graph is not None else get_learning_graph()
             self.graph = g
-            m = re.match(r"^\[([^\]]+)\]", pattern)
-            family = f"family={m.group(1)}" if m else "family=general"
             nodes = [n for n in g.list_nodes(NodeType.CONCEPT)
                      if n.description == family]
             for n in nodes:
                 if n.label == pattern:
                     g.add_experience(n.id, 10)
-                    return
-            new_id = g.add_node(label=pattern, node_type=NodeType.CONCEPT,
-                                description=family)
-            if nodes:
-                prev = max(nodes, key=lambda n: n.id)
-                g.add_edge(new_id, prev.id, "SUPERSEDES")
-            logger.info("LearningGraph insight #%d (%s)", new_id, family)
+                    is_new_insight = False
+                    break
+            if is_new_insight:
+                new_id = g.add_node(label=pattern, node_type=NodeType.CONCEPT,
+                                    description=family)
+                if nodes:
+                    prev = max(nodes, key=lambda n: n.id)
+                    g.add_edge(new_id, prev.id, "SUPERSEDES")
+                logger.info("LearningGraph insight #%d (%s)", new_id, family)
         except Exception as e:
             logger.debug("grafo de insights omitido: %s", e)
+        if is_new_insight:
+            self._store_knowledge_insight(pattern, family)
+
+    def _store_knowledge_insight(self, pattern: str, family: str) -> None:
+        """Bridge ExpeL insights to the durable, searchable knowledge graph.
+
+        A stable key per distinct pattern prevents duplicate insights. A new
+        pattern in the same family remains a separate node and points to the
+        previous insight via a typed ``supersedes`` edge.
+        """
+        try:
+            from src.core.knowledge_memory import get_knowledge_memory
+            if self.knowledge_memory is None:
+                self.knowledge_memory = get_knowledge_memory()
+            km = self.knowledge_memory
+            family_slug = re.sub(r"[^a-z0-9]+", "-", family.lower()).strip("-")[:48]
+            family_hash = hashlib.sha1(family.encode("utf-8")).hexdigest()[:8]
+            prefix = f"learning/insight/{family_slug}-{family_hash}/"
+            insight_hash = hashlib.sha1(pattern.strip().lower().encode("utf-8")).hexdigest()[:12]
+            topic_key = f"{prefix}{insight_hash}"
+            previous = km.latest_topic(prefix)
+            result = km.learn(
+                pattern,
+                topic_key=topic_key,
+                category="lesson",
+                tags=["self-learning", family_slug],
+                source="self_learning",
+                importance=7,
+                index_rag=False,
+                persist_markdown=False,
+                persist_observation=False,
+            )
+            node_id = int(result["node_id"])
+            if previous and previous["topic_key"] != topic_key:
+                edge = km.add_relation(
+                    node_id, int(previous["id"]), "supersedes", weight=1.0,
+                    note=f"newer learning insight in {family}",
+                )
+                logger.info(
+                    "KnowledgeGraph insight #%d supersedes #%d (%s, edge=%s)",
+                    node_id, previous["id"], family, edge.get("reason"),
+                )
+            else:
+                logger.info("KnowledgeGraph insight #%d persisted (%s)", node_id, family)
+        except Exception as e:
+            logger.debug("knowledge graph insight omitted: %s", e)
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
     async def start(self, *, dream_interval_s: float = _DREAM_INTERVAL_S,
-                    enable_dream: bool = True) -> None:
+                    enable_dream: bool = True,
+                    graph_maintenance_interval_s: float = _GRAPH_MAINTENANCE_INTERVAL_S) -> None:
         if self._started:
             return
         self._started = True
@@ -135,6 +189,10 @@ class LearningService:
         if enable_dream:
             self._tasks.append(asyncio.create_task(
                 self._dream_loop(dream_interval_s), name="dream-distill"))
+        if graph_maintenance_interval_s > 0:
+            self._tasks.append(asyncio.create_task(
+                self._graph_maintenance_loop(graph_maintenance_interval_s),
+                name="knowledge-graph-maintenance"))
 
     async def stop(self) -> None:
         try:
@@ -162,6 +220,20 @@ class LearningService:
                 await self.run_dream()
             except Exception as e:
                 logger.warning("dream programado fallido: %s", e)
+
+    async def _graph_maintenance_loop(self, interval_s: float) -> None:
+        """brain_guard-lite al arranque y luego periódico (default cada 6h)."""
+        while True:
+            try:
+                from src.core.knowledge_memory import get_knowledge_memory
+                result = await asyncio.to_thread(
+                    lambda: get_knowledge_memory().maintain()
+                )
+                logger.info("KnowledgeGraph maintain: %s", result)
+            except Exception as e:
+                # Mantenimiento nunca debe tumbar el servicio de aprendizaje.
+                logger.warning("KnowledgeGraph maintain omitido: %s", e)
+            await asyncio.sleep(interval_s)
 
     async def run_dream(self) -> dict:
         """Un ciclo dream+distill manual o programado. Best-effort."""
@@ -264,6 +336,13 @@ class LearningService:
                              if self.graph is not None else 0}
         except Exception:
             graph_summary = {"nodes": -1}
+        try:
+            if self.knowledge_memory is None:
+                from src.core.knowledge_memory import get_knowledge_memory
+                self.knowledge_memory = get_knowledge_memory()
+            knowledge_graph_summary = self.knowledge_memory.status()
+        except Exception as e:
+            knowledge_graph_summary = {"error": str(e)}
         return {
             "started": self._started,
             "turns": turns,
@@ -274,6 +353,7 @@ class LearningService:
             "self_learning": self.learning_loop.get_stats(),
             "router": self.router.get_stats(),
             "graph": graph_summary,
+            "knowledge_graph": knowledge_graph_summary,
             "skill_opt": self.skill_opt.stats(),
         }
 

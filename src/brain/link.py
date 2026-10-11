@@ -44,7 +44,10 @@ def _expand_brain_path(raw: str) -> Path:
 
 
 def brain_path() -> Path:
-    raw = os.environ.get("NEXUS_BRAIN", str(DEFAULT_BRAIN))
+    # nexus-v3 usa SU PROPIO brain. Un ``NEXUS_BRAIN`` ambiental puede pertenecer
+    # a OTRO proyecto de la misma PC (p.ej. supernexus-v2) y enlazar cerebros por
+    # accidente. Solo se honra un override v3-scoped (``NEXUS_V3_BRAIN``).
+    raw = os.environ.get("NEXUS_V3_BRAIN") or str(DEFAULT_BRAIN)
     p = _expand_brain_path(raw)
     # If relative, resolve against project root (parents[2])
     if not p.is_absolute():
@@ -136,7 +139,7 @@ def get_brain_info() -> dict[str, Any]:
         "brain_path": str(bp),
         "exists": exists,
         "linked_to_v2": is_linked_to_v2(),
-        "nexus_brain_env": os.environ.get("NEXUS_BRAIN", ""),
+        "nexus_brain_env": os.environ.get("NEXUS_V3_BRAIN", ""),
         "default_brain": str(DEFAULT_BRAIN),
         "files": files,
         "extra_files": extra,

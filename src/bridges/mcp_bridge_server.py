@@ -3194,6 +3194,109 @@ async def semantic_judge(content: str, topic: str, agent: str = "unknown") -> st
         return json.dumps({"error": str(e)}, indent=2)
 
 
+# ---- SESSION REMINDERS (S3, session-local, prefijo reminder_*) ----
+# Nota colisiones: los tools de cron global son `create_scheduled_task` y
+# `cron_add/list/remove`; estos usan prefijo `reminder_*` y el store
+# session-local `SessionReminderStore` (NO tocan scheduler.py).
+
+_REMINDER_DEFAULTS = {"min_every_s": 300, "max_active": 50}
+
+
+def _reminder_config() -> dict:
+    """Lee sección `reminders` de config.yaml (best-effort, defaults si falla)."""
+    try:
+        from src.core.config import load_config
+
+        cfg = load_config()
+        r = cfg.get("reminders") or {}
+        return {
+            "min_every_s": int(r.get("min_every_s", _REMINDER_DEFAULTS["min_every_s"])),
+            "max_active": int(r.get("max_active", _REMINDER_DEFAULTS["max_active"])),
+        }
+    except Exception:
+        return dict(_REMINDER_DEFAULTS)
+
+
+def _reminder_store(session_id: str):
+    from src.core.session_reminders import SessionReminderStore
+
+    if not session_id or not str(session_id).strip():
+        raise ValueError("session_id requerido")
+    return SessionReminderStore(session_id=session_id)
+
+
+@mcp.tool()
+async def reminder_create(
+    session_id: str,
+    message: str,
+    kind: str = "after",
+    delay_s: float = 0,
+    timestamp: float = 0,
+    interval_s: float = 0,
+) -> str:
+    """Create a session-local reminder (after/at/every). Session-local: never touches the global cron scheduler.
+
+    kind=after → delay_s (s); kind=at → timestamp (epoch); kind=every → interval_s (s, >= reminders.min_every_s).
+    Enforces reminders.max_active active reminders per session.
+    """
+    try:
+        from src.core.session_reminders import MIN_EVERY_SECONDS, ReminderError
+
+        cfg = _reminder_config()
+        min_every = max(MIN_EVERY_SECONDS, cfg["min_every_s"])
+        if kind not in ("after", "at", "every"):
+            return json.dumps({"error": f"kind debe ser after|at|every (recibido {kind!r})"}, indent=2)
+        store = _reminder_store(session_id)
+        if len(store.list(active_only=True)) >= cfg["max_active"]:
+            return json.dumps(
+                {"error": f"max_active={cfg['max_active']} alcanzado en sesion {session_id!r}"},
+                indent=2,
+            )
+        if kind == "after":
+            r = store.add_after(delay_s, message)
+        elif kind == "at":
+            r = store.add_at(timestamp, message)
+        else:
+            if interval_s < min_every:
+                return json.dumps(
+                    {"error": f"every minimo {min_every}s (recibido {interval_s})"},
+                    indent=2,
+                )
+            r = store.add_every(interval_s, message)
+        return json.dumps({"created": True, "reminder": r.to_dict()}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2)
+
+
+@mcp.tool()
+async def reminder_list(session_id: str, active_only: bool = True) -> str:
+    """List session-local reminders with scheduled/overdue statuses."""
+    try:
+        store = _reminder_store(session_id)
+        reminders = [r.to_dict() for r in store.list(active_only=active_only)]
+        return json.dumps(
+            {"session_id": session_id, "reminders": reminders,
+             "count": len(reminders), "statuses": store.statuses()},
+            indent=2, ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2)
+
+
+@mcp.tool()
+async def reminder_delete(session_id: str, reminder_id: str) -> str:
+    """Delete (cancel) a session-local reminder. IDs never reused."""
+    try:
+        store = _reminder_store(session_id)
+        removed = store.cancel(reminder_id)
+        return json.dumps(
+            {"removed": removed, "reminder_id": reminder_id, "session_id": session_id},
+            indent=2,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2)
+
+
 # ============================================================
 # Entry point for MCP Clients (Claude Desktop, Gemini, etc.)
 # ============================================================

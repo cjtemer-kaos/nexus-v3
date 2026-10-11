@@ -240,7 +240,7 @@ class CompactionPipeline:
     def _snip(self, messages: list[dict]) -> list[dict]:
         if len(messages) <= self.keep_recent + 1:
             return messages
-        system = [m for m in messages if m.get("role") == "system"][:1]
+        system = [m for m in messages if m.get("role") == "system"]
         rest = [m for m in messages if m.get("role") != "system"]
         if len(rest) <= self.keep_recent:
             return messages
@@ -266,7 +266,7 @@ class CompactionPipeline:
         out: list[dict] = []
         for m in messages:
             c = _content_str(m)
-            if c and len(c) > self.max_tool_result_chars:
+            if c and len(c) > self.max_tool_result_chars and m.get("role") != "system":
                 preview = c[: self.max_tool_result_chars]
                 remaining = len(c) - len(preview)
                 if self.persist_dir is not None:
@@ -281,7 +281,7 @@ class CompactionPipeline:
 
     def _summary_fallback(self, messages: list[dict], limit: int) -> list[dict]:
         """Aggressive fallback when LLM summary unavailable: keep system + last keep_recent."""
-        system = [m for m in messages if m.get("role") == "system"][:1]
+        system = [m for m in messages if m.get("role") == "system"]
         rest = [m for m in messages if m.get("role") != "system"]
         if len(rest) <= self.keep_recent:
             return messages
@@ -331,7 +331,6 @@ class CompactionPipeline:
         patterns = [
             r"context[_\s]?limit\D*?(\d{3,6})",
             r"max[_\s]?tokens\D*?(\d{3,6})",
-            r"limit\D*?(\d{3,6})",
             r"context window\D*?(\d{3,6})",
             r"too long\D*?(\d{3,6})",
             r"maximum.*?(\d{3,6})",

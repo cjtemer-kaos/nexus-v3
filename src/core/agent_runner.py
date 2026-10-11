@@ -122,7 +122,7 @@ class AgentRunner:
             self._accumulate_usage(usage, response.usage)
 
             # Fallback: detectar JSON tool_call en texto plano (modelos locales)
-            if not response.should_execute_tools and response.content:
+            if not response.has_tool_calls and response.content:
                 parsed = self._detect_text_tool_call(response.content)
                 if parsed:
                     tc = ToolCall(id=parsed["name"], name=parsed["name"], arguments=parsed["arguments"])
@@ -134,7 +134,7 @@ class AgentRunner:
                         model=response.model,
                     )
 
-            if response.should_execute_tools:
+            if response.has_tool_calls:
                 # Loop guard: hash each call, slide window, abort on repetition.
                 for tc in response.tool_calls:
                     h = _tool_call_hash(tc)
@@ -255,7 +255,7 @@ class AgentRunner:
         if spec.max_tokens is not None:
             kwargs["max_tokens"] = spec.max_tokens
 
-        if spec.on_stream and self.provider.supports_streaming:
+        if spec.on_stream and getattr(self.provider, "supports_streaming", False):
             collected: list[str] = []
             # Scrub think blocks from streaming output
             try:
@@ -273,7 +273,7 @@ class AgentRunner:
                     collected.append(chunk)
                     spec.on_stream(chunk)
             kwargs["on_content"] = on_chunk
-            resp = await self.provider.chat_stream(**kwargs)
+            resp = await getattr(self.provider, "chat_stream")(**kwargs)
             # Flush any remaining scrubber state
             if _scrubber:
                 tail = _scrubber.flush()
@@ -282,7 +282,10 @@ class AgentRunner:
                     spec.on_stream(tail)
             return resp
 
-        return await self.provider.chat_with_retry(**kwargs)
+        chat_with_retry = getattr(self.provider, "chat_with_retry", None)
+        if chat_with_retry is not None:
+            return await chat_with_retry(**kwargs)
+        return await self.provider.chat(**kwargs)
 
     async def _execute_tools(
         self,

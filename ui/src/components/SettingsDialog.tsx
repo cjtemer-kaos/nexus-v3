@@ -17,10 +17,11 @@ function KeysTab() {
     keysApi().then((r) => { setKeys(r.keys); setEnvFile(r.env_file) }).catch((e) => setMsg(String(e).slice(0, 200)))
   }, [])
 
-  const save = async (env: string) => {
+  const save = async (env: string, valueOverride?: string) => {
     setSaving(env); setMsg(null)
     try {
-      await keyPutApi(env, drafts[env] ?? '')
+      const val = valueOverride !== undefined ? valueOverride : (drafts[env] ?? '')
+      await keyPutApi(env, val)
       setDrafts((d) => ({ ...d, [env]: '' }))
       const r = await keysApi(); setKeys(r.keys)
       setMsg(`${env} guardada en ${envFile} — efectiva al instante`)
@@ -58,7 +59,7 @@ function KeysTab() {
               className="rounded-lg bg-[#0B62D6] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#4C9DFF] disabled:opacity-40"
             >Guardar</button>
             {k.configured && (
-              <button onClick={() => { setDrafts((d) => ({ ...d, [k.env]: ' ' })); setTimeout(() => save(k.env), 0) }} className="rounded-lg border border-[#2C3037] px-3 py-1.5 text-xs text-[#9BA1AA] hover:text-[#FF6259]">Quitar</button>
+              <button onClick={() => { setDrafts((d) => ({ ...d, [k.env]: ' ' })); void save(k.env, ' ') }} className="rounded-lg border border-[#2C3037] px-3 py-1.5 text-xs text-[#9BA1AA] hover:text-[#FF6259]">Quitar</button>
             )}
           </div>
           {k.providers.length > 0 && <div className="mt-1.5 flex flex-wrap gap-1">{k.providers.map((p) => <span key={p} className="rounded bg-[#22262D] px-1.5 py-0.5 text-[10px] text-[#9BA1AA]">{p}</span>)}</div>}

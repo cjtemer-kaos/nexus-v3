@@ -28,10 +28,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-from src.core.environment import data_home, ollama_base_url
+from src.core.environment import ollama_base_url
+from src.brain.link import brain_path
 
-NEXUS_HOME = data_home()
-RAG_DB_PATH = NEXUS_HOME / "rag_index.db"
+# Fix: brain_path() en vez de data_home() — igual que rag.rag_db_path(),
+# antes data_home() creaba un índice RAG divergente.
+RAG_DB_PATH = brain_path() / "rag_engine.db"
 
 DEFAULT_OLLAMA_URL = ollama_base_url()
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
@@ -127,6 +129,10 @@ class RAGEngine:
     async def close(self):
         if self._db:
             await self._db.close()
+        try:
+            await self._client.aclose()  # evita fuga del httpx AsyncClient
+        except Exception:
+            pass
 
     async def _embed(self, text: str) -> List[float]:
         """Get embedding from Ollama."""

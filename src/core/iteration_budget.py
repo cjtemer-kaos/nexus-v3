@@ -13,7 +13,7 @@ class IterationBudget:
     """Presupuesto estilo Hermes: max_iterations, max_tokens, max_wall_ms, max_tool_calls."""
 
     max_iterations: int = 25
-    max_tokens: int = 8192
+    max_tokens: int = 32000  # alineado con la compactacion (32000*0.75) para no cortar antes
     max_wall_ms: float = 300_000  # 5 min per turn
     max_tool_calls: int = 50
 

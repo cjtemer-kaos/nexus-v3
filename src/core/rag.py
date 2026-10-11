@@ -34,7 +34,9 @@ def project_root() -> Path:
 
 
 def rag_db_path() -> Path:
-    return project_root() / "brain" / "rag_index.db"
+    # Keep every brain artifact under the same configured NEXUS_BRAIN root.
+    from src.brain.link import brain_path
+    return brain_path() / "rag_index.db"
 
 
 def _connect() -> sqlite3.Connection:
@@ -88,6 +90,45 @@ def _blob_to_vec(b: bytes) -> list[float]:
     return list(struct.unpack(f"{n}f", b[:n * 4]))
 
 
+def _db_clean_stale(db: sqlite3.Connection, keep: dict, drop_missing: bool = False) -> int:
+    """Purga chunks huérfanos tras (re)indexar (fix #19).
+
+    keep: {source: hashes vigentes} tras este indexado.
+    - Por fuente en keep: borra sus chunks cuyo hash ya no vigente.
+    - drop_missing (solo full index): borra por completo fuentes graph: ausentes.
+    - Commit solo si borró algo. Devuelve nº de chunks borrados.
+    """
+    if not keep:
+        return 0
+    deleted = 0
+    sources = list(keep)
+    for i in range(0, len(sources), 80):
+        batch = sources[i:i + 80]
+        marks = ",".join("?" * len(batch))
+        rows = db.execute(
+            f"SELECT id, source, content_hash FROM chunks WHERE source IN ({marks})",
+            batch,
+        ).fetchall()
+        stale = [rid for rid, src, h in rows if h not in keep.get(src, ())]
+        for j in range(0, len(stale), 500):
+            ids = stale[j:j + 500]
+            cur = db.execute(
+                f"DELETE FROM chunks WHERE id IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+            deleted += cur.rowcount or 0
+    if drop_missing:
+        have = {r[0] for r in db.execute(
+            "SELECT DISTINCT source FROM chunks WHERE source LIKE 'graph:%'"
+        ).fetchall()}
+        for src in sorted(have - set(keep)):
+            cur = db.execute("DELETE FROM chunks WHERE source=?", (src,))
+            deleted += cur.rowcount or 0
+    if deleted:
+        db.commit()
+    return deleted
+
+
 def index_graph(limit: int = 0) -> dict:
     """Indexa nodos del knowledge_graph propio a chunks con embeddings. Batched (8 por request) para reducir RTT."""
     from src.brain.link import brain_path
@@ -105,20 +146,26 @@ def index_graph(limit: int = 0) -> dict:
     # recolectar pendientes primero (sin embed aún)
     pending: list[tuple[str, int, str, str]] = []  # (source, ci, content, hash)
     skipped = 0
+    keep: dict[str, set[str]] = {}  # fix #19: hashes vigentes por fuente
     for r in rows:
         text = f"{r['title'] or ''}\n{r['content'] or ''}".strip()
         if not text:
             continue
+        src = f"graph:{r['id']}"
+        hashes = keep.setdefault(src, set())
         for ci, ch in enumerate(_chunk(text)):
             h = hashlib.md5(ch.encode()).hexdigest()
+            hashes.add(h)
             if db.execute("SELECT 1 FROM chunks WHERE content_hash=?", (h,)).fetchone():
                 skipped += 1
                 continue
-            pending.append((f"graph:{r['id']}", ci, ch, h))
+            pending.append((src, ci, ch, h))
     if not pending:
+        # fix #19: sin inserts nuevos, aún así purgar huérfanos de estas fuentes
+        stale = _db_clean_stale(db, keep, drop_missing=not limit)
         total = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
         db.close()
-        return {"ok": True, "nodes": len(rows), "new_chunks": 0, "skipped": skipped, "total_chunks": total}
+        return {"ok": True, "nodes": len(rows), "new_chunks": 0, "skipped": skipped, "total_chunks": total, "stale_chunks": stale}
     # embed en batches de 8 (una sola request HTTP por batch)
     BATCH = 8
     new_chunks = 0
@@ -128,7 +175,7 @@ def index_graph(limit: int = 0) -> dict:
         vecs = embed(texts)
         if not vecs or len(vecs) != len(batch):
             db.close()
-            return {"ok": False, "error": "embed :8001 no responde o batch incompleto", "new_chunks": new_chunks, "skipped": skipped}
+            return {"ok": False, "error": "embed :8001 no responde o batch incompleto", "new_chunks": new_chunks, "skipped": skipped, "stale_chunks": 0}
         for (src, ci, ch, h), v in zip(batch, vecs):
             db.execute(
                 "INSERT INTO chunks (source, chunk_index, content, content_hash, embedding, created_at) VALUES (?,?,?,?,?,?)",
@@ -140,9 +187,11 @@ def index_graph(limit: int = 0) -> dict:
         if _index_job.get("running"):
             with _index_lock:
                 _index_job["done"] = skipped + new_chunks
+    # fix #19: purgar huérfanos solo si el embed terminó sin error
+    stale = _db_clean_stale(db, keep, drop_missing=not limit)
     total = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
     db.close()
-    return {"ok": True, "nodes": len(rows), "new_chunks": new_chunks, "skipped": skipped, "total_chunks": total}
+    return {"ok": True, "nodes": len(rows), "new_chunks": new_chunks, "skipped": skipped, "total_chunks": total, "stale_chunks": stale}
 
 
 def index_graph_background(limit: int = 0) -> dict:
@@ -195,8 +244,8 @@ def index_status() -> dict:
     return d
 
 
-def search(query: str, limit: int = 5) -> list[dict]:
-    """Búsqueda semántica sobre el índice RAG."""
+def search(query: str, limit: int = 5, min_score: float = 0.25) -> list[dict]:
+    """Búsqueda semántica sobre el índice RAG. Descarta scores < min_score (fix: ruido ~0.05 pasaba)."""
     qvecs = embed(query)
     if not qvecs:
         return []
@@ -209,7 +258,8 @@ def search(query: str, limit: int = 5) -> list[dict]:
         if not blob:
             continue
         s = _cos(qv, _blob_to_vec(blob))
-        scored.append((s, src, content))
+        if s >= min_score:
+            scored.append((s, src, content))
     scored.sort(key=lambda x: -x[0])
     return [{"score": round(s, 4), "source": src, "content": content[:600]} for s, src, content in scored[:limit]]
 

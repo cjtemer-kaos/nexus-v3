@@ -58,6 +58,65 @@ export async function chatApi(
   }
 }
 
+// Streaming token-a-token (pi): consume /api/chat/stream (SSE) y llama onDelta por chunk.
+export async function chatStreamApi(
+  message: string,
+  opts: { sessionId?: string; model?: string; onDelta?: (t: string) => void } = {},
+): Promise<{ reply: string; success: boolean }> {
+  const base = await getBackendUrl();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000); // cap 3 min: evita UI colgada
+  try {
+    // POST con body: no expone el mensaje en la URL (logs/límite) y envía session_id.
+    const res = await fetch(`${base}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ message, session_id: opts.sessionId, model: opts.model }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let reply = "";
+    const handleEvent = (raw: string) => {
+      const dataLines = raw
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.replace(/^data:\s*/, "").replace(/\r$/, ""));
+      if (!dataLines.length) return;
+      const line = dataLines.join("\n").trim();
+      if (!line || line === "[DONE]") return;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.delta && opts.onDelta) opts.onDelta(String(obj.delta));
+        if (obj.reply) reply = String(obj.reply);
+      } catch {
+        /* chunk no-JSON: ignorar */
+      }
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      // Split tolerante a CRLF (SSE puede usar \r\n\r\n).
+      const parts = buf.split(/\r?\n\r?\n/);
+      if (parts.length > 1) {
+        buf = parts.pop() as string;
+        for (const ev of parts) handleEvent(ev);
+      }
+    }
+    if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
+    return { reply, success: true };
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw new Error("stream timeout 180s — el modelo local tarda; reintenta");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
 export async function healthApi(): Promise<{ status: string; version: string; brain: unknown; providers: Record<string, unknown> }> {
   const res = await apiFetch("/api/health");
   if (!res.ok) throw new Error(`health ${res.status}`);
@@ -215,6 +274,88 @@ export async function permissionPutApi(permission: string): Promise<{ ok: boolea
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ permission }),
   })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
+}
+
+/* -- Ayudantes (LLM independiente por asistente) --------------- */
+
+export type Agent = {
+  id: string
+  name: string
+  model: string
+  provider: string
+  system_prompt: string
+  description: string
+  emoji: string
+  color: string
+  gema: string
+  workspace?: string
+  toolsets: string[]
+  skills: string[]
+  mcp: string[]
+  created_at?: string
+  updated_at?: string
+  builtin?: boolean
+}
+
+export type Gema = {
+  name: string
+  description: string
+  system_prompt: string
+  tools: string[] | null
+  temperature: number
+  max_turns: number
+  model_hint: string
+  planning: boolean
+}
+
+export async function gemasApi(): Promise<{ gemas: Gema[] }> {
+  const res = await apiFetch("/api/gemas")
+  if (!res.ok) throw new Error(`gemas ${res.status}`)
+  return res.json()
+}
+
+export type AssignResult = { model: string; provider: string; reason: string; catalog_size: number }
+
+export async function assignApi(params: { gema?: string; agent?: string; model?: string }): Promise<{ assign: AssignResult }> {
+  const q = new URLSearchParams()
+  if (params.gema) q.set("gema", params.gema)
+  if (params.agent) q.set("agent", params.agent)
+  if (params.model) q.set("model", params.model)
+  const res = await apiFetch(`/api/models/assign?${q.toString()}`)
+  if (!res.ok) throw new Error(`assign ${res.status}`)
+  return res.json()
+}
+
+export async function agentsApi(): Promise<{ agents: Agent[] }> {
+  const res = await apiFetch("/api/agents")
+  if (!res.ok) throw new Error(`agents ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  return res.json()
+}
+
+export async function agentCreateApi(payload: Partial<Agent> & { name: string }): Promise<{ ok: boolean; agent: Agent }> {
+  const res = await apiFetch("/api/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
+}
+
+export async function agentUpdateApi(id: string, patch: Partial<Agent>): Promise<{ ok: boolean; agent: Agent }> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
+}
+
+export async function agentDeleteApi(id: string): Promise<{ ok: boolean }> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" })
   if (!res.ok) throw new Error((await res.text()).slice(0, 400))
   return res.json()
 }

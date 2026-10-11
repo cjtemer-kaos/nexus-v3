@@ -13,8 +13,12 @@ _FREE_RE = re.compile(r"free", re.I)
 
 
 class CloudProvider(BaseProvider):
-    def __init__(self, base_url: str, api_key: str | None = None, auth_style: str = "bearer", timeout_s: float = 60):
+    def __init__(self, base_url: str, api_key: str | None = None, auth_style: str = "bearer",
+                 timeout_s: float = 60, strict_tools: bool = False):
         self.base_url = base_url.rstrip("/")
+        # P3 (pi/constrained sampling): strict tool schemas (OpenAI) -> tool calls
+        # validos al 1er intento, menos reintentos. Opt-in (algunos endpoints no lo soportan).
+        self.strict_tools = bool(strict_tools)
         # Expand ${OPENCODE_API_KEY} style if leaked from config.yaml parsing
         raw_key = api_key or os.environ.get("OPENCODE_API_KEY", "")
         if raw_key and raw_key.startswith("${"):
@@ -41,6 +45,42 @@ class CloudProvider(BaseProvider):
         if self.auth_style == "x-api-key":
             return {**base, "x-api-key": self.api_key}
         return {**base, "Authorization": f"Bearer {self.api_key}"}
+
+    @staticmethod
+    def _strict_tools(tools: list[dict]) -> list[dict]:
+        """Marca los tools como strict (OpenAI), recursivo: additionalProperties=false +
+        required=all properties en CADA objeto anidado (OpenAI strict lo exige)."""
+        def _strict_obj(schema):
+            if not isinstance(schema, dict):
+                return
+            if schema.get("type") == "object" or "properties" in schema:
+                schema["additionalProperties"] = False
+                props = schema.get("properties") or {}
+                if props:
+                    schema["required"] = list(props.keys())
+                for v in props.values():
+                    _strict_obj(v)
+            if isinstance(schema.get("items"), dict):
+                _strict_obj(schema["items"])
+            for key in ("anyOf", "oneOf", "allOf"):
+                for sub in schema.get(key) or []:
+                    _strict_obj(sub)
+
+        out: list[dict] = []
+        for t in tools:
+            try:
+                t2 = json.loads(json.dumps(t))
+            except Exception:
+                out.append(t)
+                continue
+            fn = t2.get("function") or {}
+            params = fn.get("parameters")
+            if isinstance(params, dict):
+                _strict_obj(params)
+                fn["strict"] = True  # solo si hay schema de objeto valido
+            t2["function"] = fn
+            out.append(t2)
+        return out
 
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         if not self.api_key:
@@ -79,9 +119,15 @@ class CloudProvider(BaseProvider):
             "model": model or "nemotron-3-ultra-free",
             "messages": [_to_wire(m) for m in messages],
         }
+        if kw.get("max_tokens"):
+            payload["max_tokens"] = kw["max_tokens"]
+        if kw.get("temperature") is not None:
+            payload["temperature"] = kw["temperature"]
+        if kw.get("options"):
+            payload.update(kw["options"])
         if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = kw.get("tool_choice", "auto")
+            payload["tools"] = self._strict_tools(tools) if self.strict_tools else tools
+            payload["tool_choice"] = "required" if kw.get("force_tools") else kw.get("tool_choice", "auto")
         r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers())
         r.raise_for_status()
         data = r.json()

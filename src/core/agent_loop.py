@@ -30,6 +30,21 @@ from .iteration_budget import IterationBudget
 from .error_classifier import ErrorAction, classify_error
 from .trajectory import Trajectory, TrajectoryStep
 
+import os as _os
+
+# Herramientas de SOLO LECTURA: seguras de ejecutar en paralelo (sin efectos).
+_READONLY_TOOLS = {
+    "read", "read_file", "list", "ls", "list_dir", "glob", "grep", "search",
+    "code_search", "recall", "memory_recall", "brain_recall", "search_observations",
+    "web_fetch", "web_search", "fetch", "mcp_list", "gema_list", "agent_list",
+    "get_system_info", "system_resources", "status", "graph", "knowledge_graph",
+    "fts_search", "find_related", "get_entities", "latest_topic", "find_path",
+}
+
+
+def _parallel_tools_on() -> bool:
+    return _os.environ.get("NEXUS_PARALLEL_TOOLS", "1").lower() not in ("0", "false", "no")
+
 logger = logging.getLogger("nexus-agent-loop")
 
 # Re-export for callers
@@ -51,6 +66,30 @@ class LoopStep:
     content: str
     tool_used: str | None = None
     result: ToolResult | None = None
+    # --- PASO 1: schema unificado con TrajectoryStep ---
+    turn: int = 0
+    seq: int = 0
+    tokens: int = 0
+    model: str = ""
+    duration_ms: float = 0.0
+    end_reason: str = ""
+
+    def to_trajectory_step(self) -> TrajectoryStep:
+        """Convierte al schema unificado de trayectoria."""
+        from .trajectory import TrajectoryStep as _TS
+        return _TS(
+            iteration=self.iteration,
+            role="tool" if self.tool_used and self.phase == "act" else ("assistant" if self.phase in ("decide", "think") else "event"),
+            content=self.content,
+            tool_name=self.tool_used,
+            turn=self.turn or self.iteration,
+            step=self.phase,
+            seq=self.seq,
+            duration_ms=max(0.0, float(self.duration_ms or 0.0)),
+            tokens=self.tokens,
+            model=self.model,
+            end_reason=self.end_reason,
+        )
 
 
 @dataclass
@@ -93,6 +132,7 @@ class AgentLoop:
         session_log=None,
         event_store=None,
         compaction=None,
+        distill_hook=None,
         max_iterations: int = 25,
         heartbeat_ms: int = 2000,
     ):
@@ -104,11 +144,23 @@ class AgentLoop:
         self.session_log = session_log
         self.event_store = event_store
         self.compaction = compaction
+        self.distill_hook = distill_hook
         self.heartbeat_ms = heartbeat_ms
 
         # Per-task retry/replan counters
         self._retry_counts: dict[str, int] = {}
         self._replan_counts: dict[str, int] = {}
+
+    async def _distill(self, session_id: str) -> None:
+        """Destila la sesión al grafo ANTES de compactar (no perder conocimiento)."""
+        if self.distill_hook is None:
+            return
+        try:
+            res = self.distill_hook(session_id)
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception as e:
+            logger.debug(f"distill hook falló: {e}")
 
     def _extract_text_tool_calls(self, content: str) -> list:
         """Respaldo para modelos que escriben JSON en texto en vez de tool_calls.
@@ -126,9 +178,9 @@ class AgentLoop:
         # sobraba.
         try:
             names = set()
-            if self.tools is not None and hasattr(self.tools, "list_tools"):
+            if self.tools is not None and hasattr(self.tools, "list"):
                 try:
-                    names = {t.get("name", "") for t in self.tools.list_tools()}
+                    names = {getattr(t, "name", "") for t in self.tools.list()}
                 except Exception:
                     names = set()
         except Exception:
@@ -232,7 +284,104 @@ class AgentLoop:
                 break
         return out
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None) -> LoopResult:
+    def _emit_cycle(self, trajectory: Trajectory, kind: str, iteration: int, content: str = "", duration_ms: float = 0.0, end_reason: str = "", tokens: int = 0, model: str = "") -> None:
+        """Emite un evento del ciclo turn/step a trajectory + event_store + hooks (best-effort)."""
+        try:
+            trajectory.append_event(kind, content=content, iteration=iteration, turn=iteration, duration_ms=max(0.0, float(duration_ms or 0.0)), end_reason=end_reason, tokens=tokens, model=model)
+        except Exception:
+            pass
+        if self.event_store is not None:
+            try:
+                self.event_store.append_event(kind, {"iteration": iteration, "turn": iteration, "content": (content or "")[:2000], "duration_ms": max(0.0, float(duration_ms or 0.0)), "end_reason": end_reason, "tokens": tokens, "model": model}, session_id=trajectory.session_id)
+            except Exception:
+                pass
+
+    async def _emit_cycle_async(self, trajectory: Trajectory, kind: str, iteration: int, content: str = "", duration_ms: float = 0.0, end_reason: str = "", tokens: int = 0, model: str = "") -> None:
+        self._emit_cycle(trajectory, kind, iteration, content, duration_ms, end_reason, tokens, model)
+        if self.hooks is not None:
+            try:
+                res = self.hooks.emit(kind, {"iteration": iteration, "turn": iteration, "session_id": trajectory.session_id})
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
+
+    async def _stream_turn(self, messages, tools, hint, force_tools) -> Any:
+        """Consume router.stream, reenvia deltas de texto via on_delta, devuelve la respuesta final."""
+        final = None
+        async for ev in self.router.stream(
+            messages, tools=tools, hint=hint, force_tools=force_tools,
+            model=getattr(self, "_req_model", None),
+        ):
+            et = ev.get("type") if isinstance(ev, dict) else None
+            if et == "text":
+                try:
+                    _r = self._on_delta(ev.get("text", ""))
+                    if asyncio.iscoroutine(_r):
+                        await _r
+                except Exception:
+                    pass
+            elif et == "final":
+                final = ev.get("response")
+        if final is None:
+            raise RuntimeError("stream sin respuesta final")
+        return final
+
+    @staticmethod
+    def _rebuild_messages(dict_msgs) -> list:
+        """Reconstruye LLMMessage preservando tool_calls/tool_call_id/images.
+        Sin esto, la compactacion produce un payload OpenAI invalido (tool sin parent)."""
+        out: list = []
+        for d in dict_msgs:
+            if not isinstance(d, dict):
+                continue
+            kwargs: dict = {}
+            tcs = d.get("tool_calls")
+            if tcs:
+                _parsed = []
+                for tc in tcs:
+                    if isinstance(tc, ToolCall):
+                        _parsed.append(tc)
+                    elif isinstance(tc, dict):
+                        _fn = tc.get("function") or {}
+                        _parsed.append(ToolCall(
+                            id=tc.get("id", "") or "",
+                            name=_fn.get("name") or tc.get("name", "") or "",
+                            arguments=_fn.get("arguments") or tc.get("arguments") or {},
+                        ))
+                if _parsed:
+                    kwargs["tool_calls"] = tuple(_parsed)
+            if d.get("tool_call_id"):
+                kwargs["tool_call_id"] = d.get("tool_call_id")
+            if d.get("images"):
+                kwargs["images"] = tuple(d.get("images"))
+            out.append(LLMMessage(role=d.get("role", "user"), content=d.get("content"), **kwargs))
+        return out
+
+    @staticmethod
+    def _to_dicts(messages) -> list:
+        """Inverso de _rebuild_messages: dicts que PRESERVAN tool_calls/tool_call_id/images.
+        Sin esto la compactacion (que consume dicts) descarta los metadatos ANTES de reconstruir."""
+        out: list = []
+        for m in messages:
+            d: dict = {"role": getattr(m, "role", "user"), "content": getattr(m, "content", None) or ""}
+            tcs = getattr(m, "tool_calls", ()) or ()
+            if tcs:
+                d["tool_calls"] = [
+                    {"id": getattr(tc, "id", ""), "type": "function",
+                     "function": {"name": getattr(tc, "name", ""), "arguments": getattr(tc, "arguments", {})}}
+                    for tc in tcs
+                ]
+            _tcid = getattr(m, "tool_call_id", "")
+            if _tcid:
+                d["tool_call_id"] = _tcid
+            _imgs = getattr(m, "images", None)
+            if _imgs:
+                d["images"] = list(_imgs)
+            out.append(d)
+        return out
+
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -244,12 +393,37 @@ class AgentLoop:
         """
         t0 = time.monotonic()
         steps: list[LoopStep] = []
-        trajectory = Trajectory(session_id=session_id, task=task)
+        trajectory = trajectory or Trajectory(session_id=session_id, task=task)
+        # Resume: cerrar turnos interrumpidos antes de emitir nada nuevo.
+        try:
+            trajectory.close_interrupted_turns()
+        except Exception:
+            pass
         total_tokens = 0
         success = False
         final_output = ""
         self._empty_retries = 0  # type: ignore[attr-defined]
+        self._reason_retries = 0  # type: ignore[attr-defined]
+        self._retry_counts.clear()
+        self._replan_counts.clear()
+        self._tool_fp_window = []  # type: ignore[attr-defined]
+        try:
+            if self.budget is not None:
+                self.budget.reset()  # reset per-run (budget persiste en instancias reusadas)
+        except Exception:
+            pass
         self._req_model = model  # type: ignore[attr-defined]
+        self._on_delta = on_delta  # type: ignore[attr-defined]
+        # P0 prompt-cache stickiness: fija el modelo UNA vez por run (si no se pidió uno)
+        # para no invalidar el prompt/KV cache cambiando de modelo entre turnos.
+        if (self._req_model is None and getattr(self, "router", None) is not None
+                and _os.environ.get("NEXUS_STICKY_MODEL", "1").lower() not in ("0", "false", "no")):
+            try:
+                _routed = self.router.resolve(task_hint=hint)
+                if _routed is not None and getattr(_routed, "model", None):
+                    self._req_model = _routed.model
+            except Exception:
+                pass
         self._tool_fp_window: list[tuple[str, str]] = []  # type: ignore[attr-defined]
 
         # Init trajectory + session
@@ -276,8 +450,35 @@ class AgentLoop:
         if system_prompt:
             messages.append(LLMMessage(role="system", content=system_prompt))
         else:
-            messages.append(LLMMessage(role="system", content="Eres Nexus v3, un agente con herramientas reales. Usa tool_calls SOLO si la tarea requiere acceder a archivos, sistema o ejecutar algo. Para tareas de generación (diseño, textos, código, creatividad) responde directamente con el contenido. No invoques herramientas innecesarias. Sé conciso."))
+            messages.append(LLMMessage(role="system", content=(
+                "Eres Nexus v3, un agente con herramientas reales. Usa tool_calls SOLO "
+                "si la tarea requiere acceder a archivos, sistema, memoria o ejecutar algo. "
+                "Antes de responder sobre decisiones previas, preferencias, lecciones o "
+                "historial del proyecto, usa recall para consultar el grafo local. Después "
+                "de aprender algo duradero, usa learn para persistirlo. Para tareas de "
+                "generación (diseño, textos, código, creatividad) responde directamente "
+                "con el contenido. Para tareas especializadas puedes DELEGAR en ayudantes: "
+                "usa gema_list/agent_list para descubrirlos y gema_run/agent_run para delegar "
+                "(el LLM de cada ayudante se asigna automáticamente según lo disponible en la PC). "
+                "No invoques herramientas innecesarias. Sé conciso."
+            )))
 
+        # Plan-mode: si aplica, inyectar plan:policy tras el system prompt.
+        # La guía se mantiene hasta fin de batch aunque se apruebe a mitad del
+        # run (Approve no la retira: solo habilita la salida al final).
+        _plan_active = False
+        try:
+            if plan_mode is not None and hasattr(plan_mode, "policy_applies"):
+                _plan_active = bool(plan_mode.policy_applies(session_id))
+            elif plan_mode is not None:
+                _plan_active = bool(plan_mode.is_active())
+        except Exception:
+            _plan_active = False
+        if _plan_active:
+            try:
+                messages.insert(1, LLMMessage(role="system", content=plan_mode.policy_guide()))
+            except Exception:
+                pass
         # Load history from session_log if available
         history_limit = 20
         if self.session_log is not None:
@@ -322,12 +523,13 @@ class AgentLoop:
         # Compaction pre-check
         if self.compaction is not None:
             try:
-                dict_msgs = [{"role": m.role, "content": m.content or ""} for m in messages]
+                dict_msgs = self._to_dicts(messages)
                 # Use router to decide if we need compaction via token estimate
                 max_tokens = 32000
                 if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
+                    await self._distill(session_id)
                     dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, int(max_tokens * 0.75))
-                    messages = [LLMMessage(role=d["role"], content=d.get("content")) for d in dict_msgs]
+                    messages = self._rebuild_messages(dict_msgs)
             except Exception as e:
                 logger.debug(f"compaction pre-check falló: {e}")
 
@@ -360,6 +562,16 @@ class AgentLoop:
 
             iteration += 1
             self.budget.tick()
+            _turn_t0 = time.monotonic()
+
+            async def _close_turn(reason: str, _t0: float = _turn_t0, _it: int = iteration) -> None:
+                _dur = max(0.0, (time.monotonic() - _t0) * 1000.0)
+                await self._emit_cycle_async(trajectory, "step/end", _it, duration_ms=_dur, end_reason=reason)
+                await self._emit_cycle_async(trajectory, "turn/end", _it, duration_ms=_dur, end_reason=reason)
+
+            # ---- TURN/STEP start ----
+            await self._emit_cycle_async(trajectory, "turn/start", iteration, content=f"turno {iteration}")
+            await self._emit_cycle_async(trajectory, "step/start", iteration, content=f"paso {iteration}")
 
             # ---- THINK: LLM call ----
             steps.append(LoopStep(iteration=iteration, phase="think", content=f"pensando (iter {iteration})"))
@@ -370,8 +582,10 @@ class AgentLoop:
                 # Hooks pre_llm_call
                 if self.hooks is not None and self.hooks.has_handlers("pre_llm_call"):
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
-                # Router.chat with fallback
-                if hasattr(self.router, "chat"):
+                # Router.chat con fallback (o streaming token-a-token si hay on_delta)
+                if getattr(self, "_on_delta", None) is not None and hasattr(self.router, "stream"):
+                    llm_resp = await self._stream_turn(messages, openai_tools, hint, force_tools)
+                elif hasattr(self.router, "chat"):
                     llm_resp = await self.router.chat(messages, tools=openai_tools, hint=hint, force_tools=force_tools, model=getattr(self, "_req_model", None))
                 else:
                     # Fallback: resolve then chat
@@ -386,20 +600,28 @@ class AgentLoop:
                 err_str = str(e)
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"Error LLM: {err_str}"))
                 # Check for context window error -> reactive compact
-                if "context" in err_str.lower() or "too long" in err_str.lower() or "limit" in err_str.lower():
+                # Solo un overflow REAL de contexto dispara reactive-compact (no "rate limit"/429).
+                import re as _re_ctx
+                _elow = err_str.lower()
+                _ctx_overflow = ("rate limit" not in _elow and "quota" not in _elow and
+                                 bool(_re_ctx.search(r"context (window|length)|maximum context|too many tokens|prompt is too long|context[_\s]?limit|exceed.{0,20}context|input is too long", _elow)))
+                if _ctx_overflow:
                     if self.compaction is not None:
                         try:
-                            dict_msgs = [{"role": m.role, "content": m.content or ""} for m in messages]
+                            dict_msgs = self._to_dicts(messages)
                             dict_msgs = await self.compaction.reactive_compact(dict_msgs, err_str)
-                            messages = [LLMMessage(role=d["role"], content=d.get("content")) for d in dict_msgs]
+                            messages = self._rebuild_messages(dict_msgs)
+                            await _close_turn("compact-retry")
                             continue  # retry LLM call with compacted context
                         except Exception:
                             pass
                 final_output = f"[Error LLM: {err_str}]"
+                await _close_turn("error")
                 break
 
             if llm_resp is None:
                 final_output = "[sin respuesta LLM]"
+                await _close_turn("error")
                 break
 
             # Track tokens
@@ -416,6 +638,16 @@ class AgentLoop:
 
             # Append assistant message to history
             assistant_content = llm_resp.content or ""
+            # Max-tokens: si el provider cortó por límite y no hay contenido ni
+            # tool calls, NO inyectar un assistant vacío (rompe el protocolo y
+            # contamina la trayectoria). Se cierran turno/paso y se sale.
+            _finish = str(getattr(llm_resp, "finish_reason", "") or "").lower()
+            _max_tok_stop = _finish in ("length", "max_tokens", "limit", "token_limit")
+            if _max_tok_stop and not assistant_content.strip() and not llm_resp.has_tool_calls:
+                steps.append(LoopStep(iteration=iteration, phase="observe", content="corte por max_tokens sin contenido: sin assistant vacío", end_reason="max_tokens"))
+                final_output = final_output or "[corte por max_tokens sin contenido]"
+                await _close_turn("max_tokens")
+                break
             # Antes de declarar \"vacío\", intentar extraer tool_calls de texto
             # (modelos locales ponen <tool_call>JSON</tool_call> en reasoning_content)
             _pre_tcs: list = []
@@ -447,23 +679,33 @@ class AgentLoop:
                     _reason = (getattr(llm_resp, "reasoning_content", "") or "").strip()
                     _empty_retries = getattr(self, "_empty_retries", 0)
                     if _reason:
+                        _reason_retries = getattr(self, "_reason_retries", 0)
+                        if _reason_retries >= 3:
+                            final_output = f"[razonamiento sin respuesta final tras {_reason_retries} intentos]"
+                            success = False
+                            await _close_turn("reason-only")
+                            break
+                        self._reason_retries = _reason_retries + 1  # type: ignore[attr-defined]
                         steps.append(LoopStep(iteration=iteration, phase="decide", content="razonamiento sin respuesta final: se continúa"))
                         messages.append(LLMMessage(role="assistant", content=f"[razonamiento interno: {_reason[:2000]}]"))
                         messages.append(LLMMessage(role="user", content="Continúa: usa tus herramientas si la tarea lo requiere, o da tu respuesta final."))
+                        await _close_turn("empty-retry")
                         continue
                     elif _empty_retries < 2:
                         self._empty_retries = _empty_retries + 1  # type: ignore[attr-defined]
                         steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta vacía ({self._empty_retries}/2): reintentando"))
                         messages.append(LLMMessage(role="user", content="Tu respuesta anterior llegó vacía. Responde de nuevo, de forma concisa."))
+                        await _close_turn("empty-retry")
                         continue
             messages.append(LLMMessage(role="assistant", content=assistant_content, tool_calls=llm_resp.tool_calls if llm_resp.has_tool_calls else ()))
 
             # Trajectory
+            _resp_model = getattr(llm_resp, "model", "") or ""
             if llm_resp.has_tool_calls:
                 for tc in llm_resp.tool_calls:
-                    trajectory.append_assistant(assistant_content, iteration=iteration, tool_name=tc.name, tool_call_id=tc.id, tool_args=tc.arguments)
+                    trajectory.append_assistant(assistant_content, iteration=iteration, tool_name=tc.name, tool_call_id=tc.id, tool_args=tc.arguments, turn=iteration, step="assistant", tokens=turn_tokens, model=_resp_model)
             else:
-                trajectory.append_assistant(assistant_content, iteration=iteration)
+                trajectory.append_assistant(assistant_content, iteration=iteration, turn=iteration, step="assistant", tokens=turn_tokens, model=_resp_model)
 
             # Session log
             if self.session_log is not None:
@@ -494,10 +736,39 @@ class AgentLoop:
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta final ({len(assistant_content)} caracteres)"))
                 final_output = assistant_content
                 success = True
+                await _close_turn("stop")
                 break
+            # ---- ACT: pre-dispatch paralelo de herramientas de SOLO LECTURA ----
+            # Las de escritura/exec quedan secuenciales (preservan orden + efectos).
+            _pre: dict[int, Any] = {}
+            try:
+                if len(_tcs) > 1 and _parallel_tools_on() and self.tools is not None:
+                    from .concurrency import gather_limited
+                    _safe = []
+                    for _i, _tc in enumerate(_tcs):
+                        _n = (_tc.name or "").lower()
+                        if _n not in _READONLY_TOOLS:
+                            break  # solo el run INICIAL de solo-lectura (preserva orden vs mutantes)
+                        _a = _tc.arguments
+                        if isinstance(_a, str):
+                            try:
+                                _a = json.loads(_a) if _a else {}
+                            except Exception:
+                                _a = {}
+                        _safe.append((_i, _tc.name or _n, _a if isinstance(_a, dict) else {}))
+                    if len(_safe) > 1:
+                        _res = await gather_limited([
+                            self.tools.dispatch(n, a, scope=self.scope, hooks=self.hooks)
+                            for (_i, n, a) in _safe
+                        ])
+                        for (_i, _n, _a), _r in zip(_safe, _res):
+                            _pre[_i] = _r
+                        steps.append(LoopStep(iteration=iteration, phase="act", content=f"act: {len(_safe)} herramientas de solo-lectura en paralelo"))
+            except Exception:
+                _pre = {}
             # ---- ACT: despachar cada llamada de herramienta ----
             # Usa _tcs (reales o extraídos del texto) en vez de llm_resp.tool_calls
-            for tc in _tcs:
+            for _idx, tc in enumerate(_tcs):
                 tool_name = tc.name
                 tool_args = tc.arguments if isinstance(tc.arguments, dict) else {}
                 # If arguments is a JSON string (from llama.cpp), parse it
@@ -514,8 +785,14 @@ class AgentLoop:
                 try:
                     if self.tools is None:
                         raise KeyError(f"sin registro de herramientas; no se puede despachar {tool_name}")
-                    # Dispatch with scope+hooks
-                    raw_result = await self.tools.dispatch(tool_name, tool_args, scope=self.scope, hooks=self.hooks)
+                    # Dispatch with scope+hooks (usa pre-dispatch paralelo si aplica)
+                    if _idx in _pre:
+                        _pr = _pre[_idx]
+                        if isinstance(_pr, BaseException):
+                            raise _pr
+                        raw_result = _pr
+                    else:
+                        raw_result = await self.tools.dispatch(tool_name, tool_args, scope=self.scope, hooks=self.hooks)
                     # Normalize result to string
                     if isinstance(raw_result, str):
                         tool_result_str = raw_result
@@ -533,7 +810,7 @@ class AgentLoop:
                         _win = getattr(self, "_tool_fp_window", [])
                         _win.append(_fp)
                         self._tool_fp_window = _win[-3:]  # type: ignore[attr-defined]
-                        if len(self._tool_fp_window) == 3 and all(x == _win[0] for x in self._tool_fp_window):
+                        if len(self._tool_fp_window) == 3 and all(x == self._tool_fp_window[0] for x in self._tool_fp_window):
                             # success=False: no hubo respuesta final del modelo —
                             # declarar exito aqui persistiria un falso positivo en
                             # trajectory/event_store/session summary (capa 12).
@@ -583,7 +860,7 @@ class AgentLoop:
 
                 # Observar: agregar resultado de herramienta to messages + session + trajectory
                 steps.append(LoopStep(iteration=iteration, phase="act", content=f"act: {tool_name}", tool_used=tool_name, result=ToolResult(success=tool_success, output=tool_result_str[:2000])))
-                trajectory.append_tool_result(tool_name, tool_result_str, success=tool_success, iteration=iteration, tool_call_id=tc.id)
+                trajectory.append_tool_result(tool_name, tool_result_str, success=tool_success, iteration=iteration, tool_call_id=tc.id, turn=iteration, step="tool", tokens=0, model=_resp_model)
                 messages.append(LLMMessage(role="tool", content=tool_result_str, tool_call_id=tc.id))
                 if self.session_log is not None:
                     try:
@@ -601,20 +878,24 @@ class AgentLoop:
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado tras iter {iteration}: {self.budget.reason}"))
                 final_output = final_output or "[presupuesto agotado antes de respuesta final]"
+                await _close_turn("budget")
                 break
 
             # Maybe compact if approaching limit
             if self.compaction is not None and len(messages) > 10:
                 try:
-                    dict_msgs = [{"role": m.role, "content": m.content or ""} for m in messages]
+                    dict_msgs = self._to_dicts(messages)
                     max_tokens = 32000
                     if self.compaction.maybe_compact(dict_msgs, max_tokens):
+                        await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
                         dict_msgs, _ = await self.compaction.compact(dict_msgs, int(max_tokens * 0.75))
-                        messages = [LLMMessage(role=d["role"], content=d.get("content")) for d in dict_msgs]
+                        messages = self._rebuild_messages(dict_msgs)
                         steps.append(LoopStep(iteration=iteration, phase="observe", content=f"contexto compactado ({len(dict_msgs)} mensajes)"))
                 except Exception as e:
                     logger.debug(f"observe compaction falló: {e}")
+            # Fin de turno con herramientas: se cierra y el while abre el siguiente.
+            await _close_turn("tool_calls")
 
         # Finalize
         duration_ms = (time.monotonic() - t0) * 1000
@@ -636,12 +917,12 @@ class AgentLoop:
             except Exception:
                 pass
         # Session summary update
-        if self.session_log is not None and final_output:
+        if self.session_log is not None and final_output and success and not final_output.lstrip().startswith("["):
             try:
                 # Don't overwrite existing summary if already set via compact
                 sess = self.session_log.get_session(session_id)
                 if sess is not None and not sess.summary:
-                    self.session_log.update_session(session_id, summary=final_output[:500])
+                    self.session_log.update_session(session_id, summary=final_output.strip()[:200])
             except Exception:
                 pass
 
@@ -661,6 +942,15 @@ class AgentLoop:
             return classify_error(tool, err)
         except Exception:
             return ErrorAction.REPLAN
+
+    def exit_plan_mode(self, plan_mode, approved: bool = False, request_id: str | None = None) -> bool:
+        """Delegación fail-closed: fuera de plan (u sin controller) siempre falla."""
+        try:
+            if plan_mode is None:
+                return False
+            return bool(plan_mode.exit_plan_mode(approved=approved, request_id=request_id))
+        except Exception:
+            return False
 
     def set_error_policy(self, retry: int = 3, replan: int = 2) -> None:
         self._error_policy = {"retry": retry, "replan": replan}
