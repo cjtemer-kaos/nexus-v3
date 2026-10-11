@@ -23,3 +23,4 @@ pydantic>=2.13,<2.14
 aiohttp>=3.9
 aiosqlite>=0.19
 pytest>=8.0
+ruamel.yaml>=0.18

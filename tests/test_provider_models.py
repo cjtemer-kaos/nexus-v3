@@ -38,3 +38,13 @@ def test_byok_ids_includes_catalog_bearer_providers():
     # no-bearer / local no deben estar
     assert "anthropic" not in ids
     assert "ollama" not in ids
+
+
+def test_opencode_go_catalog_unions_zen_and_has_extras():
+    from src.core.provider_catalog import get_provider_by_id
+    pc = get_provider_by_id("opencode-go")
+    assert pc is not None
+    # Go da acceso al catalogo Zen completo -> unir en vivo
+    assert pc.get("models_union_from")
+    # modelos que el console muestra pero /v1/models no expone
+    assert "exo-free" in (pc.get("extra_models") or [])

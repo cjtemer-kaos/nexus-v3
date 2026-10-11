@@ -89,12 +89,42 @@ def load_raw_config(path: str | Path | None = None) -> dict:
     return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
 
+def _apply_dict(doc: dict, data: dict) -> None:
+    """Actualiza doc in-place con data (recursivo), preservando comentarios/orden
+    de las claves existentes. Elimina claves que ya no estan en data."""
+    for k, v in data.items():
+        if isinstance(v, dict) and isinstance(doc.get(k), dict):
+            _apply_dict(doc[k], v)
+        else:
+            doc[k] = v
+    for k in list(doc.keys()):
+        if k not in data:
+            del doc[k]
+
+
 def save_config(data: dict, path: str | Path | None = None) -> None:
-    """Persist config dict to YAML."""
+    """Persist config dict to YAML PRESERVANDO comentarios (ruamel round-trip) si
+    esta disponible; fallback a PyYAML (pierde comentarios)."""
     p = Path(path) if path else CONFIG_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from ruamel.yaml import YAML
+        yml = YAML()
+        yml.preserve_quotes = True
+        yml.width = 4096
+        if p.exists():
+            with p.open("r", encoding="utf-8") as f:
+                doc = yml.load(f) or {}
+        else:
+            doc = {}
+        _apply_dict(doc, data)
+        with p.open("w", encoding="utf-8") as f:
+            yml.dump(doc, f)
+        return
+    except Exception:
+        pass
     if yaml is None:
         raise ImportError("PyYAML required (pip install pyyaml)")
-    p.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
     p.write_text(text, encoding="utf-8")
 

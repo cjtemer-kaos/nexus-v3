@@ -185,8 +185,8 @@ export async function execCmd(command: string, cwd = "./workspace", timeout = 15
 
 export type SessionInfo = { id: string; project?: string; parent_id?: string | null; summary?: string; compact_count?: number; total_tokens?: number; created_at?: string; last_active?: string }
 
-export async function sessionsApi(): Promise<{ sessions: SessionInfo[] }> {
-  const res = await apiFetch("/api/sessions");
+export async function sessionsApi(limit = 1000): Promise<{ sessions: SessionInfo[] }> {
+  const res = await apiFetch(`/api/sessions?limit=${limit}`);
   if (!res.ok) throw new Error(`sessions ${res.status}: ${await res.text()}`);
   return res.json();
 }

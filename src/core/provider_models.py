@@ -99,7 +99,7 @@ async def refresh_all(force: bool = False) -> dict[str, list[str]]:
     from src.providers.cloud_provider import CloudProvider
     cache = load_cache()
     updated: dict[str, list[str]] = {}
-    for pid, base, env, _pc in _byok_bearer_providers():
+    for pid, base, env, pc in _byok_bearer_providers():
         if not force and not is_stale(pid):
             continue
         key = os.environ.get(env, "")
@@ -109,7 +109,26 @@ async def refresh_all(force: bool = False) -> dict[str, list[str]]:
         try:
             prov = CloudProvider(base_url=base, api_key=key, auth_style="bearer", timeout_s=12)
             ids = [m for m in (await prov.list_models()) if is_chat_model(m)]
+            # Unir listas extra (ej. opencode-go incluye el catalogo Zen completo).
+            for extra_base in (pc.get("models_union_from") or []):
+                ep = None
+                try:
+                    ep = CloudProvider(base_url=str(extra_base).rstrip("/"), api_key=key, auth_style="bearer", timeout_s=12)
+                    for m in (await ep.list_models()):
+                        if is_chat_model(m) and m not in ids:
+                            ids.append(m)
+                except Exception:
+                    pass
+                finally:
+                    if ep is not None:
+                        try:
+                            await ep.close()
+                        except Exception:
+                            pass
             if ids:
+                for m in (pc.get("extra_models") or []):
+                    if m not in ids:
+                        ids.append(m)
                 cache[pid] = {"models": ids, "ts": time.time()}
                 updated[pid] = ids
         except Exception:

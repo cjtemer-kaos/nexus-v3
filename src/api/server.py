@@ -645,7 +645,7 @@ def _build_router_from_config(cfg: dict):
             # Registrar TODOS los modelos conocidos: cache en vivo (aunque este
             # vencida) o, si no hay, el catalogo estatico. Asi el routing cubre
             # los modelos que el proveedor expone hoy (el catalogo envejece).
-            known = _pm.cached_models(pid, max_age_s=-1) or pc.get("models") or [pc["default_model"]]
+            known = _pm.cached_models(pid, max_age_s=-1) or ((pc.get("models") or [pc["default_model"]]) + (pc.get("extra_models") or []))
             for mid in known:
                 router.register_model(ModelRoute(id=mid, provider_name=pid))
             if pid not in router.fallback_order:
@@ -778,19 +778,18 @@ async def providers_status(refresh: bool = False):
             for m in info.get("models") or []:
                 if _pm2.is_chat_model(m) and m not in mids:
                     mids.append(m)
+        seen_ids: set[str] = set()
         for mid in mids:
-            # Usar modelos CONFIGURADOS (registered) primero, no el catálogo completo
-            # en vivo (evita exponer Claude Opus 5 / GPT-6 / etc. en el selector).
-            # Deduplicate
-            if any(m["id"] == mid for m in models):
-                continue
-            ctx = llamacpp_ctx if pname == "llamacpp" else 32000 if "coder" in mid or "deepseek" in mid else 32000
+            ctx = llamacpp_ctx if pname == "llamacpp" else 32000
             # embed model should not appear as chat model
             if "embed" in mid.lower() and "nomic" in mid.lower():
                 continue
             short_id, label = _pretty_id(mid)
-            if any(m["id"] == short_id for m in models):
+            # Dedup POR PROVEEDOR: cada proveedor muestra su lista completa aunque
+            # un mismo modelo exista en otro (ej. opencode-go incluye el catalogo Zen).
+            if short_id in seen_ids:
                 continue
+            seen_ids.add(short_id)
             models.append({
                 "id": short_id,
                 "provider": pname,

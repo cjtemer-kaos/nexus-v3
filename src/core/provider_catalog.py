@@ -26,8 +26,13 @@ PROVIDER_CATALOG = [
         "auth_style": "bearer",
         "default_model": "deepseek-v4-flash",
         "models": ["deepseek-v4-flash", "deepseek-v4-pro", "kimi-k2.5", "kimi-k2.6", "glm-5", "glm-5.1", "mimo-v2.5", "mimo-v2.5-pro"],
+        # La suscripcion Go da acceso al catalogo Zen completo -> unir esa lista
+        # en vivo para que el selector no quede con el subconjunto de /zen/go.
+        "models_union_from": ["https://opencode.ai/zen"],
+        # Modelos que el console muestra pero /v1/models todavia no expone.
+        "extra_models": ["exo-free", "claude-sonnet-4", "nemotron-3-ultra-free", "ling-3.0-flash-fin-free"],
         "tags": ["cloud", "subscription", "premium"],
-        "description": "Modelos premium via OpenCode Go (kimi, glm, deepseek, mimo).",
+        "description": "Modelos premium via OpenCode Go (kimi, glm, deepseek, mimo) + catalogo Zen.",
     },
 
     # === MAJOR CLOUD ===

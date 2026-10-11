@@ -21,3 +21,4 @@ pytest>=8.0
 # RAG lancedb: lancedb, aiosqlite
 # entrenamiento: torch, transformers, peft, trl, datasets
 # upscale/vision: basicsr, gfpgan, realesrgan
+ruamel.yaml>=0.18
