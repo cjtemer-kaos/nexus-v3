@@ -1538,6 +1538,19 @@ async def create_session(request: Request):
     return {"id": sess.id, "project": sess.project, "parent_id": sess.parent_id if hasattr(sess, "parent_id") else None}
 
 
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    """Borra una sesión y sus mensajes (FK ON DELETE CASCADE + triggers FTS)."""
+    slog = _session_log()
+    try:
+        deleted = slog.delete_session(session_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    return {"ok": True, "deleted": True, "id": session_id}
+
+
 @app.get("/api/sessions/{session_id}/messages")
 async def get_messages(session_id: str, limit: int = 100, offset: int = 0):
     slog = _session_log()

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles, Bot } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles, Bot, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -13,7 +13,7 @@ const nav = [
 ] as const
 
 export function Sidebar() {
-  const { view, setView, sessions, activeSession, setActiveSession, createSession } = useAppStore()
+  const { view, setView, sessions, activeSession, setActiveSession, createSession, deleteSession } = useAppStore()
   const [ajustesOpen, setAjustesOpen] = useState(false)
 
   return (
@@ -54,10 +54,20 @@ export function Sidebar() {
         <div className="text-xs font-semibold tracking-widest text-[#9BA1AA] px-2 py-2">SESIONES · WAL+FTS</div>
         <div className="space-y-1">
           {sessions.map(s=>(
-            <button key={s.id} onClick={()=>setActiveSession(s.id)} className={cn('w-full text-left rounded-xl px-3 py-2.5 border text-sm cursor-pointer transition-colors', s.id===activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}>
-              <div className="font-medium truncate">{s.title}</div>
-              <div className="text-xs text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id} · FTS</div>
-            </button>
+            <div key={s.id} className="group relative">
+              <button onClick={()=>setActiveSession(s.id)} className={cn('w-full text-left rounded-xl px-3 py-2.5 border text-sm cursor-pointer transition-colors', s.id===activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}>
+                <div className="font-medium truncate pr-6">{s.title}</div>
+                <div className="text-xs text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id} · FTS</div>
+              </button>
+              <button
+                aria-label={`Borrar sesión ${s.title}`}
+                title="Borrar sesión"
+                onClick={(e)=>{ e.stopPropagation(); if(confirm(`¿Borrar la sesión "${s.title}"? No se puede deshacer.`)) deleteSession(s.id) }}
+                className="absolute right-1.5 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#FF6259] transition-opacity"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
         </div>
         <button onClick={()=>createSession()} className="mt-3 w-full rounded-xl border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#3A4049]">+ Nueva sesión (bifurcar)</button>

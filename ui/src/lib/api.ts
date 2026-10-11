@@ -197,6 +197,12 @@ export async function createSessionApi(project = "default"): Promise<SessionInfo
   return res.json();
 }
 
+export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean; deleted: boolean; id: string }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`sessions DELETE ${res.status}: ${await res.text()}`);
+  return { ok: res.ok, deleted: res.ok, id: sessionId };
+}
+
 export type SessionMessage = { role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number }
 
 export async function sessionMessagesApi(sessionId: string, limit = 200): Promise<SessionMessage[]> {

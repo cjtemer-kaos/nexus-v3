@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { providersApi, sessionsApi, createSessionApi, sessionMessagesApi } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi, deleteSessionApi, sessionMessagesApi } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
@@ -40,6 +40,7 @@ type AppState = {
   setActiveSession: (id: string) => void
   loadSessions: () => Promise<void>
   createSession: () => void
+  deleteSession: (id: string) => void
   messages: ChatMessage[]
   addMessage: (m: ChatMessage) => void
   updateMessage: (id: string, content: string) => void
@@ -133,6 +134,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           return { sessions: [...st.sessions, { id, title: `Sesión ${st.sessions.length + 1}`, source: 'local' as const }], activeSession: id }
         })
       }
+    })()
+  },
+  deleteSession: (id) => {
+    void (async () => {
+      try { await deleteSessionApi(id) } catch { /* si falla el server, igual lo quitamos del listado */ }
+      set((st) => {
+        const sessions = st.sessions.filter((x) => x.id !== id)
+        const wasActive = st.activeSession === id
+        const activeSession = wasActive ? (sessions[0]?.id ?? '') : st.activeSession
+        return { sessions, activeSession, messages: wasActive ? [] : st.messages }
+      })
+      // Si borramos la activa, cargar el historial de la nueva activa.
+      const next = get().activeSession
+      if (next) void get().loadMessages(next)
     })()
   },
   messages: [] as ChatMessage[],
