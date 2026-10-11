@@ -227,7 +227,7 @@ async function waitForBackend(url: string, timeoutMs = 15000): Promise<boolean> 
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) });
       if (res.ok) return true;
     } catch {}
     await new Promise((r) => setTimeout(r, 400));
@@ -282,7 +282,7 @@ async function restartBackend(): Promise<{ ok: boolean; url?: string; error?: st
     backendPort = await getFreePort();
     backendUrl = `http://127.0.0.1:${backendPort}`;
     pyProc = await spawnBackend(backendPort);
-    const ok = await waitForBackend(backendUrl, 20000);
+    const ok = await waitForBackend(backendUrl, 60000);
     backendReady = ok;
     mainWindow?.webContents.send("nexus:backendStatus", { ok, url: backendUrl });
     if (tray) {
@@ -393,7 +393,7 @@ async function start() {
   createTray();
 
   // Poll backend readiness, then navigate to correct URL
-  const ok = await waitForBackend(backendUrl, 25000);
+  const ok = await waitForBackend(backendUrl, 60000);
   backendReady = ok;
   console.log(`[main] backend ready=${ok}`);
 

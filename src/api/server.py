@@ -509,8 +509,17 @@ async def _startup():
     try:
         from src.core.learning_service import get_learning_service
         _ls = get_learning_service()
-        await _ls.start(dream_interval_s=86400.0, enable_dream=True)
-        logger.info("LearningService started (judge+Thompson+grafo+dream scheduler)")
+
+        async def _bg_learning():
+            try:
+                await _ls.start(dream_interval_s=86400.0, enable_dream=True)
+                logger.info("LearningService started (judge+Thompson+grafo+dream scheduler)")
+            except Exception as e:
+                logger.warning(f"LearningService bg start failed: {e}")
+
+        # No bloquear el arranque: /api/health debe responder ya. El servicio es
+        # singleton y los requests lo obtienen lazy via get_learning_service().
+        _spawn_bg(_bg_learning())
     except Exception as e:
         logger.warning(f"LearningService startup skipped: {e}")
 
@@ -675,12 +684,9 @@ async def _probe_providers(timeout_s: float = 2.5) -> dict:
 async def health():
     cfg = _state.get("config") or _load_config_safe()
     brain = _state.get("brain") or _brain_info_safe()
-    providers_ok: dict = {}
-    try:
-        # Lightweight live probe but with very short timeout so health stays fast
-        providers_ok = await _probe_providers(timeout_s=2.0)
-    except Exception as e:
-        providers_ok = {"error": str(e)}
+    # Liveness rapida: NO sondear providers aqui. El sondeo tarda ~2s y hace que
+    # el handshake de Electron (aborta a 2s) marque el backend como offline.
+    # El inventario real vive en /api/providers; aqui se devuelve su ultimo cache.
     return {
         "status": "ok",
         "service": "nexus-v3-harness",
@@ -689,7 +695,7 @@ async def health():
         "valid": cfg.get("_validation_errors") == [] if isinstance(cfg, dict) else False,
         "validation_errors": cfg.get("_validation_errors") if isinstance(cfg, dict) else [],
         "brain": brain,
-        "providers": providers_ok,
+        "providers": _state.get("providers_cache", {}),
     }
 
 
@@ -698,6 +704,7 @@ async def providers_status():
     """Dynamic provider inventory — only online providers report models. Used by ModelSelector."""
     cfg = _state.get("config") or _load_config_safe()
     probe = await _probe_providers(timeout_s=3.0)
+    _state["providers_cache"] = probe  # para que /api/health lo exponga sin sondear
     # Build flat model list for UI: only from online providers
     models: list[dict] = []
     # ctx map: prefer config ctx for llamacpp, else default

@@ -1,6 +1,6 @@
 /**
- * Nexus v3 — Electron main process (like Hermes/Goose pattern).
- * Plain JS build of main.ts — keep in sync.
+ * Nexus v3 â€” Electron main process (like Hermes/Goose pattern).
+ * Plain JS build of main.ts â€” keep in sync.
  * - Single-instance lock
  * - Spawns Python harness backend (src/api/server.py) on free port, kills on window-all-closed / before-quit
  * - Tray with Show / Quit
@@ -131,7 +131,7 @@ async function spawnBackend(port) {
   proc.stderr?.on("data", (d) => { const s = d.toString().trim(); if (s) console.warn(`[py:err] ${s}`); });
   proc.on("error", (err) => {
     console.error(`[main] backend spawn error: ${err.message}`);
-    dialog.showErrorBox("Nexus v3 — Backend error", `No se pudo iniciar el backend Python.\n\nComando: ${py} ${args.join(" ")}\nError: ${err.message}\n\nVerifica que Python 3.13+ este instalado.`);
+    dialog.showErrorBox("Nexus v3 â€” Backend error", `No se pudo iniciar el backend Python.\n\nComando: ${py} ${args.join(" ")}\nError: ${err.message}\n\nVerifica que Python 3.13+ este instalado.`);
   });
   proc.on("exit", (code, signal) => {
     console.log(`[main] backend exit code=${code} signal=${signal} quitting=${isQuitting}`);
@@ -169,7 +169,7 @@ async function waitForBackend(url, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) });
       if (res.ok) return true;
     } catch {}
     await new Promise((r) => setTimeout(r, 400));
@@ -207,7 +207,7 @@ function createTray() {
     { type: "separator" },
     { label: "Salir", click: () => { isQuitting = true; app.quit(); } },
   ]);
-  tray.setToolTip("Nexus v3 — Arnes");
+  tray.setToolTip("Nexus v3 â€” Arnes");
   tray.setContextMenu(menu);
   tray.on("double-click", () => { mainWindow?.show(); mainWindow?.focus(); });
 }
@@ -218,7 +218,7 @@ async function restartBackend() {
     backendPort = await getFreePort();
     backendUrl = `http://127.0.0.1:${backendPort}`;
     pyProc = await spawnBackend(backendPort);
-    const ok = await waitForBackend(backendUrl, 20000);
+    const ok = await waitForBackend(backendUrl, 60000);
     backendReady = ok;
     mainWindow?.webContents.send("nexus:backendStatus", { ok, url: backendUrl });
     if (tray) {
@@ -249,7 +249,7 @@ function createWindow() {
     minHeight: 600,
     show: false,
     backgroundColor: "#09090b",
-    title: "Nexus v3 — Arnes",
+    title: "Nexus v3 â€” Arnes",
     icon: iconPath,
     webPreferences: {
       preload: existsSync(preloadPath) ? preloadPath : undefined,
@@ -308,7 +308,7 @@ async function start() {
   pyProc = await spawnBackend(backendPort);
   createWindow();
   createTray();
-  const ok = await waitForBackend(backendUrl, 25000);
+  const ok = await waitForBackend(backendUrl, 60000);
   backendReady = ok;
   console.log(`[main] backend ready=${ok}`);
   if (!mainWindow) return;
@@ -328,7 +328,7 @@ async function start() {
     console.log(`[main] loading ${target}`);
     await mainWindow.loadURL(target);
   } else {
-    dialog.showMessageBox(mainWindow, { type: "warning", title: "Nexus v3 — Backend offline", message: `Backend no disponible en ${backendUrl}.\nVerifica Python y dependencias.\nIntenta Reiniciar backend desde la bandeja.` });
+    dialog.showMessageBox(mainWindow, { type: "warning", title: "Nexus v3 â€” Backend offline", message: `Backend no disponible en ${backendUrl}.\nVerifica Python y dependencias.\nIntenta Reiniciar backend desde la bandeja.` });
   }
   mainWindow.webContents.send("nexus:backendStatus", { ok, url: backendUrl });
   mainWindow.show();
@@ -341,7 +341,7 @@ app.on("activate", () => {
   else mainWindow?.show();
 });
 app.on("window-all-closed", async () => {
-  console.log("[main] window-all-closed — killing backend and quitting");
+  console.log("[main] window-all-closed â€” killing backend and quitting");
   await killBackend();
   app.quit();
 });
