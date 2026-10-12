@@ -148,6 +148,44 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_agents_md_hierarchical():
+    import os
+    from pathlib import Path
+    from src.core.agents_md import find_agents_md, system_block
+    root = Path(os.getcwd())
+    assert "AGENTS.md" in [r for r, _ in find_agents_md([], root)]
+    rels = [r for r, _ in find_agents_md([str(root / "src" / "core" / "x.py")], root)]
+    assert "AGENTS.md" in rels and "src/core/AGENTS.md" in rels
+    assert "src/core/AGENTS.md" in system_block([str(root / "src" / "core" / "x.py")], root)
+
+
+def test_approvals_flow():
+    import asyncio, pathlib
+    from src.api.server import _build_registry, _build_scope, _load_config_safe
+    from src.core.approvals import get_approvals
+    cfg = _load_config_safe()
+    cfg.setdefault("agent_loop", {})["auto_apply"] = "approve"
+    scope = _build_scope(cfg)
+    reg = _build_registry(scope, "appr-pytest", cfg)
+    f = "./workspace/_appr_pytest.txt"
+    pathlib.Path(f).unlink(missing_ok=True)
+    out = asyncio.run(reg.dispatch("write_file", {"path": f, "content": "x"}, scope=scope))
+    assert "pendiente de aprobacion" in out
+    assert not pathlib.Path(f).exists()  # NO se aplicó
+    items = get_approvals().list("appr-pytest")
+    assert items and items[0]["tool"] == "write_file"
+    res = get_approvals().resolve(items[0]["id"], True)
+    assert res["ok"] and pathlib.Path(f).read_text(encoding="utf-8") == "x"
+    pathlib.Path(f).unlink(missing_ok=True)
+
+
+def test_approvals_and_plan_endpoints():
+    r = client.get("/api/approvals")
+    assert r.status_code == 200 and "mode" in r.json()
+    p = client.post("/api/plan", json={"task": "x"})
+    assert p.status_code == 200  # ok True o error (si no hay LLM), nunca crash
+
+
 def test_router_adaptive_unified():
     from src.core.provider_router import ProviderRouter, ModelRoute, _get_adaptive
     from src.core.adaptive_router import AdaptiveRouter, get_adaptive_router

@@ -436,3 +436,41 @@ export async function statusApi(): Promise<NexusStatus> {
   if (!res.ok) throw new Error(`status ${res.status}`)
   return res.json()
 }
+
+export type Approval = { id: string; session_id: string; tool: string; args: Record<string, unknown>; preview: string; status: string; created_at: number }
+
+export async function approvalsApi(sessionId = ""): Promise<{ approvals: Approval[]; mode: string }> {
+  const res = await apiFetch(`/api/approvals?session_id=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) throw new Error(`approvals ${res.status}`)
+  return res.json()
+}
+
+export async function approvalApproveApi(id: string): Promise<{ ok: boolean; status?: string; error?: string }> {
+  const res = await apiFetch(`/api/approvals/${encodeURIComponent(id)}/approve`, { method: "POST" })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function approvalRejectApi(id: string): Promise<{ ok: boolean; status?: string }> {
+  const res = await apiFetch(`/api/approvals/${encodeURIComponent(id)}/reject`, { method: "POST" })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function approvalClearApi(): Promise<{ ok: boolean; cleared: number }> {
+  const res = await apiFetch(`/api/approvals/clear`, { method: "POST" })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function planApi(task: string): Promise<{ ok: boolean; steps: string[]; task?: string; error?: string }> {
+  const res = await apiFetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task }) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function sessionModeApi(sessionId: string, mode: "act" | "plan"): Promise<{ ok: boolean; mode: string }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/mode`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}

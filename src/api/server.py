@@ -2301,6 +2301,80 @@ async def session_replay(session_id: str, limit: int = 500):
         return {"events": [], "error": str(e)}
 
 
+@app.get("/api/approvals")
+async def approvals_list(session_id: str = ""):
+    from src.core.approvals import get_approvals
+    return {"approvals": get_approvals().list(session_id), "mode": _auto_apply_mode()}
+
+
+@app.post("/api/approvals/{approval_id}/approve")
+async def approvals_approve(approval_id: str):
+    from src.core.approvals import get_approvals
+    return get_approvals().resolve(approval_id, True)
+
+
+@app.post("/api/approvals/{approval_id}/reject")
+async def approvals_reject(approval_id: str):
+    from src.core.approvals import get_approvals
+    return get_approvals().resolve(approval_id, False)
+
+
+@app.post("/api/approvals/clear")
+async def approvals_clear():
+    from src.core.approvals import get_approvals
+    return {"ok": True, "cleared": get_approvals().clear_resolved()}
+
+
+def _parse_json_list(text: str) -> list[str]:
+    """Extrae una lista de strings de una respuesta del modelo (JSON array o líneas)."""
+    import json as _j
+    t = (text or "").strip()
+    i, j = t.find("["), t.rfind("]")
+    if i >= 0 and j > i:
+        try:
+            arr = _j.loads(t[i:j + 1])
+            if isinstance(arr, list):
+                out = []
+                for x in arr:
+                    if isinstance(x, str):
+                        out.append(x)
+                    elif isinstance(x, dict):
+                        out.append(str(x.get("step") or x.get("title") or x))
+                    else:
+                        out.append(str(x))
+                if out:
+                    return out[:16]
+        except Exception:
+            pass
+    out = []
+    for line in t.splitlines():
+        s = line.strip().lstrip("-*•0123456789.) ").strip()
+        if s:
+            out.append(s)
+    return out[:16]
+
+
+@app.post("/api/plan")
+async def plan_endpoint(request: Request):
+    body = await _json_body(request)
+    task = str(body.get("task", "")).strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="task required")
+    cfg = _load_config_safe()
+    router = _get_router(cfg)
+    from src.core.provider_base import LLMMessage
+    sys_p = ("Sos un planificador técnico. Dada una tarea, devolvé SOLO un array JSON de "
+             "strings (3-8 pasos concretos y accionables). Sin texto extra ni markdown.")
+    try:
+        resp = await asyncio.wait_for(
+            router.chat([LLMMessage(role="system", content=sys_p),
+                         LLMMessage(role="user", content=task)]), timeout=150)
+        steps = _parse_json_list(resp.content or "")
+    except Exception as e:
+        return {"ok": False, "error": str(e), "steps": []}
+    return {"ok": True, "steps": steps, "task": task}
+
+
 @app.get("/api/skills")
 async def skills_list():
     out = []
@@ -2886,6 +2960,15 @@ def _steer_drain(session_id: str) -> list:
     return out
 
 
+def _auto_apply_mode(cfg: dict | None = None) -> str:
+    """auto | assisted (default) | approve. `approve` encola mutaciones para aprobación."""
+    try:
+        cfg = cfg if isinstance(cfg, dict) else _load_config_safe()
+        return str((cfg.get("agent_loop") or {}).get("auto_apply", "assisted"))
+    except Exception:
+        return "assisted"
+
+
 def _get_spawner(session_id: str, router, scope):
     """Spawner de sub-agentes por sesión (reusa el router para el LLM del hijo)."""
     sp = _SUB_SPAWNERS.get(session_id)
@@ -2938,17 +3021,26 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     def write_file_tool(path: str, content: str) -> str:
         """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
         p = scope.check_path(path)
-        # scope guard for mutating op
         scope.check_tool("write_file", {"path": path, "content": content})
-        try:
-            from src.core.checkpoints import snapshot
-            if p.is_file():
-                snapshot(session_id, p)
-        except Exception:
-            pass
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
+
+        def _do() -> str:
+            try:
+                from src.core.checkpoints import snapshot
+                if p.is_file():
+                    snapshot(session_id, p)
+            except Exception:
+                pass
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
+
+        if _auto_apply_mode(cfg) == "approve":
+            from src.core.approvals import get_approvals
+            pr = get_approvals().propose(session_id, "write_file", {"path": path, "content": content},
+                                         preview=content, apply=_do)
+            return (f"[pendiente de aprobacion id={pr['id']}] write_file {path} ({len(content)} chars) — "
+                    f"el usuario debe aprobar en la UI (Aprobaciones).")
+        return _do()
 
     def edit_file_tool(path: str, old: str, new: str, replace_all: bool = False) -> str:
         """Reemplazo quirurgico (str_replace) en un archivo. `old` debe existir;
@@ -2963,14 +3055,27 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise ValueError(f"texto a reemplazar no encontrado en {path}")
         if n > 1 and not replace_all:
             raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
-        try:
-            from src.core.checkpoints import snapshot
-            snapshot(session_id, p)
-        except Exception:
-            pass
-        new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-        p.write_text(new_text, encoding="utf-8")
-        return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+
+        def _do() -> str:
+            try:
+                from src.core.checkpoints import snapshot
+                snapshot(session_id, p)
+            except Exception:
+                pass
+            new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+            p.write_text(new_text, encoding="utf-8")
+            return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+
+        if _auto_apply_mode(cfg) == "approve":
+            from src.core.approvals import get_approvals
+            from src.core.diffutil import unified
+            _new = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+            pr = get_approvals().propose(session_id, "edit", {"path": path, "old": old, "new": new},
+                                         preview=unified(text, _new, name_a=path, name_b=path + " (propuesto)"),
+                                         apply=_do)
+            return (f"[pendiente de aprobacion id={pr['id']}] edit {path} — "
+                    f"el usuario debe aprobar en la UI (Aprobaciones).")
+        return _do()
 
     def list_dir_tool(path: str = "./workspace") -> str:
         """Lista un directorio dentro de allowed_roots. Devuelve JSON."""

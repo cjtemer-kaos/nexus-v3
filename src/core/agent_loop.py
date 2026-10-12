@@ -483,6 +483,21 @@ class AgentLoop:
         except Exception:
             pass
 
+        # AGENTS.md jerárquico: root + ancestros de los paths relevantes.
+        try:
+            from pathlib import Path as _P
+            from src.core.agents_md import system_block as _agents_block
+            _root = _P(__file__).resolve().parents[2]
+            _paths = [str(_root / "workspace")]
+            for _w in (task or "").split():
+                if "/" in _w or "\\" in _w:
+                    _paths.append(str(_root / _w.lstrip("/\\")))
+            _blk = _agents_block(_paths, _root)
+            if _blk and messages and messages[0].role == "system":
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _blk)
+        except Exception:
+            pass
+
         # Plan-mode: si aplica, inyectar plan:policy tras el system prompt.
         # La guía se mantiene hasta fin de batch aunque se apruebe a mitad del
         # run (Approve no la retira: solo habilita la salida al final).
