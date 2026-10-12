@@ -110,6 +110,7 @@ class ScopeConfig:
     max_file_read_bytes: int = 1_048_576  # alias, compat with config.yaml
     allow_network: bool = False
     allow_mutating_without_confirm: bool = False
+    require_confirm_mutating: bool = False  # opt-in: mutantes exigen confirm=true en args
     permission: str = "workspace_write"  # read_only | workspace_write | full
 
     def effective_max_bytes(self) -> int:
@@ -228,13 +229,14 @@ class Scope:
         perm = getattr(self.cfg, "permission", "workspace_write") or "workspace_write"
         if perm == "read_only" and tool_name not in IDEMPOTENT_TOOLS:
             raise ScopeDenied(f"permission read_only: herramienta bloqueada {tool_name!r} (solo lectura)")
-        # Mutating gate
-        if tool_name in MUTATING_TOOLS and not self.cfg.allow_mutating_without_confirm:
-            # For now, mutating tools are allowed but could require explicit confirmation
-            # We only block if policy demands confirmation and caller didn't provide it.
-            # Check for a 'confirm' flag in args — if tool is mutating and no confirm, we still allow
-            # but the harness can enforce via hooks. Do not hard-block here to avoid breaking existing flows.
-            pass
+        # Mutating gate (opt-in): exige confirm=true en args cuando require_confirm_mutating.
+        # read_only ya bloquea arriba; esto agrega confirmacion explicita a las mutantes.
+        if tool_name in MUTATING_TOOLS and getattr(self.cfg, "require_confirm_mutating", False):
+            if not args.get("confirm"):
+                raise ScopeDenied(
+                    f"herramienta mutante {tool_name!r} requiere confirm=true "
+                    f"(scope.require_confirm_mutating=true)"
+                )
 
         # Path args validation
         path_keys = ("path", "file", "filepath", "dir", "directory", "filePath", "db_path", "persist_dir")

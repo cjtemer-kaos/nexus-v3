@@ -2607,6 +2607,7 @@ def _build_scope(cfg: dict, agent_id: str | None = None):
         max_read_bytes=int(scope_cfg.get("max_read_bytes", 1_048_576)),
         allow_network=allow_net,
         allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)) or permission == "full",
+        require_confirm_mutating=bool(scope_cfg.get("require_confirm_mutating", False)) and permission != "full",
         permission=permission,
     ), project_root=_PROJECT_ROOT)
 

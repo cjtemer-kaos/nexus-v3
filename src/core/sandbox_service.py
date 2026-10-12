@@ -95,6 +95,54 @@ class SandboxService:
             except Exception as e:
                 return SandboxResult(error=str(e), duration_ms=(time.time() - start) * 1000)
 
+    async def run_argv(self, argv: List[str], *, workdir: str = "", timeout: int = 0,
+                       policy: str = "workspace_write", env: Dict[str, str] = None) -> SandboxResult:
+        """Ejecuta argv SIN shell (create_subprocess_exec) con politica de alcance.
+
+        policy='read_only' rechaza comandos mutantes/red por nombre de exe.
+        return_code=-2 cuando la politica deniega.
+        """
+        if not argv or not isinstance(argv, list):
+            return SandboxResult(error="argv vacio o invalido", return_code=-2)
+        exe = os.path.basename(str(argv[0])).lower()
+        if policy == "read_only":
+            banned = {
+                "rm", "rmdir", "mv", "cp", "dd", "mkfs", "chmod", "chown", "shutdown",
+                "reboot", "kill", "taskkill", "format", "del", "erase", "curl", "wget",
+                "pip", "pip3", "npm", "git", "sudo",
+            }
+            if exe in banned:
+                return SandboxResult(error=f"policy=read_only: comando {exe!r} denegado", return_code=-2)
+        async with self._semaphore:
+            start = time.time()
+            run_env = dict(os.environ)
+            if env:
+                run_env.update({str(k): str(v) for k, v in env.items()})
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *[str(a) for a in argv],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    cwd=workdir or self.config.workdir or os.getcwd(),
+                    env=run_env,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=(timeout or self.config.timeout_seconds))
+                    return SandboxResult(
+                        success=proc.returncode == 0,
+                        output=stdout.decode(errors="replace").strip() if stdout else "",
+                        error=stderr.decode(errors="replace").strip() if stderr else "",
+                        return_code=proc.returncode or 0,
+                        duration_ms=(time.time() - start) * 1000,
+                    )
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    return SandboxResult(
+                        error=f"Timeout after {timeout or self.config.timeout_seconds}s",
+                        return_code=-1, duration_ms=(time.time() - start) * 1000)
+            except Exception as e:
+                return SandboxResult(error=str(e), duration_ms=(time.time() - start) * 1000)
+
     def _get_command(self, language: str, filepath: str) -> List[str]:
         commands = {
             "python": ["python", filepath],

@@ -124,3 +124,25 @@ def test_checkpoints_endpoint():
 def test_global_search_and_catalog_endpoints():
     assert client.get("/api/sessions/global/search", params={"q": "x"}).status_code == 200
     assert client.get("/api/sessions/catalog").status_code == 200
+
+
+def test_permission_gate_mutating_confirm():
+    import os
+    from pathlib import Path
+    from src.core.scope import Scope, ScopeConfig, ScopeDenied
+    sc = Scope(ScopeConfig(permission="workspace_write", require_confirm_mutating=True),
+               project_root=Path(os.getcwd()))
+    try:
+        sc.check_tool("write_file", {"path": "./workspace/x.txt", "content": "a"})
+        assert False, "deberia bloquear sin confirm"
+    except ScopeDenied:
+        pass
+    sc.check_tool("write_file", {"path": "./workspace/x.txt", "content": "a", "confirm": True})
+
+
+def test_sandbox_run_argv_policy():
+    import asyncio
+    from src.core.sandbox_service import SandboxService
+    sb = SandboxService()
+    assert asyncio.run(sb.run_argv(["git", "status"], policy="read_only")).return_code == -2
+    assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
