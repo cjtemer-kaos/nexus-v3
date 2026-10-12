@@ -389,3 +389,50 @@ export async function checkpointRestoreApi(sessionId: string, id: string): Promi
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()
 }
+
+export type BoardTask = { id: string; title: string; description: string; status: string; assignee: string; created_by: string; priority: number; deps: string[]; notes: string }
+
+export async function boardApi(): Promise<{ tasks: BoardTask[] }> {
+  const res = await apiFetch("/api/board/tasks")
+  if (!res.ok) throw new Error(`board ${res.status}`)
+  return res.json()
+}
+
+export async function boardCreateApi(payload: { title: string; description?: string; priority?: number; deps?: string }): Promise<{ ok: boolean; task: BoardTask }> {
+  const res = await apiFetch("/api/board/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function boardClaimApi(id: string, agent = "ui"): Promise<{ ok: boolean; task?: BoardTask; error?: string }> {
+  const res = await apiFetch(`/api/board/${encodeURIComponent(id)}/claim`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent }) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function boardUpdateApi(id: string, patch: { status?: string; notes?: string }): Promise<{ ok: boolean; task?: BoardTask; error?: string }> {
+  const res = await apiFetch(`/api/board/${encodeURIComponent(id)}/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export type Skill = { name: string; description: string; path: string }
+export async function skillsApi(): Promise<{ skills: Skill[] }> {
+  const res = await apiFetch("/api/skills")
+  if (!res.ok) throw new Error(`skills ${res.status}`)
+  return res.json()
+}
+
+export type ToolInfo = { name: string; description: string; category: string }
+export async function toolsApi(): Promise<{ tools: ToolInfo[] }> {
+  const res = await apiFetch("/api/tools")
+  if (!res.ok) throw new Error(`tools ${res.status}`)
+  return res.json()
+}
+
+export type NexusStatus = { running: { session_id: string; steer_pending: number }[]; sub_agents: Record<string, unknown[]>; modes: Record<string, string>; counts: { running: number; sessions_with_subagents: number } }
+export async function statusApi(): Promise<NexusStatus> {
+  const res = await apiFetch("/api/status")
+  if (!res.ok) throw new Error(`status ${res.status}`)
+  return res.json()
+}

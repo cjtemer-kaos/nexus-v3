@@ -6,11 +6,13 @@ import { FileEditor } from '@/components/editor/FileEditor'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { AgentsPanel } from '@/components/agents/AgentsPanel'
 import { ReviewPanel } from '@/components/review/ReviewPanel'
+import { BoardPanel } from '@/components/board/BoardPanel'
+import { SkillsPanel } from '@/components/skills/SkillsPanel'
 import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState, useEffect } from 'react'
-import { searchApi } from '@/lib/api'
+import { searchApi, statusApi } from '@/lib/api'
 
 const viewLabels: Record<string, string> = {
   chat: 'Chat',
@@ -19,6 +21,8 @@ const viewLabels: Record<string, string> = {
   terminal: 'Terminal',
   agents: 'Ayudantes',
   review: 'Cambios',
+  board: 'Tareas',
+  skills: 'Capacidades',
 }
 
 type SearchResult = { role: string; content: string }
@@ -30,6 +34,20 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [live, setLive] = useState<{ running: number; subs: number } | null>(null)
+
+  useEffect(() => {
+    let stop = false
+    const tick = async () => {
+      try {
+        const s = await statusApi()
+        if (!stop) setLive({ running: s.counts.running, subs: s.counts.sessions_with_subagents })
+      } catch { /* best-effort */ }
+    }
+    void tick()
+    const iv = setInterval(tick, 4000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [])
 
   useEffect(() => {
     // Kick off dynamic provider detection at app start
@@ -160,11 +178,13 @@ export default function App() {
           {view==='terminal' && <TerminalPanel />}
           {view==='agents' && <AgentsPanel />}
           {view==='review' && <ReviewPanel />}
+          {view==='board' && <BoardPanel />}
+          {view==='skills' && <SkillsPanel />}
         </main>
 
         {/* estado inferior */}
         <footer className="hidden sm:flex h-6 items-center gap-3 border-t border-[#2C3037] bg-[#1E2127] px-3 text-xs text-[#9BA1AA]">
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[#3DDC84] animate-pulse" /> arnés listo</span>
+          <span className="flex items-center gap-1.5"><span className={`h-2 w-2 rounded-full animate-pulse ${live?.running ? 'bg-[#4C9DFF]' : 'bg-[#3DDC84]'}`} /> {live?.running ? `${live.running} run activo` : 'arnés listo'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}</span>
           <span className="hidden md:inline">·</span>
           <span className="hidden md:inline">config.yaml · nada hardcodeado · distribuible</span>
             <span className="ml-auto hidden md:inline">Alcance: según Ajustes → Permisos (full = toda la PC) · secretos bloqueados</span>

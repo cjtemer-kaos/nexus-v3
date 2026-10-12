@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles, Bot, Trash2, GitCompare } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Layers, Settings, Database, Shield, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -10,6 +10,8 @@ const nav = [
   { id: 'graph', label: 'Grafo', icon: Share2, desc: 'Conocimiento' },
   { id: 'editor', label: 'Editor', icon: FileCode2, desc: 'Alcance FS' },
   { id: 'review', label: 'Cambios', icon: GitCompare, desc: 'Checkpoints y diff' },
+  { id: 'board', label: 'Tareas', icon: KanbanSquare, desc: 'Board + claims' },
+  { id: 'skills', label: 'Capacidades', icon: Puzzle, desc: 'Tools y skills' },
   { id: 'terminal', label: 'Terminal', icon: Terminal, desc: 'Protegido' },
 ] as const
 

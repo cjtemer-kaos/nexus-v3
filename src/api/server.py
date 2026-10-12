@@ -2269,6 +2269,35 @@ async def worktree_add(request: Request):
     return add_worktree(repo, path, branch, str(body.get("base", "HEAD")))
 
 
+@app.get("/api/skills")
+async def skills_list():
+    out = []
+    base = _PROJECT_ROOT / "data" / "skills"
+    if base.is_dir():
+        for d in sorted(base.iterdir()):
+            md = d / "SKILL.md"
+            if md.is_file():
+                name, desc = d.name, ""
+                try:
+                    from src.core.skill_frontmatter import parse_frontmatter_file
+                    fm = parse_frontmatter_file(str(md)) or {}
+                    name = fm.get("name") or name
+                    desc = fm.get("description") or ""
+                except Exception:
+                    pass
+                out.append({"name": name, "description": desc, "path": str(md)})
+    return {"skills": out}
+
+
+@app.get("/api/tools")
+async def tools_list():
+    cfg = _load_config_safe()
+    scope = _build_scope(cfg)
+    reg = _build_registry(scope, "api", cfg)
+    return {"tools": [{"name": t.name, "description": t.description, "category": t.category}
+                      for t in reg.list()]}
+
+
 @app.get("/api/permission")
 async def permission_get():
     from src.core.config import load_config
