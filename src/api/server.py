@@ -3203,7 +3203,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         timeout = max(2, min(30, int(timeout)))
         _opener = urllib.request.build_opener()
         _opener.add_handler(type("_NoRedir", (urllib.request.HTTPRedirectHandler,), {
-            "redirect_request": lambda self, *a, **k: None}))
+            "redirect_request": lambda self, *a, **k: None})())
         current = url
         try:
             for _hop in range(6):
@@ -3605,11 +3605,15 @@ def _delegation_block() -> str:
             lines.append("GEMAS (delegá con la tool gema_run(gema, task)): " + ", ".join(gs))
     except Exception:
         pass
+    web = ("BÚSQUEDA WEB (MCP, gratis y sin API key): para investigar en internet usá "
+           "mcp_call(server='parallel-search', tool='web_search', arguments={\"objective\":\"...\","
+           "\"search_queries\":[\"...\"]}); para leer una URL, tool='web_fetch'. "
+           "Usá mcp_list(server='parallel-search') para ver las tools.")
     if not lines:
-        return ""
+        return web
     return ("AYUDANTES Y GEMAS DISPONIBLES — cuando la tarea encaje con la especialidad de uno, "
             "DELEGÁ con agent_run/gema_run en vez de hacerlo vos, y verificá el resultado.\n"
-            + "\n".join(lines))
+            + "\n".join(lines) + "\n" + web)
 
 
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
