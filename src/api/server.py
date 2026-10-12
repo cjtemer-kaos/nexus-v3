@@ -3010,20 +3010,22 @@ def _auto_apply_mode(cfg: dict | None = None) -> str:
         return "assisted"
 
 
-def _get_spawner(session_id: str, router, scope):
-    """Spawner de sub-agentes por sesión (reusa el router para el LLM del hijo)."""
+def _get_spawner(session_id: str, router, scope, cfg=None):
+    """Spawner de sub-agentes por sesión: cada hijo corre un loop CON tools (aislado, sin recursión)."""
     sp = _SUB_SPAWNERS.get(session_id)
     if sp is None:
-        from src.core.provider_base import LLMMessage
         from src.core.sub_agent_spawner import SubAgentSpawner
 
         async def _exec(task: str, gem: str = "auto", context: str = ""):
-            sys_p = ("Eres un sub-agente de nexus-v3. Resolvés la tarea delegada y devolvés "
-                     "un resultado conciso y directo, sin rodeos.")
-            user = (context + "\n\n" if context else "") + task
-            r = await router.chat([LLMMessage(role="system", content=sys_p),
-                                   LLMMessage(role="user", content=user)])
-            return r.content or ""
+            from src.core.agent_loop import AgentLoop
+            child_sid = f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}"
+            reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False)
+            loop = AgentLoop(provider_router=router, tool_registry=reg, scope=scope,
+                             session_log=_session_log(), event_store=_event_store(),
+                             compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
+                             distill_hook=_build_distill_hook(cfg))
+            res = await loop.run(task=(context + "\n\n" if context else "") + task, session_id=child_sid)
+            return res.final_output or ""
 
         roots = tuple(getattr(getattr(scope, "cfg", None), "allowed_roots", ()) or ())
         sp = SubAgentSpawner(executor=_exec, scope_roots=roots, parent_session_id=session_id)
@@ -3031,7 +3033,7 @@ def _get_spawner(session_id: str, router, scope):
     return sp
 
 
-def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True):
+def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True, include_subagents: bool = True):
     """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
     from src.core.tool_registry import ToolRegistry
     registry = ToolRegistry()
@@ -3395,7 +3397,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise RuntimeError("sub_agent requiere router (helpers=True)")
         import json as _json
         from src.core.sub_agent_spawner import SubAgentSpec
-        sp = _get_spawner(session_id, router, scope)
+        sp = _get_spawner(session_id, router, scope, cfg)
         spec = SubAgentSpec(task=task, gem=gema, context=context,
                             mode=mode if mode in ("one-shot", "continuable") else "one-shot")
         res = await sp.spawn_child(spec)
@@ -3438,6 +3440,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
+    # Sub-agentes: no registrar en hijos (evita recursión infinita).
+    if not include_subagents:
+        for _n in ("sub_agent", "sub_agent_message", "sub_agent_list"):
+            try:
+                registry.remove(_n)
+            except Exception:
+                pass
     # Plugins de terceros (./plugins/*.py con register(registry)). Best-effort.
     try:
         from src.core.plugins import load_plugins
