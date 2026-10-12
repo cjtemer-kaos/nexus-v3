@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { File, Plus, X, Save, Search, SplitSquareHorizontal, Folder, RefreshCw, ArrowUp, HardDrive } from 'lucide-react'
+import { File, Plus, X, Save, Search, Folder, RefreshCw, ArrowUp, HardDrive } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
@@ -107,7 +107,6 @@ export function FileEditor() {
       const idx = useAppStore.getState().tabs.findIndex(t => t.path === path)
       if (idx >= 0) saveTab(idx)
       showToast(`Guardado: ${path}`)
-      loadRoot()
     } catch(e){
       showToast(`Error guardando: ${String(e).slice(0,180)}`)
     }
@@ -192,7 +191,6 @@ export function FileEditor() {
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#9BA1AA]" />
               <input value={find} onChange={e=>setFind(e.target.value)} placeholder="Buscar" className="h-7 w-28 rounded-md border border-[#2C3037] bg-[#1E2127] pl-7 pr-2 text-xs placeholder:text-zinc-600 focus:outline-none" />
             </div>
-            <Button variant="ghost" size="xs"><SplitSquareHorizontal className="h-3.5 w-3.5" /></Button>
           </div>
         </div>
 

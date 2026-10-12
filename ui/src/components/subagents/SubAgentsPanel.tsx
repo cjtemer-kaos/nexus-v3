@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { statusApi } from '@/lib/api'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
@@ -22,14 +22,16 @@ const STATUS: Record<string, string> = {
 export function SubAgentsPanel() {
   const [subs, setSubs] = useState<Record<string, Child[]>>({})
   const [loading, setLoading] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const load = async () => {
     setLoading(true)
     try {
       const s = await statusApi()
-      setSubs(s.sub_agents as Record<string, Child[]>)
+      if (alive.current) setSubs(s.sub_agents as Record<string, Child[]>)
     } catch { /* best-effort */ } finally {
-      setLoading(false)
+      if (alive.current) setLoading(false)
     }
   }
 

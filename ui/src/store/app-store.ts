@@ -61,6 +61,8 @@ type AppState = {
   clearTerminal: () => void
 }
 
+let _ensurePromise: Promise<string> | null = null
+
 export const useAppStore = create<AppState>((set, get) => ({
   view: 'chat',
   setView: (view) => set({ view }),
@@ -126,6 +128,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ activeSession: st.sessions[0].id })
       return st.sessions[0].id
     }
+    if (_ensurePromise) return _ensurePromise
+    _ensurePromise = (async () => {
     try {
       const s = await createSessionApi()
       set((x) => ({
@@ -135,7 +139,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return s.id
     } catch {
       return ''
+    } finally {
+      _ensurePromise = null
     }
+    })()
+    return _ensurePromise
   },
   createSession: () => {
     void (async () => {

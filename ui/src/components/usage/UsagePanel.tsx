@@ -48,7 +48,7 @@ export function UsagePanel() {
             </div>
             <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3">
               <div className="text-[11px] text-[#9BA1AA]">Costo estimado</div>
-              <div className="text-xl font-semibold text-[#3DDC84]">${(u?.cost.total_usd ?? 0).toFixed(4)}</div>
+              <div className="text-xl font-semibold text-[#3DDC84]">${(u?.cost?.total_usd ?? 0).toFixed(4)}</div>
             </div>
           </div>
 
@@ -59,7 +59,7 @@ export function UsagePanel() {
               <div key={m.model} className="rounded-lg border border-[#2C3037] bg-[#1E2127] px-3 py-2">
                 <div className="flex items-center gap-2 text-xs">
                   <span className="font-mono text-[#8CC1FF]">{m.model}</span>
-                  <span className="ml-auto text-[#9BA1AA]">{m.messages} msg · {m.tokens.toLocaleString()} tok · ${(u?.cost.per_model[m.model] ?? 0).toFixed(4)}</span>
+                  <span className="ml-auto text-[#9BA1AA]">{m.messages} msg · {m.tokens.toLocaleString()} tok · ${(u?.cost?.per_model?.[m.model] ?? 0).toFixed(4)}</span>
                 </div>
                 <div className="mt-1 h-1.5 rounded-full bg-[#2C3037]">
                   <div className="h-1.5 rounded-full bg-[#4C9DFF]" style={{ width: `${Math.round((m.tokens / maxTok) * 100)}%` }} />

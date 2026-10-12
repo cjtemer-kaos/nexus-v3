@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal as TermIcon, Trash2, Copy, Maximize2 } from 'lucide-react'
+import { Terminal as TermIcon, Trash2, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { execCmd } from '@/lib/api'
@@ -54,7 +54,6 @@ export function TerminalPanel() {
         <div className="ml-auto flex gap-1">
           <Button variant="ghost" size="xs" aria-label="Copiar salida" onClick={()=>{ navigator.clipboard.writeText(terminalLines.join('\n')).catch(()=>{}) }}><Copy className="h-3.5 w-3.5" /></Button>
           <Button variant="ghost" size="xs" aria-label="Limpiar terminal" onClick={()=> clearTerminal()}><Trash2 className="h-3.5 w-3.5" /></Button>
-          <Button variant="ghost" size="xs"><Maximize2 className="h-3.5 w-3.5" /></Button>
         </div>
       </div>
 

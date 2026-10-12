@@ -49,6 +49,7 @@ export function GraphView() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const detailSeq = useRef(0)
   const [dims, setDims] = useState({ w: 800, h: 500 })
   const [searchResults, setSearchResults] = useState<SearchHit[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
@@ -128,15 +129,18 @@ export function GraphView() {
   }, [isFullscreen])
 
   const loadDetail = useCallback(async (id: number) => {
+    const seq = ++detailSeq.current
     setSelected(id); setDetail(null); setDetailLoading(true)
     try {
       const res = await apiFetch(`/api/graph/node/${id}`)
       if (!res.ok) throw new Error(`nodo ${res.status}`)
-      setDetail(await res.json())
+      const j = await res.json()
+      if (seq !== detailSeq.current) return
+      setDetail(j)
     } catch {
-      setDetail(null)
+      if (seq === detailSeq.current) setDetail(null)
     } finally {
-      setDetailLoading(false)
+      if (seq === detailSeq.current) setDetailLoading(false)
     }
   }, [])
 
@@ -293,7 +297,7 @@ export function GraphView() {
           <div className="absolute left-4 top-4 z-20 w-[min(22rem,calc(100%-2rem))] rounded-2xl border border-[#2C3037] bg-[#1E2127]/95 p-3 shadow-2xl backdrop-blur">
             <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-[#9BA1AA]">
               <span>Recall FTS5 · {searchResults.length} resultados</span>
-              <button aria-label="Cerrar resultados de búsqueda" onClick={() => setSearchResults([])} className="rounded p-1 hover:bg-[#2C3037]"><X className="h-3.5 w-3.5" /></button>
+              <button aria-label="Cerrar resultados de búsqueda" onClick={() => { setSearchResults([]); setQApplied('') }} className="rounded p-1 hover:bg-[#2C3037]"><X className="h-3.5 w-3.5" /></button>
             </div>
             {searchLoading && <div className="text-xs text-[#9BA1AA]">Buscando en el grafo…</div>}
             {!searchLoading && searchResults.length === 0 && <div className="text-xs text-[#9BA1AA]">Sin coincidencias FTS5.</div>}

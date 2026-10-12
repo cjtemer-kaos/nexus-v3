@@ -12,6 +12,7 @@ export function ApprovalsPanel() {
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState<Approval | null>(null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -27,18 +28,23 @@ export function ApprovalsPanel() {
   useEffect(() => { void load() }, [load])
 
   const act = async (id: string, approve: boolean) => {
-    setBusy(true)
+    setBusy(true); setError(null)
     try {
       if (approve) await approvalApproveApi(id)
       else await approvalRejectApi(id)
       setSel(null)
       await load()
+    } catch (e) {
+      setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
 
-  const clear = async () => { await approvalClearApi(); setSel(null); await load() }
+  const clear = async () => {
+    try { await approvalClearApi(); setSel(null); await load() }
+    catch (e) { setError((e as Error).message) }
+  }
 
   const renderPreview = (text: string) =>
     text.split('\n').map((line, i) => {
@@ -60,6 +66,7 @@ export function ApprovalsPanel() {
           </Button>
         </div>
         <div className="border-b border-[#2C3037] px-3 py-1.5 text-[10px] text-[#9BA1AA]">modo auto_apply: <span className="text-[#8CC1FF]">{mode || '—'}</span></div>
+        {error && <div className="border-b border-[#2C3037] bg-[#FF6B6B]/10 px-3 py-1.5 text-[10px] text-[#FFA8A8]">{error}</div>}
         <ScrollArea className="flex-1">
           {items.length === 0 && (
             <div className="p-4 text-xs text-[#9BA1AA]">

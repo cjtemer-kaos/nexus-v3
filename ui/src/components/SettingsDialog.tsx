@@ -55,7 +55,7 @@ function KeysTab() {
             />
             <button
               onClick={() => save(k.env)}
-              disabled={saving === k.env || !(drafts[k.env] ?? '').trim() && !k.configured}
+              disabled={saving === k.env || !(drafts[k.env] ?? '').trim()}
               className="rounded-lg bg-[#0B62D6] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#4C9DFF] disabled:opacity-40"
             >Guardar</button>
             {k.configured && (

@@ -9,6 +9,7 @@ import { VoiceMic } from '@/components/chat/VoiceMic'
 type Pending = { key: string; file: File; preview?: string }
 
 const now = () => new Date().toLocaleTimeString().slice(0, 5)
+const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
 export function ChatPanel() {
   const { messages, addMessage, activeSession, loadMessages } = useAppStore()
@@ -123,6 +124,7 @@ export function ChatPanel() {
         uploads = await Promise.all(pending.map((p) => uploadApi(p.file)))
       } catch (e) {
         setIsStreaming(false)
+        busyRef.current = false
         toast('Fallo al subir adjunto: ' + (e as Error).message.slice(0, 140))
         return
       }
@@ -130,7 +132,7 @@ export function ChatPanel() {
       setIsStreaming(false)
       const imgs = pending.filter((p) => p.file.type.startsWith('image/'))
       addMessage({
-        id: Date.now().toString(),
+        id: uid(),
         role: 'user',
         content: text || `📎 ${uploads.map((u) => u.name).join(', ')}`,
         timestamp: now(),
@@ -141,36 +143,37 @@ export function ChatPanel() {
     if (text.startsWith('/')) {
       const { activeSession } = useAppStore.getState()
       const stillActive = () => useAppStore.getState().activeSession === activeSession
-      if (!uploads.length) addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: now() })
+      if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
       setInput(''); setSlashOpen(false)
       try {
         const r = await apiFetch('/api/slash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: text, ctx: { session_id: activeSession } }) })
         const j = await r.json()
         const reply = j.ok ? j.message : (text.slice(1).split(' ')[0] + ': ' + j.message)
-        if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
+        if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: reply, timestamp: now() })
         if (j.data?.action === 'clear_local_only') useAppStore.setState({ messages: [] } as any)
         if (j.data?.action === 'set_model') useAppStore.getState().setModel(j.data.model)
         if (j.data?.action === 'set_permission' || j.data?.action === 'set_plan_mode') {
           try {
             const pr = await apiFetch('/api/permission')
             const pj = await pr.json()
-            if (stillActive()) addMessage({ id: (Date.now()+2).toString(), role: 'tool', content: 'permiso ahora: ' + pj.permission, toolName: 'permission', timestamp: now() })
+            if (stillActive()) addMessage({ id: uid(), role: 'tool', content: 'permiso ahora: ' + pj.permission, toolName: 'permission', timestamp: now() })
           } catch {}
         }
-      } catch (e) { if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: now() }) }
+      } catch (e) { if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: now() }) }
+      busyRef.current = false
       return
     }
 
     let { activeSession, selectedModel } = useAppStore.getState()
     if (!activeSession) activeSession = await useAppStore.getState().ensureSession()
     const stillActive = () => useAppStore.getState().activeSession === activeSession
-    if (!uploads.length) addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: now() })
+    if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
     setInput(''); setSlashOpen(false)
     setIsStreaming(true)
     try {
       const model = selectedModel && selectedModel !== 'auto' ? selectedModel : undefined
       const { updateMessage } = useAppStore.getState()
-      const msgId = (Date.now() + 1).toString()
+      const msgId = uid()
       let acc = ''
       let placed = false
       const pushDelta = (t: string) => {
@@ -219,7 +222,7 @@ export function ChatPanel() {
       if (text.toLowerCase().includes('compact')) reply = 'Pipeline **4 capas** activo: **L0 SecurityLingua** filtra inyección, **L1 Recorte** mantiene 4 turnos, **L2 Micro** colapsa herramientas >2k tokens, **L3 Presupuesto** derrama a `./data/spill`, **L4 Resumen** usa modelo barato. Emergencia `prompt_too_long` → Compactación Reactiva.'
         if (text.toLowerCase().includes('alcance') || text.toLowerCase().includes('scope')) reply = 'Guardia de **Alcance** aplica ACL. Con permiso `workspace_write` las raíces son `./workspace` y `./data`; con permiso `full` (Ajustes → Permisos) hay acceso a toda la PC. Patrones denegados siempre: `**/.env`, `**/*.key`. Límite lectura 1.0 MB. Cada herramienta pasa por `scope.check_path`/`check_tool` antes de ejecutar.'
       await new Promise(r => setTimeout(r, 500))
-      if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
+      if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: reply, timestamp: now() })
     } finally {
       busyRef.current = false
       setIsStreaming(false)
@@ -231,8 +234,9 @@ export function ChatPanel() {
     if (!activeSession) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
     setDistillMsg('destilando…')
     try {
-      const r: any = await apiFetch(`/api/sessions/${activeSession}/distill`, { method: 'POST' })
-      const res = r?.result || {}
+      const r = await apiFetch(`/api/sessions/${activeSession}/distill`, { method: 'POST' })
+      const j: any = await r.json().catch(() => ({}))
+      const res = j?.result ?? j ?? {}
       setDistillMsg(`destilado: ${res.distilled ?? 0} piezas · ${res.llm_items ?? 0} items LLM`)
     } catch (e: any) {
       setDistillMsg(`error: ${e?.message || 'falló'}`)

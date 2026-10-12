@@ -69,10 +69,12 @@ export function ProvidersPanel() {
     if (!base_url) { setTests(t => ({ ...t, [name]: { loading: false, ok: false, error: 'base_url vacío' } })); return }
     setTests(t => ({ ...t, [name]: { loading: true } }))
     try {
+      const rawKey = (p.api_key as string) || ''
+      const api_key = rawKey.includes('•') ? undefined : (rawKey || undefined)
       const res = await testProvider({
         provider: name,
         base_url,
-        api_key: (p.api_key as string) || '',
+        api_key,
         auth_style: (p.auth_style as string) || 'bearer',
         fallback_url: (p.fallback_url as string) || undefined,
       })
