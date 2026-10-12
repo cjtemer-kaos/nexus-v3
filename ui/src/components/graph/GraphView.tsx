@@ -359,6 +359,13 @@ export function GraphView() {
                   <Badge variant="outline">importancia {detail.importance}</Badge>
                   <Badge variant="outline">{detail.degree} conexiones</Badge>
                 </div>
+                <Button variant="outline" size="sm" onClick={async () => {
+                  try {
+                    const r = await apiFetch(`/api/graph/node/${detail.id}/cite`)
+                    const j = await r.json()
+                    await navigator.clipboard.writeText(j.citation || `[n${detail.id}] ${detail.title}`)
+                  } catch { /* clipboard no disponible */ }
+                }}>Copiar cita</Button>
                 {detail.content && <div className="text-[#9BA1AA] leading-relaxed whitespace-pre-wrap max-h-40 overflow-auto">{detail.content.slice(0, 600)}{detail.content.length > 600 ? '…' : ''}</div>}
                 {(detail.neighbors?.length ?? 0) > 0 && (
                   <div>

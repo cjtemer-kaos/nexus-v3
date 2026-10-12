@@ -11,6 +11,8 @@ import { SkillsPanel } from '@/components/skills/SkillsPanel'
 import { SubAgentsPanel } from '@/components/subagents/SubAgentsPanel'
 import { ApprovalsPanel } from '@/components/approvals/ApprovalsPanel'
 import { PlanPanel } from '@/components/plan/PlanPanel'
+import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
+import { UsagePanel } from '@/components/usage/UsagePanel'
 import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -26,6 +28,8 @@ const viewLabels: Record<string, string> = {
   review: 'Cambios',
   approvals: 'Aprobaciones',
   plan: 'Plan',
+  worktrees: 'Worktrees',
+  usage: 'Uso',
   board: 'Tareas',
   subagents: 'Sub-agentes',
   skills: 'Capacidades',
@@ -186,6 +190,8 @@ export default function App() {
           {view==='review' && <ReviewPanel />}
           {view==='approvals' && <ApprovalsPanel />}
           {view==='plan' && <PlanPanel />}
+          {view==='worktrees' && <WorktreesPanel />}
+          {view==='usage' && <UsagePanel />}
           {view==='board' && <BoardPanel />}
           {view==='subagents' && <SubAgentsPanel />}
           {view==='skills' && <SkillsPanel />}

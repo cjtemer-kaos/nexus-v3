@@ -2404,6 +2404,46 @@ async def tools_list():
                       for t in reg.list()]}
 
 
+@app.post("/api/worktree/remove")
+async def worktree_remove(request: Request):
+    body = await _json_body(request)
+    from src.core.worktree import remove_worktree
+    repo = str(body.get("repo", "") or _PROJECT_ROOT)
+    path = str(body.get("path", "")).strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path requerido")
+    return remove_worktree(repo, path, bool(body.get("force", False)))
+
+
+@app.get("/api/usage")
+async def usage_global():
+    from src.core.cost import cost_by_model
+    u = _session_log().usage()
+    return {**u, "cost": cost_by_model(u.get("by_model", []), _load_config_safe())}
+
+
+@app.get("/api/sessions/{session_id}/usage")
+async def usage_session(session_id: str):
+    from src.core.cost import cost_by_model
+    u = _session_log().usage(session_id)
+    return {**u, "cost": cost_by_model(u.get("by_model", []), _load_config_safe())}
+
+
+@app.get("/api/plugins")
+async def plugins_list():
+    from src.core.plugins import list_plugins
+    return {"plugins": list_plugins(_PROJECT_ROOT)}
+
+
+@app.post("/api/plugins/reload")
+async def plugins_reload():
+    cfg = _load_config_safe()
+    scope = _build_scope(cfg)
+    reg = _build_registry(scope, "plugins", cfg)
+    loaded = [t.name for t in reg.list() if t.category == "plugin"]
+    return {"ok": True, "loaded": loaded}
+
+
 @app.get("/api/permission")
 async def permission_get():
     from src.core.config import load_config
@@ -3397,6 +3437,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
+    # Plugins de terceros (./plugins/*.py con register(registry)). Best-effort.
+    try:
+        from src.core.plugins import load_plugins
+        load_plugins(registry, _PROJECT_ROOT)
+    except Exception:
+        pass
     return registry
 
 

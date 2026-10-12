@@ -292,6 +292,20 @@ class SessionLog:
             self._conn.commit()
             return cur.rowcount or 0
 
+    def usage(self, session_id: str = "") -> dict:
+        """Agrega mensajes/tokens por modelo (opcional por sesión)."""
+        where = " WHERE session_id=?" if session_id else ""
+        args = [session_id] if session_id else []
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT model, COUNT(*), COALESCE(SUM(tokens),0) FROM messages{where} GROUP BY model",
+                args).fetchall()
+            tot = self._conn.execute(
+                f"SELECT COUNT(*), COALESCE(SUM(tokens),0) FROM messages{where}", args).fetchone()
+        by_model = [{"model": r[0] or "?", "messages": int(r[1]), "tokens": int(r[2] or 0)} for r in rows]
+        return {"session_id": session_id or None, "messages": int(tot[0] or 0),
+                "tokens": int(tot[1] or 0), "by_model": by_model}
+
     def count_messages(self, session_id: str) -> int:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM messages WHERE session_id=?", (session_id,)).fetchone()

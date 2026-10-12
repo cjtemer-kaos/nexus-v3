@@ -474,3 +474,40 @@ export async function sessionModeApi(sessionId: string, mode: "act" | "plan"): P
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()
 }
+
+export type Worktree = { path: string; branch?: string; head?: string; bare?: boolean }
+export async function worktreesApi(repo = ""): Promise<{ worktrees: Worktree[] }> {
+  const res = await apiFetch(`/api/worktree?repo=${encodeURIComponent(repo)}`)
+  if (!res.ok) throw new Error(`worktrees ${res.status}`)
+  return res.json()
+}
+export async function worktreeAddApi(payload: { path: string; branch: string; repo?: string }): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const res = await apiFetch("/api/worktree", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+export async function worktreeRemoveApi(payload: { path: string; repo?: string }): Promise<{ ok: boolean; output?: string }> {
+  const res = await apiFetch("/api/worktree/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export type Usage = { messages: number; tokens: number; by_model: { model: string; messages: number; tokens: number }[]; cost: { per_model: Record<string, number>; total_usd: number } }
+export async function usageApi(sessionId = ""): Promise<Usage> {
+  const path = sessionId ? `/api/sessions/${encodeURIComponent(sessionId)}/usage` : "/api/usage"
+  const res = await apiFetch(path)
+  if (!res.ok) throw new Error(`usage ${res.status}`)
+  return res.json()
+}
+
+export type PluginInfo = { name: string; path: string }
+export async function pluginsApi(): Promise<{ plugins: PluginInfo[] }> {
+  const res = await apiFetch("/api/plugins")
+  if (!res.ok) throw new Error(`plugins ${res.status}`)
+  return res.json()
+}
+export async function pluginsReloadApi(): Promise<{ ok: boolean; loaded: string[] }> {
+  const res = await apiFetch("/api/plugins/reload", { method: "POST" })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}

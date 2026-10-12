@@ -148,6 +148,35 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_plugins_loader():
+    import os
+    from pathlib import Path
+    from src.core.plugins import list_plugins, load_plugins
+    from src.core.tool_registry import ToolRegistry
+    root = Path(os.getcwd())
+    assert any(p["name"] == "hello_plugin" for p in list_plugins(root))
+    reg = ToolRegistry()
+    assert "hello_plugin" in load_plugins(reg, root)
+    assert reg.has("hello")
+
+
+def test_cost_estimate():
+    from src.core.cost import estimate_cost, cost_by_model
+    assert estimate_cost(1000, "qwen2.5-coder:7b") == 0.0
+    assert estimate_cost(1000, "gpt-5-codex") > 0.0
+    c = cost_by_model([{"model": "qwen2.5-coder:7b", "tokens": 1000},
+                       {"model": "x-cloud", "tokens": 1000}])
+    assert c["total_usd"] > 0 and len(c["per_model"]) == 2
+
+
+def test_usage_plugins_worktree_endpoints():
+    u = client.get("/api/usage")
+    assert u.status_code == 200 and "by_model" in u.json()
+    assert client.get("/api/plugins").status_code == 200
+    assert client.post("/api/plugins/reload").status_code == 200
+    assert client.post("/api/worktree/remove", json={}).status_code == 400  # path requerido
+
+
 def test_agents_md_hierarchical():
     import os
     from pathlib import Path
