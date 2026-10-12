@@ -79,14 +79,29 @@ def _infer_schema(fn: Callable) -> dict:
     except Exception:
         return {"type": "object", "properties": {}, "additionalProperties": True}
 
+    # `from __future__ import annotations` deja las anotaciones como STRINGS
+    # ("int", "str"...). Resolverlas con get_type_hints; si falla, mapear el
+    # nombre. Sin esto, todos los params int/float/bool quedaban como "string".
+    try:
+        from typing import get_type_hints
+        hints = get_type_hints(fn)
+    except Exception:
+        hints = {}
     type_map = {str: "string", int: "integer", float: "number", bool: "boolean", list: "array", dict: "object"}
+    name_map = {"str": "string", "int": "integer", "float": "number", "bool": "boolean",
+                "list": "array", "dict": "object", "Any": "string"}
     props: dict[str, Any] = {}
     required: list[str] = []
     for pname, param in sig.parameters.items():
         if pname in ("self", "cls"):
             continue
-        ann = param.annotation
-        jtype = type_map.get(ann, "string") if ann != inspect.Parameter.empty else "string"
+        ann = hints.get(pname, param.annotation)
+        if isinstance(ann, str):
+            jtype = name_map.get(ann, "string")
+        elif ann != inspect.Parameter.empty:
+            jtype = type_map.get(ann, "string")
+        else:
+            jtype = "string"
         prop: dict[str, Any] = {"type": jtype, "description": f"parameter {pname}"}
         props[pname] = prop
         if param.default is inspect.Parameter.empty:

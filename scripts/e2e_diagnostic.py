@@ -79,8 +79,13 @@ def main():
         check("tools >= 15", len(tools) >= 15, str(len(tools)))
         check("delegacion presente", all(x in names for x in ["gema_list", "agent_list", "gema_run", "agent_run"]))
         check("tools base presentes", all(x in names for x in ["read_file", "write_file", "list_dir", "exec", "learn", "recall"]))
+        check("edit (str_replace) presente", "edit" in names)
+        check("web_search presente", "web_search" in names)
         bad = [t for t in tools if (t.get("function", {}).get("parameters") or {}).get("type") != "object"]
         check("schemas validos", not bad, str([t["function"]["name"] for t in bad]))
+        # tipos: int params deben ser integer (bug from __future__ annotations)
+        _by = {t["function"]["name"]: t["function"]["parameters"] for t in tools}
+        check("exec.timeout integer", _by.get("exec", {}).get("properties", {}).get("timeout", {}).get("type") == "integer")
         check("registry.current_images existe", hasattr(reg, "current_images"))
     except Exception as e:
         check("tools", False, str(e))

@@ -33,14 +33,32 @@ def test_tools_registry_complete():
     reg = _build_registry(_build_scope(cfg), "t", cfg, router=_build_router_from_config(cfg))
     tools = reg.to_openai_tools()
     names = [t["function"]["name"] for t in tools]
-    for n in ["read_file", "write_file", "list_dir", "exec", "gema_run", "agent_run",
-              "gema_list", "agent_list", "learn", "recall", "mcp_list", "mcp_call"]:
+    for n in ["read_file", "write_file", "edit", "list_dir", "exec", "gema_run", "agent_run",
+              "gema_list", "agent_list", "learn", "recall", "web_search", "mcp_list", "mcp_call"]:
         assert n in names, n
-    # schemas validos
+    # schemas validos + tipos integer (from __future__ annotations)
     for t in tools:
         assert (t.get("function", {}).get("parameters") or {}).get("type") == "object"
+    by = {t["function"]["name"]: t["function"]["parameters"] for t in tools}
+    assert by["exec"]["properties"]["timeout"]["type"] == "integer"
     # atributo para la delegacion con imagen
     assert hasattr(reg, "current_images")
+
+
+def test_edit_tool_str_replace():
+    import asyncio, pathlib
+    from src.api.server import _build_registry, _build_scope, _load_config_safe
+    cfg = _load_config_safe()
+    scope = _build_scope(cfg)
+    reg = _build_registry(scope, "t-edit", cfg)
+    f = "./workspace/_edit_pytest.txt"
+    pathlib.Path(f).write_text("uno\ndos\ntres\n", encoding="utf-8")
+    try:
+        r = asyncio.run(reg.dispatch("edit", {"path": f, "old": "dos", "new": "DOS"}, scope=scope))
+        assert "editado" in str(r)
+        assert "DOS" in pathlib.Path(f).read_text(encoding="utf-8")
+    finally:
+        pathlib.Path(f).unlink(missing_ok=True)
 
 
 def test_fs_lists_drives_root():

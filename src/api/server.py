@@ -2613,6 +2613,23 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         p.write_text(content, encoding="utf-8")
         return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
 
+    def edit_file_tool(path: str, old: str, new: str, replace_all: bool = False) -> str:
+        """Reemplazo quirurgico (str_replace) en un archivo. `old` debe existir;
+        si aparece >1 vez y replace_all=False -> error (evita ediciones ambiguas)."""
+        p = scope.check_path(path)
+        scope.check_tool("edit", {"path": path, "content": new})
+        if not p.is_file():
+            raise FileNotFoundError(f"no existe o no es archivo: {path}")
+        text = p.read_text(encoding="utf-8", errors="replace")
+        n = text.count(old)
+        if n == 0:
+            raise ValueError(f"texto a reemplazar no encontrado en {path}")
+        if n > 1 and not replace_all:
+            raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
+        new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+        p.write_text(new_text, encoding="utf-8")
+        return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+
     def list_dir_tool(path: str = "./workspace") -> str:
         """Lista un directorio dentro de allowed_roots. Devuelve JSON."""
         import json as _json
@@ -2659,6 +2676,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
     registry.register_function(read_file_tool, name="read_file", description="Lee un archivo dentro de ./workspace o ./data (Scope jail)", category="local")
     registry.register_function(write_file_tool, name="write_file", description="Escribe un archivo dentro de ./workspace o ./data (crea dirs)", category="local")
+    registry.register_function(edit_file_tool, name="edit", description="Reemplazo quirúrgico en un archivo (str_replace): reemplaza `old` por `new`; `old` debe ser único (o usá replace_all=true).", category="local")
     registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
     registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado en ./workspace (bloquea destructivos)", category="local")
 
@@ -2708,6 +2726,17 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         except Exception as e:
             raise RuntimeError(f"web_fetch failed: {e}")
     registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
+
+    async def web_search_tool(query: str, limit: int = 6) -> str:
+        """Busca en la web (open source: SearXNG via SEARXNG_URL, fallback Wikipedia)."""
+        import json as _j
+        scope.check_tool("web_fetch", {"url": "search"})  # network gate
+        from src.tools.web_search import web_search as _ws
+        res = await _ws(query, limit=max(1, min(10, int(limit or 6))))
+        return _j.dumps(res, ensure_ascii=False)
+    registry.register_function(web_search_tool, name="web_search",
+                               description="Busca en la web y devuelve título+url+snippet (SearXNG open source; fallback Wikipedia).",
+                               category="local")
 
     # --- learn (Método OPCODE: vía única de escritura de conocimiento) ---
     async def learn_tool(content: str, topic_key: str = "", category: str = "general",
