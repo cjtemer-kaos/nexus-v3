@@ -1573,7 +1573,8 @@ async def delete_session_endpoint(session_id: str):
     try:
         deleted = slog.delete_session(session_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=409,
+                            detail=f"no se puede borrar {session_id}: {e} — borrá primero las sesiones hijas (fork/branch)")
     if not deleted:
         raise HTTPException(status_code=404, detail="sesión no encontrada")
     return {"ok": True, "deleted": True, "id": session_id}
@@ -2267,6 +2268,37 @@ async def worktree_add(request: Request):
     if not path or not branch:
         raise HTTPException(status_code=400, detail="path y branch requeridos")
     return add_worktree(repo, path, branch, str(body.get("base", "HEAD")))
+
+
+@app.get("/api/graph/node/{node_id}/cite")
+async def graph_cite(node_id: int):
+    from src.brain.link import brain_path
+    db_path = brain_path() / "knowledge_graph.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=404, detail="knowledge_graph.db not found")
+    con = sqlite3.connect(str(db_path), timeout=5.0)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT id,title,category,source,created_at,access_count FROM nodes WHERE id=?",
+            (node_id,)).fetchone()
+    finally:
+        con.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="node not found")
+    return {"node_id": int(row["id"]), "title": row["title"], "category": row["category"],
+            "source": row["source"], "created_at": row["created_at"],
+            "access_count": row["access_count"],
+            "citation": f"[n{int(row['id'])}] {row['title']}"}
+
+
+@app.get("/api/sessions/{session_id}/replay")
+async def session_replay(session_id: str, limit: int = 500):
+    try:
+        evs = _event_store().get_events(session_id=session_id, limit=limit)
+        return {"events": [e.to_dict() for e in evs]}
+    except Exception as e:
+        return {"events": [], "error": str(e)}
 
 
 @app.get("/api/skills")
@@ -3746,7 +3778,7 @@ def _sse_stream_response(message: str, session_id: str, model: str):
             sess = slog.get_session(session_id) if session_id else None
             if sess is None:
                 sess = slog.create_session(project="sse")
-            _RUNNING[sess.id] = {"steer": [], "started": time.time()}
+            _RUNNING[sess.id] = {"steer": [], "started": __import__("time").time()}
             task = _aio.create_task(_run_agent_once(
                 message,
                 session_id=sess.id,

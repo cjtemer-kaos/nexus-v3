@@ -229,15 +229,9 @@ class SessionLog:
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
-            # Orfana los hijos (fork/branch) antes de borrar para no violar la FK.
-            try:
-                self._conn.execute("UPDATE sessions SET parent_session_id=NULL WHERE parent_session_id=?",
-                                   (session_id,))
-            except Exception:
-                pass
+            # Guard FK: si tiene hijos (fork/branch) la FK hace raise; borrá los hijos primero.
             cur = self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             # cascade deletes messages via FK
-            self._conn.commit()
             return cur.rowcount > 0
 
     def update_session(self, session_id: str, **fields) -> bool:

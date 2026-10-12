@@ -4,7 +4,7 @@ import { providersApi, sessionsApi, createSessionApi, deleteSessionApi, sessionM
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
 
-type View = 'chat' | 'graph' | 'editor' | 'terminal' | 'agents' | 'review' | 'board' | 'skills'
+type View = 'chat' | 'graph' | 'editor' | 'terminal' | 'agents' | 'review' | 'board' | 'skills' | 'subagents'
 
 export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string; images?: string[] }
 

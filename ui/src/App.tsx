@@ -8,6 +8,7 @@ import { AgentsPanel } from '@/components/agents/AgentsPanel'
 import { ReviewPanel } from '@/components/review/ReviewPanel'
 import { BoardPanel } from '@/components/board/BoardPanel'
 import { SkillsPanel } from '@/components/skills/SkillsPanel'
+import { SubAgentsPanel } from '@/components/subagents/SubAgentsPanel'
 import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ const viewLabels: Record<string, string> = {
   agents: 'Ayudantes',
   review: 'Cambios',
   board: 'Tareas',
+  subagents: 'Sub-agentes',
   skills: 'Capacidades',
 }
 
@@ -179,6 +181,7 @@ export default function App() {
           {view==='agents' && <AgentsPanel />}
           {view==='review' && <ReviewPanel />}
           {view==='board' && <BoardPanel />}
+          {view==='subagents' && <SubAgentsPanel />}
           {view==='skills' && <SkillsPanel />}
         </main>
 

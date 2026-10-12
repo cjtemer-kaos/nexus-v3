@@ -148,6 +148,17 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_graph_cite_and_replay_endpoints():
+    sid = client.post("/api/sessions", json={"project": "r"}).json()["id"]
+    assert client.get(f"/api/sessions/{sid}/replay").status_code == 200
+    client.delete(f"/api/sessions/{sid}")
+    g = client.get("/api/graph").json()
+    nodes = g.get("nodes") or []
+    if nodes and isinstance(nodes[0], dict) and nodes[0].get("id") is not None:
+        r = client.get(f"/api/graph/node/{nodes[0]['id']}/cite")
+        assert r.status_code == 200 and "citation" in r.json()
+
+
 def test_board_claims_and_gate():
     from src.core.board import Board
     b = Board("./data/_board_pytest.db")
@@ -170,8 +181,8 @@ def test_new_endpoints_backend():
     assert client.get("/api/worktree").status_code == 200
     f = client.post(f"/api/sessions/{sid}/fork", json={}).json()
     assert f["ok"]
+    assert client.delete(f"/api/sessions/{f['id']}").status_code == 200  # hijo primero (guard FK)
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
-    assert client.delete(f"/api/sessions/{f['id']}").status_code == 200
 
 
 def test_board_endpoints():
