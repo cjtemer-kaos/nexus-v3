@@ -35,6 +35,7 @@ export async function chatApi(
   hint?: string,
   model?: string,
   attachments?: { id: string; url?: string; name?: string; mime?: string; is_image?: boolean }[],
+  agentId?: string,
 ): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string; images?: string[] }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
@@ -42,7 +43,7 @@ export async function chatApi(
     const res = await apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, session_id: sessionId, hint, model, attachments }),
+      body: JSON.stringify({ message, session_id: sessionId, hint, model, attachments, agent_id: agentId }),
       signal: ctrl.signal,
     });
     if (!res.ok) {
@@ -61,7 +62,7 @@ export async function chatApi(
 // Streaming token-a-token (pi): consume /api/chat/stream (SSE) y llama onDelta por chunk.
 export async function chatStreamApi(
   message: string,
-  opts: { sessionId?: string; model?: string; onDelta?: (t: string) => void } = {},
+  opts: { sessionId?: string; model?: string; agentId?: string; onDelta?: (t: string) => void } = {},
 ): Promise<{ reply: string; success: boolean; session_id?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
@@ -71,7 +72,7 @@ export async function chatStreamApi(
     const res = await fetch(`${base}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ message, session_id: opts.sessionId, model: opts.model }),
+      body: JSON.stringify({ message, session_id: opts.sessionId, model: opts.model, agent_id: opts.agentId }),
       signal: ctrl.signal,
     });
     if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);

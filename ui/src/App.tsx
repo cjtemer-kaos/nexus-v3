@@ -1,5 +1,6 @@
 import { Sidebar } from '@/components/Sidebar'
 import { ModelSelector } from '@/components/ModelSelector'
+import { AgentSelector } from '@/components/AgentSelector'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { GraphView } from '@/components/graph/GraphView'
 import { FileEditor } from '@/components/editor/FileEditor'
@@ -155,6 +156,7 @@ export default function App() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <AgentSelector />
             <ModelSelector />
             <div className="relative hidden sm:flex">
               <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}><Bell className="h-4 w-4" /></Button>

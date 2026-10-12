@@ -3477,6 +3477,33 @@ async def _learning_record(task: str, session_id: str, result,
         logger.debug("learning record skipped: %s", e)
 
 
+def _delegation_block() -> str:
+    """Lista de ayudantes + gemas para que el agente default sepa a quién delegar."""
+    lines: list[str] = []
+    try:
+        agents = [a for a in _agent_registry().list() if not a.get("builtin")]
+        if agents:
+            lines.append("AYUDANTES (delegá con la tool agent_run(agent_id, task)):")
+            for a in agents:
+                desc = a.get("description") or a.get("gema") or ""
+                lines.append(f"- {a['id']}: {a.get('name')} (model={a.get('model') or 'auto'})"
+                             + (f" — {desc}" if desc else ""))
+    except Exception:
+        pass
+    try:
+        from src.core.gema_profiles import GEMA_PROFILES
+        gs = list(GEMA_PROFILES.keys()) if hasattr(GEMA_PROFILES, "keys") else []
+        if gs:
+            lines.append("GEMAS (delegá con la tool gema_run(gema, task)): " + ", ".join(gs))
+    except Exception:
+        pass
+    if not lines:
+        return ""
+    return ("AYUDANTES Y GEMAS DISPONIBLES — cuando la tarea encaje con la especialidad de uno, "
+            "DELEGÁ con agent_run/gema_run en vez de hacerlo vos, y verificá el resultado.\n"
+            + "\n".join(lines))
+
+
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False,
                           agent_id: str | None = None, on_delta=None):
@@ -3507,7 +3534,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
                             system_prompt=_sys or None, on_delta=on_delta,
-                            steer=(lambda: _steer_drain(session_id)) if session_id else None)
+                            steer=(lambda: _steer_drain(session_id)) if session_id else None,
+                            extra_system=(_delegation_block() if not agent_id or agent_id == "default" else None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
     return result
 
@@ -3919,7 +3947,7 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
-def _sse_stream_response(message: str, session_id: str, model: str):
+def _sse_stream_response(message: str, session_id: str, model: str, agent_id: str = ""):
     async def gen():
         import json as _js3
         import asyncio as _aio
@@ -3945,6 +3973,7 @@ def _sse_stream_response(message: str, session_id: str, model: str):
                 session_id=sess.id,
                 hint=infer_hint(message),
                 model=None if model == "auto" else model,
+                agent_id=(agent_id or None),
                 on_delta=_on_delta,
             ))
             while not task.done():
@@ -3974,8 +4003,8 @@ def _sse_stream_response(message: str, session_id: str, model: str):
 
 
 @app.get("/api/chat/stream")
-async def sse_chat_get(message: str = "", model: str = "auto", session_id: str = ""):
-    return _sse_stream_response(message, session_id, model)
+async def sse_chat_get(message: str = "", model: str = "auto", session_id: str = "", agent_id: str = ""):
+    return _sse_stream_response(message, session_id, model, agent_id)
 
 
 @app.post("/api/chat/stream")
@@ -3988,6 +4017,7 @@ async def sse_chat_post(request: Request):
         str(body.get("message", "")),
         str(body.get("session_id", "") or ""),
         str(body.get("model", "auto") or "auto"),
+        str(body.get("agent_id", "") or ""),
     )
 
 @app.get("/{full_path:path}", include_in_schema=False)

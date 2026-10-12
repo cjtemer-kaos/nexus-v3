@@ -381,7 +381,7 @@ class AgentLoop:
             out.append(d)
         return out
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, steer=None) -> LoopResult:
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -497,6 +497,13 @@ class AgentLoop:
                 messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _blk)
         except Exception:
             pass
+
+        # Ayudantes + gemas disponibles (lo inyecta el server para que el agente delegue).
+        if extra_system and messages and messages[0].role == "system":
+            try:
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + "\n\n" + str(extra_system))
+            except Exception:
+                pass
 
         # Plan-mode: si aplica, inyectar plan:policy tras el system prompt.
         # La guía se mantiene hasta fin de batch aunque se apruebe a mitad del

@@ -38,6 +38,8 @@ type AppState = {
   sessions: SessionMeta[]
   activeSession: string
   setActiveSession: (id: string) => void
+  activeAgent: string
+  setActiveAgent: (id: string) => void
   loadSessions: () => Promise<void>
   ensureSession: () => Promise<string>
   createSession: () => void
@@ -102,10 +104,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setProviderHealth: (providerHealth: Record<string, ProviderStatus>) => set({ providerHealth }),
   sessions: [] as SessionMeta[],
   activeSession: '',
+  activeAgent: 'default',
   // Cambiar de sesión limpia el buffer local (evita ver mensajes de otra sesión
   // mientras carga el historial desde el server).
   setActiveSession: (activeSession) =>
     set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] })),
+  setActiveAgent: (activeAgent) => set({ activeAgent }),
   loadSessions: async () => {
     try {
       const data = await sessionsApi()

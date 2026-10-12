@@ -164,7 +164,7 @@ export function ChatPanel() {
       return
     }
 
-    let { activeSession, selectedModel } = useAppStore.getState()
+    let { activeSession, selectedModel, activeAgent } = useAppStore.getState()
     if (!activeSession) activeSession = await useAppStore.getState().ensureSession()
     const stillActive = () => useAppStore.getState().activeSession === activeSession
     if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
@@ -186,7 +186,7 @@ export function ChatPanel() {
       let streamed = false
       if (uploads.length === 0) {
         try {
-          const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, onDelta: pushDelta })
+          const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, agentId: (activeAgent && activeAgent !== 'default') ? activeAgent : undefined, onDelta: pushDelta })
           const finalReply = sres.reply || acc || '[sin respuesta]'
           if (stillActive()) {
             if (placed) updateMessage(msgId, finalReply)
@@ -199,7 +199,8 @@ export function ChatPanel() {
       }
       if (!streamed) {
         const res: any = await chatApi(text, activeSession || undefined, undefined, model,
-          uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })))
+          uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })),
+          (activeAgent && activeAgent !== 'default') ? activeAgent : undefined)
         if (res.steps?.length && stillActive()) setLastSteps(res.steps)
         if (res.todos && stillActive()) setLastTodos(res.todos)
         // si el usuario cambió de sesión mientras respondía, el historial de la sesión
