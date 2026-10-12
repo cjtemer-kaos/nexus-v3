@@ -148,6 +148,30 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_router_adaptive_unified():
+    from src.core.provider_router import ProviderRouter, ModelRoute, _get_adaptive
+    from src.core.adaptive_router import AdaptiveRouter, get_adaptive_router
+    assert _get_adaptive() is get_adaptive_router()  # una sola fuente de verdad
+    assert ProviderRouter()._adaptive is get_adaptive_router()
+
+    class P:
+        pass
+
+    ar = AdaptiveRouter()
+    r = ProviderRouter(strategy="thompson", adaptive_router=ar)
+    r.register_provider("ollama", P())
+    r.register_model(ModelRoute(id="m_a", provider_name="ollama", tier=3))
+    r.register_model(ModelRoute(id="m_b", provider_name="ollama", tier=3))
+    for _ in range(15):
+        ar.record_result("m_a", success=True)
+        ar.record_result("m_b", success=False)
+    assert ar.mean_model("m_a") > ar.mean_model("m_b")
+    assert r.resolve(task_hint="coding", strategy="thompson").model == "m_a"
+    assert r.stats().get("adaptive") is not None
+    r._record_success("ollama", "m_c")  # el router alimenta el AdaptiveRouter
+    assert ar.mean_model("m_c") > 0.5
+
+
 def test_graph_cite_and_replay_endpoints():
     sid = client.post("/api/sessions", json={"project": "r"}).json()["id"]
     assert client.get(f"/api/sessions/{sid}/replay").status_code == 200

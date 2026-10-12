@@ -122,6 +122,20 @@ class ThompsonSampler:
         candidates = [m for m in candidates if m.name != "nomic-embed-text"]
         return candidates
 
+    def score(self, name: str) -> float:
+        """Muestra Beta(alpha,beta) del modelo (prior 1,1 si nunca se usó)."""
+        o = self._outcomes.get(name)
+        if o is None:
+            return random.betavariate(1.0, 1.0)
+        return o.sample()
+
+    def mean(self, name: str) -> float:
+        """Media esperada alpha/(alpha+beta) — determinista (para tie-break)."""
+        o = self._outcomes.get(name)
+        if o is None:
+            return 0.5
+        return o.alpha / (o.alpha + o.beta)
+
     def select(self, task: str, required_context: int = 0,
                prefer_speed: bool = False, prefer_quality: bool = False) -> str:
         candidates = self.get_candidates(task, required_context)
@@ -218,6 +232,14 @@ class AdaptiveRouter:
                      prefer_speed: bool = False, prefer_quality: bool = False) -> str:
         return self._sampler.select(task, required_context, prefer_speed, prefer_quality)
 
+    def score_model(self, name: str) -> float:
+        """Thompson sample para un modelo arbitrario (para enrutar candidatos del harness)."""
+        return self._sampler.score(name)
+
+    def mean_model(self, name: str) -> float:
+        """Media esperada (determinista) para tie-break entre modelos del mismo tier."""
+        return self._sampler.mean(name)
+
     def record_result(self, model: str, success: bool, quality_score: float = 0.5,
                       latency_ms: float = 0, cost: float = 0):
         reward = max(0.0, min(1.0, (1.0 if success else 0.0) * 0.5 + quality_score * 0.5))
@@ -270,3 +292,18 @@ class AdaptiveRouterActor(Actor):
                 return result
 
         return ActorResult(success=False, content="", error=f"No route for: {msg.content[:60]}")
+
+# --- singleton: una sola fuente de verdad para el aprendizaje de routing ---
+_ADAPTIVE_SINGLETON: "AdaptiveRouter | None" = None
+
+
+def get_adaptive_router() -> AdaptiveRouter:
+    """AdaptiveRouter compartido por todo el proceso (persiste en router_state.json).
+
+    Unifica el aprendizaje: ProviderRouter y LearningService registran/leen el MISMO
+    estado Thompson, así lo aprendido por el judge influye en el enrutado.
+    """
+    global _ADAPTIVE_SINGLETON
+    if _ADAPTIVE_SINGLETON is None:
+        _ADAPTIVE_SINGLETON = AdaptiveRouter()
+    return _ADAPTIVE_SINGLETON

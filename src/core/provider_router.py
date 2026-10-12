@@ -17,11 +17,21 @@ import asyncio
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Any
 
 from .provider_base import BaseProvider, LLMMessage, LLMResponse
+
+
+def _get_adaptive():
+    """AdaptiveRouter compartido (Thompson persistido). None si no está disponible."""
+    try:
+        from src.core.adaptive_router import get_adaptive_router
+        return get_adaptive_router()
+    except Exception:
+        return None
 
 logger = logging.getLogger("nexus-router")
 
@@ -145,13 +155,16 @@ class ProviderRouter:
         resp = await router.chat(messages, hint="coding")
     """
 
-    def __init__(self, vram_budget_gb: float = 12, fallback_order: list[str] | None = None, strategy: str = "tier"):
+    def __init__(self, vram_budget_gb: float = 12, fallback_order: list[str] | None = None, strategy: str = "tier",
+                 adaptive_router=None):
         self._providers: dict[str, BaseProvider] = {}
         self._models: list[ModelRoute] = []
         self.vram_budget_gb = vram_budget_gb
         self.fallback_order = fallback_order or ["ollama", "cloud"]
         self.strategy = strategy  # thompson|vram|tier|manual
-        # Thompson stats stub: {provider_name: {"success": int, "fail": int}}
+        # Thompson persistido (fuente de verdad del aprendizaje). Compartido.
+        self._adaptive = adaptive_router if adaptive_router is not None else _get_adaptive()
+        # Contadores por proveedor (observabilidad legacy; el aprendizaje vive en _adaptive)
         self._stats: dict[str, dict[str, int]] = {}
 
     # ---- registration ----
@@ -253,30 +266,29 @@ class ProviderRouter:
                 if m.provider_name in self._providers:
                     return RoutedProvider(provider=self._providers[m.provider_name], model=m.id, route=m)
         elif strat == "thompson":
-            # Sample Beta for each candidate's provider, pick max sample
+            # Thompson a nivel MODELO usando el AdaptiveRouter persistido (fuente de verdad);
+            # si no está disponible, cae al sampling por proveedor (legacy in-memory).
             best: ModelRoute | None = None
-            best_score = -1
-            # Group candidates by provider
-            by_provider: dict[str, list[ModelRoute]] = {}
+            best_score = -float("inf")
             for m in candidates:
-                by_provider.setdefault(m.provider_name, []).append(m)
-            for pname, routes in by_provider.items():
-                if pname not in self._providers:
+                if m.provider_name not in self._providers:
                     continue
-                s = self._stats.get(pname, {"success": 1, "fail": 1})
-                # Beta sampling via Gamma approximation
-                try:
-                    score = random.betavariate(s["success"], s["fail"])
-                except Exception:
-                    score = s["success"] / (s["success"] + s["fail"])
-                # Prefer higher tier match as tie-breaker (use first route's tier proximity)
-                tier_bonus = 0.01 * (10 - abs(routes[0].effective_tier() - hint_complexity))
-                score += tier_bonus
+                if self._adaptive is not None:
+                    try:
+                        score = self._adaptive.score_model(m.id)
+                    except Exception:
+                        score = 0.5
+                else:
+                    s = self._stats.get(m.provider_name, {"success": 1, "fail": 1})
+                    try:
+                        score = random.betavariate(s["success"], s["fail"])
+                    except Exception:
+                        score = s["success"] / (s["success"] + s["fail"])
+                # Tie-break: cercanía de tier al hint (bonus chico).
+                score += 0.01 * (10 - abs(m.effective_tier() - hint_complexity))
                 if score > best_score:
                     best_score = score
-                    # Pick best route for that provider (closest tier >= hint)
-                    best_route = min(routes, key=lambda r: (r.effective_tier() - hint_complexity) if r.effective_tier() >= hint_complexity else 100)
-                    best = best_route
+                    best = m
             if best is not None:
                 return RoutedProvider(provider=self._providers[best.provider_name], model=best.id, route=best)
             # Fallback to tier
@@ -285,7 +297,10 @@ class ProviderRouter:
         if strat in ("tier", "manual", "thompson"):
             # Prefer provider per fallback_order
             for pname in self.fallback_order:
-                ordered = sorted(candidates, key=lambda x: x.effective_tier(), reverse=relaxed)
+                # Tier primario (asc si no relaxed = modelo más barato que alcanza; desc si relaxed);
+                # dentro del mismo tier, mayor media Thompson primero (aprendizaje del judge).
+                ordered = sorted(candidates, key=lambda x: self._score(x), reverse=True)
+                ordered = sorted(ordered, key=lambda x: x.effective_tier(), reverse=relaxed)
                 for m in ordered:
                     if m.provider_name == pname and pname in self._providers:
                         return RoutedProvider(provider=self._providers[pname], model=m.id, route=m)
@@ -295,6 +310,16 @@ class ProviderRouter:
                     return RoutedProvider(provider=self._providers[m.provider_name], model=m.id, route=m)
 
         return None
+
+    def _score(self, m: ModelRoute) -> float:
+        """Media Thompson (determinista) del modelo. Tie-break dentro del mismo tier."""
+        if self._adaptive is not None:
+            try:
+                return self._adaptive.mean_model(m.id)
+            except Exception:
+                return 0.5
+        s = self._stats.get(m.provider_name, {"success": 1, "fail": 1})
+        return s["success"] / (s["success"] + s["fail"])
 
     def _order_index(self, provider_name: str) -> int:
         try:
@@ -343,13 +368,14 @@ class ProviderRouter:
                     except Exception:
                         pass
             try:
+                _t0 = time.monotonic()
                 resp = await provider.chat(messages, tools=tools, model=m_id, **kw)
-                # Success -> update stats
-                self._record_success(pname)
+                # Success -> stats + aprendizaje (Thompson persistido)
+                self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
                 return resp
             except Exception as e:
                 last_err = e
-                self._record_fail(pname)
+                self._record_fail(pname, m_id)
                 logger.warning(f"fallo chat enrutador {pname}/{m_id}: {e}")
                 continue
         # Ultimo recurso: si el turno requeria tools pero ningun modelo las soporta,
@@ -359,9 +385,10 @@ class ProviderRouter:
             provider = self._providers.get(pname)
             if provider:
                 try:
+                    _t0 = time.monotonic()
                     resp = await provider.chat(messages, tools=None, model=m_id, **kw)
                     logger.info(f"chat degradado sin tools en {pname}/{m_id}")
-                    self._record_success(pname)
+                    self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
                     return resp
                 except Exception as e:
                     last_err = e
@@ -440,13 +467,14 @@ class ProviderRouter:
                         pass
             started = False
             try:
+                _t0 = time.monotonic()
                 async for ev in provider.stream(messages, tools=tools, model=m_id, **kw):
                     started = True
                     yield ev
-                self._record_success(pname)
+                self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
                 return
             except Exception as e:
-                self._record_fail(pname)
+                self._record_fail(pname, m_id)
                 if started:
                     # Ya emitimos tokens de este provider: NO caer a otro (mezclaria salidas).
                     logger.warning(f"stream {pname}/{m_id} falló a mitad: {e}")
@@ -460,22 +488,33 @@ class ProviderRouter:
             provider = self._providers.get(pname)
             if provider:
                 try:
+                    _t0 = time.monotonic()
                     async for ev in provider.stream(messages, tools=None, model=m_id, **kw):
                         yield ev
                     logger.info(f"stream degradado sin tools en {pname}/{m_id}")
-                    self._record_success(pname)
+                    self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
                     return
                 except Exception as e:
                     last_err = e
         raise RuntimeError(f"todos los proveedores fallaron (stream, pista={hint}): {last_err}")
 
-    def _record_success(self, provider_name: str) -> None:
+    def _record_success(self, provider_name: str, model: str = "", latency_ms: float = 0.0) -> None:
         s = self._stats.setdefault(provider_name, {"success": 1, "fail": 1})
         s["success"] += 1
+        if self._adaptive is not None and model:
+            try:
+                self._adaptive.record_result(model, success=True, latency_ms=latency_ms)
+            except Exception:
+                pass
 
-    def _record_fail(self, provider_name: str) -> None:
+    def _record_fail(self, provider_name: str, model: str = "", latency_ms: float = 0.0) -> None:
         s = self._stats.setdefault(provider_name, {"success": 1, "fail": 1})
         s["fail"] += 1
+        if self._adaptive is not None and model:
+            try:
+                self._adaptive.record_result(model, success=False, latency_ms=latency_ms)
+            except Exception:
+                pass
 
     # ---- auto_detect ----
     async def auto_detect(self) -> dict[str, bool]:
@@ -585,4 +624,7 @@ class ProviderRouter:
             "providers": list(self._providers.keys()),
             "models": [{"id": m.id, "provider": m.provider_name, "tier": m.effective_tier(), "vram_gb": m.vram_gb} for m in self._models],
             "thompson_stats": dict(self._stats),
+            "adaptive": (self._adaptive.get_stats() if self._adaptive is not None else None),
+            "adaptive_source": ("adaptive_router (router_state.json)" if self._adaptive is not None
+                                else "in-memory"),
         }

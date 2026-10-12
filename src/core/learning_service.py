@@ -58,13 +58,13 @@ class LearningService:
         interval_s: float = 120.0,
     ):
         from src.core.event_store import EventStore
-        from src.core.adaptive_router import AdaptiveRouter
+        from src.core.adaptive_router import get_adaptive_router
         from src.core.quality_judge import get_judge
         from src.core.self_learning_loop import SelfLearningLoop
         from src.core.skill_opt import SkillOptimizer
 
         self.events = events if events is not None else EventStore()
-        self.router = router if router is not None else AdaptiveRouter()
+        self.router = router if router is not None else get_adaptive_router()
         self.judge = judge if judge is not None else get_judge()
         self.graph = graph  # lazy: get_learning_graph() en primer patron
         self.knowledge_memory = knowledge_memory
