@@ -172,3 +172,21 @@ Todo implementado, probado (suite exit 0, `e2e_diagnostic` 41/41) y commiteado:
 Pendiente (grande, requiere diseño propio): unificar routers (`ProviderRouter._stats` vs
 `AdaptiveRouter`), AGENTS.md jerárquico por directorio, auto-apply assisted por defecto,
 gate real de permisos con UI de aprobación, plan mode con UI de plan editable.
+
+## 10. Tercera tanda (2026-10-12) — cierre total
+
+Todo el "pendiente grande" quedó hecho, probado (suite exit 0, `e2e_diagnostic` 41/41) y commiteado:
+
+| Item | Qué se hizo | Commit |
+|---|---|---|
+| Unificar routers | ProviderRouter usa el AdaptiveRouter (Thompson persistido) como única fuente de verdad | 7204bf4 |
+| AGENTS.md jerárquico | `agents_md.py` inyecta root + ancestros; AGENTS.md anidados (src/core, src/api, ui/src, tests, scripts) | ce13c0b |
+| Auto-apply assisted | `agent_loop.auto_apply: auto\|assisted(default)\|approve` | ce13c0b |
+| Gate de permisos + UI | `approvals.py` + endpoints + panel **Aprobaciones** (diff preview, aprobar/rechazar) | ce13c0b |
+| Plan mode editable | `POST /api/plan` + panel **Plan** (editar pasos y ejecutar) | ce13c0b |
+
+**UI final (11 vistas):** Chat · Ayudantes · Grafo · Editor · Cambios · Aprobaciones · Plan ·
+Tareas · Sub-agentes · Capacidades · Terminal.
+
+No queda pendiente "grande" del roadmap. Mejoras opcionales futuras: worktrees por tarea en la UI,
+grafo 3D/interactivo, telemetría de costo por sesión, plugins de terceros.
