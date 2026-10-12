@@ -777,7 +777,7 @@ class AgentLoop:
                     for _i, _tc in enumerate(_tcs):
                         _n = (_tc.name or "").lower()
                         if _n not in _READONLY_TOOLS:
-                            break  # solo el run INICIAL de solo-lectura (preserva orden vs mutantes)
+                            continue  # fail-closed: las mutantes se saltan y corren serial en orden
                         _a = _tc.arguments
                         if isinstance(_a, str):
                             try:
@@ -833,6 +833,17 @@ class AgentLoop:
                         tool_result_str = str(raw_result)
                     tool_success = True
                     self.budget.add_tool_calls(1)
+                    # Diagnostics-in-the-loop: tras editar/escribir, correr un chequeo
+                    # rapido y anexarlo al resultado (el modelo se autocorrige).
+                    try:
+                        if tool_name in ("write_file", "edit") and isinstance(tool_args, dict) and tool_args.get("path"):
+                            from .diagnostics import diagnostics_for, config_enabled
+                            if config_enabled(getattr(self, "_cfg", None) or {}):
+                                _diag = diagnostics_for(tool_args.get("path"))
+                                if _diag:
+                                    tool_result_str = (tool_result_str or "") + _diag
+                    except Exception:
+                        pass
                     # Anti doom-loop (aden-hive): 3 llamadas idénticas consecutivas → cortar
                     try:
                         _fp = (tool_name, json.dumps(tool_args if isinstance(tool_args, dict) else {}, sort_keys=True, default=str))

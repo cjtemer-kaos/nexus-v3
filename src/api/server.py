@@ -2095,6 +2095,19 @@ async def todos_post(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/checkpoints")
+async def checkpoints_list(session_id: str = ""):
+    from src.core.checkpoints import list_checkpoints
+    return {"checkpoints": list_checkpoints(session_id)}
+
+
+@app.post("/api/checkpoints/restore")
+async def checkpoints_restore(request: Request):
+    body = await _json_body(request)
+    from src.core.checkpoints import restore
+    return restore(str(body.get("session_id", "")), str(body.get("checkpoint_id", "")))
+
+
 @app.get("/api/permission")
 async def permission_get():
     from src.core.config import load_config
@@ -2665,6 +2678,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         p = scope.check_path(path)
         # scope guard for mutating op
         scope.check_tool("write_file", {"path": path, "content": content})
+        try:
+            from src.core.checkpoints import snapshot
+            if p.is_file():
+                snapshot(session_id, p)
+        except Exception:
+            pass
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
@@ -2682,6 +2701,11 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise ValueError(f"texto a reemplazar no encontrado en {path}")
         if n > 1 and not replace_all:
             raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
+        try:
+            from src.core.checkpoints import snapshot
+            snapshot(session_id, p)
+        except Exception:
+            pass
         new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         p.write_text(new_text, encoding="utf-8")
         return f"editado {path} ({n if replace_all else 1} reemplazo/s)"

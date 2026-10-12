@@ -77,3 +77,50 @@ def test_sessions_delete_roundtrip():
     sid = client.post("/api/sessions", json={"project": "pytest-e2e"}).json()["id"]
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
     assert client.delete(f"/api/sessions/{sid}").status_code == 404
+
+
+def test_diagnostics_in_the_loop():
+    import pathlib
+    from src.core.diagnostics import diagnostics_for
+    p = "./workspace/_diag_pytest.py"
+    pathlib.Path(p).write_text("def f(:\n pass\n", encoding="utf-8")
+    try:
+        assert "file_diagnostics" in diagnostics_for(p)
+    finally:
+        pathlib.Path(p).unlink(missing_ok=True)
+    # archivo valido -> sin diagnostico
+    pathlib.Path(p).write_text("x = 1\n", encoding="utf-8")
+    try:
+        assert diagnostics_for(p) == ""
+    finally:
+        pathlib.Path(p).unlink(missing_ok=True)
+
+
+def test_checkpoints_snapshot_and_restore():
+    import asyncio, pathlib
+    from src.api.server import _build_registry, _build_scope, _load_config_safe
+    from src.core.checkpoints import list_checkpoints, restore
+    cfg = _load_config_safe()
+    scope = _build_scope(cfg)
+    reg = _build_registry(scope, "ck-pytest", cfg)
+    f = "./workspace/_ck_pytest.txt"
+    pathlib.Path(f).write_text("a\nb\n", encoding="utf-8")
+    try:
+        asyncio.run(reg.dispatch("edit", {"path": f, "old": "b", "new": "B"}, scope=scope))
+        cks = list_checkpoints("ck-pytest")
+        assert cks and cks[-1]["id"]
+        assert restore("ck-pytest", cks[-1]["id"])["ok"]
+        assert "b" in pathlib.Path(f).read_text(encoding="utf-8")
+    finally:
+        pathlib.Path(f).unlink(missing_ok=True)
+
+
+def test_checkpoints_endpoint():
+    r = client.get("/api/checkpoints", params={"session_id": "nope"})
+    assert r.status_code == 200
+    assert "checkpoints" in r.json()
+
+
+def test_global_search_and_catalog_endpoints():
+    assert client.get("/api/sessions/global/search", params={"q": "x"}).status_code == 200
+    assert client.get("/api/sessions/catalog").status_code == 200

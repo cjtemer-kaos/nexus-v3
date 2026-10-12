@@ -81,6 +81,7 @@ def main():
         check("tools base presentes", all(x in names for x in ["read_file", "write_file", "list_dir", "exec", "learn", "recall"]))
         check("edit (str_replace) presente", "edit" in names)
         check("web_search presente", "web_search" in names)
+        check("code_search presente", "code_search" in names)
         bad = [t for t in tools if (t.get("function", {}).get("parameters") or {}).get("type") != "object"]
         check("schemas validos", not bad, str([t["function"]["name"] for t in bad]))
         # tipos: int params deben ser integer (bug from __future__ annotations)
@@ -121,6 +122,22 @@ def main():
         check("exec echo ok", r.get("ok") and "diag-ok" in (r.get("output") or ""), str(r.get("output"))[:60])
     except Exception as e:
         check("exec", False, str(e))
+
+    section("7b) Endpoints nuevos (checkpoints / global search / catalog)")
+    try:
+        check("checkpoints GET", c.get(f"{BASE}/api/checkpoints", params={"session_id": "x"}).status_code == 200)
+        check("global search GET", c.get(f"{BASE}/api/sessions/global/search", params={"q": "x"}).status_code == 200)
+        check("catalog GET", c.get(f"{BASE}/api/sessions/catalog").status_code == 200)
+        from src.core.diagnostics import diagnostics_for
+        import pathlib
+        p = "./workspace/_diag_ep.py"
+        pathlib.Path(p).write_text("def f(:\n pass\n", encoding="utf-8")
+        try:
+            check("diagnostics-in-loop", "file_diagnostics" in diagnostics_for(p))
+        finally:
+            pathlib.Path(p).unlink(missing_ok=True)
+    except Exception as e:
+        check("endpoints nuevos", False, str(e))
 
     if RUN_LLM:
         section("8) LLM: tool-use (write_file/read_file)")
