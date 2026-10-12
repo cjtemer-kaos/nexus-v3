@@ -5,6 +5,7 @@ import { GraphView } from '@/components/graph/GraphView'
 import { FileEditor } from '@/components/editor/FileEditor'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { AgentsPanel } from '@/components/agents/AgentsPanel'
+import { ReviewPanel } from '@/components/review/ReviewPanel'
 import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ const viewLabels: Record<string, string> = {
   editor: 'Editor',
   terminal: 'Terminal',
   agents: 'Ayudantes',
+  review: 'Cambios',
 }
 
 type SearchResult = { role: string; content: string }
@@ -157,6 +159,7 @@ export default function App() {
           {view==='editor' && <FileEditor />}
           {view==='terminal' && <TerminalPanel />}
           {view==='agents' && <AgentsPanel />}
+          {view==='review' && <ReviewPanel />}
         </main>
 
         {/* estado inferior */}

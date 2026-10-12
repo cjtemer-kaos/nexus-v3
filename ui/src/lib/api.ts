@@ -365,3 +365,27 @@ export async function agentDeleteApi(id: string): Promise<{ ok: boolean }> {
   if (!res.ok) throw new Error((await res.text()).slice(0, 400))
   return res.json()
 }
+
+export type Checkpoint = { id: string; path: string; ts: string }
+
+export async function checkpointsApi(sessionId: string): Promise<{ checkpoints: Checkpoint[] }> {
+  const res = await apiFetch(`/api/checkpoints?session_id=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) throw new Error(`checkpoints ${res.status}`)
+  return res.json()
+}
+
+export async function checkpointDiffApi(id: string, sessionId: string): Promise<{ ok: boolean; path?: string; diff?: string; error?: string }> {
+  const res = await apiFetch(`/api/checkpoints/${encodeURIComponent(id)}/diff?session_id=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) throw new Error(`checkpoint diff ${res.status}`)
+  return res.json()
+}
+
+export async function checkpointRestoreApi(sessionId: string, id: string): Promise<{ ok: boolean; restored?: string; error?: string }> {
+  const res = await apiFetch(`/api/checkpoints/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, checkpoint_id: id }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
