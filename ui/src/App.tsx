@@ -164,7 +164,7 @@ export default function App() {
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[#3DDC84] animate-pulse" /> arnés listo</span>
           <span className="hidden md:inline">·</span>
           <span className="hidden md:inline">config.yaml · nada hardcodeado · distribuible</span>
-          <span className="ml-auto hidden md:inline">Alcance: raíces permitidas ./workspace, ./data · denegado **/.env</span>
+            <span className="ml-auto hidden md:inline">Alcance: según Ajustes → Permisos (full = toda la PC) · secretos bloqueados</span>
           <span className="ml-auto md:ml-0 flex items-center gap-2"><span className="rounded bg-[#2C3037] px-1.5 py-0.5 font-mono text-[11px]"><User className="h-3 w-3 inline mr-1" />nexus-v3 3.0.0-alpha</span></span>
         </footer>
       </div>

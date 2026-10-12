@@ -1775,6 +1775,14 @@ async def _json_body(request: Request, required: bool = True):
 async def fs_list(path: str = "./workspace"):
     from src.core.scope import ScopeDenied
     scope = _get_scope()
+    # Raiz vacia / "/" -> listar unidades (Windows: C:\, D:\ ...) o "/" en POSIX.
+    if path in ("", "/", "\\"):
+        import string as _string
+        if os.name == "nt":
+            drives = [f"{d}:\\" for d in _string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+            return {"path": "", "root": True,
+                    "entries": [{"name": d, "path": d, "type": "dir", "size": 0} for d in drives]}
+        path = "/"
     try:
         p = scope.check_path(path)
         if not p.exists():

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { File, Plus, X, Save, Search, SplitSquareHorizontal, MoreHorizontal, Folder, RefreshCw } from 'lucide-react'
+import { File, Plus, X, Save, Search, SplitSquareHorizontal, Folder, RefreshCw, ArrowUp, HardDrive } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
@@ -47,21 +47,25 @@ export function FileEditor() {
   const { tabs, activeTab, setActiveTab, updateTab, openFile, closeTab, saveTab } = useAppStore()
   const [find, setFind] = useState('')
   const [toast, setToast] = useState<string | null>(null)
+  const [root, setRoot] = useState('.')
   const [rootEntries, setRootEntries] = useState<FsEntry[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [childrenMap, setChildrenMap] = useState<Record<string, FsEntry[]>>({})
   const [loading, setLoading] = useState(false)
+  const [pathInput, setPathInput] = useState('.')
   const showToast = (m: string) => { setToast(m); setTimeout(()=>setToast(null), 2200) }
 
-  const loadRoot = async () => {
+  const loadRoot = async (r: string = root) => {
     setLoading(true)
     try{
-      const r = await fsList('.')
-      setRootEntries(r.entries)
-    } catch(e){ showToast(String(e).slice(0,120)) }
-    finally{ setLoading(false)}
+      const res = await fsList(r)
+      setRootEntries(res.entries)
+      setRoot(r); setPathInput(r)
+      setExpanded(new Set()); setChildrenMap({})
+    } catch(e){ showToast(String(e).slice(0,160)) }
+    finally{ setLoading(false) }
   }
-  useEffect(()=>{ loadRoot() }, [])
+  useEffect(()=>{ loadRoot('.') }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleDir = async (path: string) => {
     if(expanded.has(path)){ setExpanded(prev=>{ const n=new Set(prev); n.delete(path); return n }); return }
@@ -70,16 +74,27 @@ export function FileEditor() {
     try{
       const r = await fsList(path)
       setChildrenMap(m=>({...m, [path]: r.entries}))
-    } catch(e){ showToast(String(e).slice(0,120)) }
+    } catch(e){ showToast(String(e).slice(0,160)) }
+  }
+
+  // Subir un nivel. En la raiz de una unidad -> lista de unidades ("").
+  const goUp = () => {
+    if (!root || root === '/' || root === '\\') { loadRoot(''); return }
+    const norm = root.replace(/[\\/]+$/, '')
+    const parts = norm.split(/[\\/]/)
+    if (parts.length <= 1) { loadRoot(''); return }
+    parts.pop()
+    let parent = parts.join('/')
+    if (/^[A-Za-z]:$/.test(parent)) parent += '/'
+    loadRoot(parent || '')
   }
 
   const handleOpenFile = async (path: string) => {
     try{
       const r = await fsRead(path)
       openFile(path, r.content)
-      // el store deriva el lenguaje por extensión del path
     } catch(e){
-      showToast(`No se pudo leer ${path}: ${String(e).slice(0,120)}`)
+      showToast(`No se pudo leer ${path}: ${String(e).slice(0,140)}`)
     }
   }
 
@@ -92,7 +107,6 @@ export function FileEditor() {
       const idx = useAppStore.getState().tabs.findIndex(t => t.path === path)
       if (idx >= 0) saveTab(idx)
       showToast(`Guardado: ${path}`)
-      // refrescar listing si es workspace
       loadRoot()
     } catch(e){
       showToast(`Error guardando: ${String(e).slice(0,180)}`)
@@ -101,33 +115,55 @@ export function FileEditor() {
 
   const tab = tabs[activeTab]
 
+  const explorer = (
+    <div className="w-[300px] shrink-0 border-r border-[#2C3037] bg-[#15171B]/60 flex flex-col">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#2C3037]">
+        <span className="text-xs font-semibold tracking-widest text-[#9BA1AA]">EXPLORADOR</span>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="xs" onClick={()=>openFile(`nuevo-${tabs.length+1}.py`, '# nuevo\n')} aria-label="Nuevo archivo"><Plus className="h-3 w-3" /></Button>
+          <Button variant="ghost" size="xs" onClick={()=>loadRoot()} aria-label="Recargar"><RefreshCw className="h-3 w-3" /></Button>
+        </div>
+      </div>
+      {/* barra de ruta + navegacion por toda la PC */}
+      <div className="flex items-center gap-1 border-b border-[#2C3037] px-2 py-1.5">
+        <Button variant="ghost" size="xs" onClick={goUp} aria-label="Subir un nivel" title="Subir"><ArrowUp className="h-3.5 w-3.5" /></Button>
+        <input
+          value={pathInput}
+          onChange={e=>setPathInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==='Enter') loadRoot(pathInput.trim()) }}
+          aria-label="Ruta a explorar"
+          placeholder="ruta (ej. C:\ o D:\ias)"
+          className="min-w-0 flex-1 rounded-md border border-[#2C3037] bg-[#1E2127] px-2 py-1 font-mono text-[11px] text-[#EDEEF0] placeholder:text-zinc-600 focus:outline-none"
+        />
+        <Button variant="ghost" size="xs" onClick={()=>loadRoot('')} aria-label="Unidades del disco" title="Unidades"><HardDrive className="h-3.5 w-3.5" /></Button>
+        <Button variant="ghost" size="xs" onClick={()=>loadRoot('.')} title="Proyecto">.</Button>
+      </div>
+      <div className="flex-1 overflow-auto p-2">
+        {loading ? <div className="text-xs text-[#9BA1AA] px-2">cargando…</div> : (
+          <>
+            <Tree entries={rootEntries} childrenMap={childrenMap} expanded={expanded} toggle={toggleDir} onOpenFile={handleOpenFile} />
+            {rootEntries.length===0 && <div className="text-xs text-zinc-600 px-2 py-4">Carpeta vacía.</div>}
+          </>
+        )}
+      </div>
+      <div className="border-t border-[#2C3037] p-2">
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-2 text-xs leading-relaxed text-amber-200">
+          <span className="font-semibold">Guardia de alcance</span><br />
+          Acceso según Ajustes → Permisos (<span className="font-mono">full</span> = toda la PC). Secretos <span className="font-mono">**/.env</span> y <span className="font-mono">**/*.key</span> siempre bloqueados.
+        </div>
+      </div>
+    </div>
+  )
+
   // empty state — muestra explorador real + CTA
   if (!tab) {
     return (
       <div className="flex h-full">
-        <div className="w-[260px] shrink-0 border-r border-[#2C3037] bg-[#15171B]/60 flex flex-col">
-          <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#2C3037]">
-            <span className="text-xs font-semibold tracking-widest text-[#9BA1AA]">EXPLORADOR — proyecto (.)</span>
-            <Button variant="ghost" size="xs" onClick={loadRoot} aria-label="Recargar"><RefreshCw className="h-3 w-3" /></Button>
-          </div>
-          <div className="flex-1 overflow-auto p-2">
-            {loading ? <div className="text-xs text-[#9BA1AA] px-2">cargando…</div> : (
-              <>
-                <Tree entries={rootEntries} childrenMap={childrenMap} expanded={expanded} toggle={toggleDir} onOpenFile={handleOpenFile} />
-                {rootEntries.length===0 && <div className="text-xs text-zinc-600 px-2 py-4">Carpeta vacía — crea un archivo.</div>}
-              </>
-            )}
-          </div>
-          <div className="border-t border-[#2C3037] p-2">
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-2 text-xs leading-relaxed text-amber-200">
-              <span className="font-semibold">Guardia de alcance</span><br /> FS jail: proyecto <span className="font-mono">(.)</span> · <span className="font-mono">**/.env</span> y <span className="font-mono">**/*.key</span> bloqueados.
-            </div>
-          </div>
-        </div>
+        {explorer}
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6">
           <File className="h-8 w-8 text-zinc-700" />
           <div className="text-sm font-medium text-[#EDEEF0]">Sin archivos abiertos</div>
-          <div className="text-xs text-[#9BA1AA] max-w-xs">Elegí un archivo del explorador (datos reales vía <span className="font-mono">GET /api/fs/*</span>) o crea uno nuevo.</div>
+          <div className="text-xs text-[#9BA1AA] max-w-xs">Explorá cualquier carpeta de la PC con la barra de ruta, o crea un archivo nuevo.</div>
           <Button variant="ghost" size="sm" onClick={() => openFile(`nuevo-${tabs.length + 1}.py`, '# nuevo archivo\n')}><Plus className="h-3.5 w-3.5 mr-1" /> Nuevo archivo</Button>
           {toast && <div className="text-xs text-amber-400">{toast}</div>}
         </div>
@@ -137,24 +173,7 @@ export function FileEditor() {
 
   return (
     <div className="flex h-full">
-      <div className="w-[260px] shrink-0 border-r border-[#2C3037] bg-[#15171B]/60 flex flex-col">
-        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#2C3037]">
-          <span className="text-xs font-semibold tracking-widest text-[#9BA1AA]">EXPLORADOR</span>
-          <div className="flex gap-1">
-            <Button variant="ghost" size="xs" onClick={()=>openFile(`nuevo-${tabs.length+1}.py`, '# nuevo\n')}><Plus className="h-3 w-3" /></Button>
-            <Button variant="ghost" size="xs" onClick={loadRoot}><RefreshCw className="h-3 w-3" /></Button>
-            <Button variant="ghost" size="xs"><MoreHorizontal className="h-3 w-3" /></Button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-auto p-2">
-          <Tree entries={rootEntries} childrenMap={childrenMap} expanded={expanded} toggle={toggleDir} onOpenFile={handleOpenFile} />
-        </div>
-        <div className="border-t border-[#2C3037] p-2">
-          <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-2 text-xs leading-relaxed text-amber-200">
-            <span className="font-semibold">Guardia de alcance</span><br /> Jaula FS: el proyecto <span className="font-mono">(.)</span> — secretos bloqueados.
-          </div>
-        </div>
-      </div>
+      {explorer}
 
       <div className="relative flex flex-1 flex-col min-w-0">
         <div className="flex items-center gap-0 border-b border-[#2C3037] bg-[#1E2127]/60 overflow-x-auto">
@@ -206,7 +225,7 @@ export function FileEditor() {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="xs" onClick={handleSave} className="h-6 text-white hover:bg-[#3A4049] border border-[#3A4049]"><Save className="h-3 w-3" /> Guardar (→ PUT /api/fs/write)</Button>
-            <span className="hidden sm:inline opacity-80">Alcance: jail activo · 1.0 MB límite</span>
+            <span className="hidden sm:inline opacity-80">Alcance según Permisos · 1.0 MB límite</span>
           </div>
         </div>
         {toast && <div className="absolute bottom-10 right-4 z-10 rounded-lg bg-[#1E2127] border border-[#2C3037] px-3 py-2 text-xs text-white shadow-xl">{toast}</div>}

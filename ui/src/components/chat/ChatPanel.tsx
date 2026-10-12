@@ -215,7 +215,7 @@ export function ChatPanel() {
         reply = `⚠️ Backend no disponible (${msg.slice(0,120)}). Inicia el servidor con \`python -m src.api.server\` (o vía Electron) y reintenta.`
       }
       if (text.toLowerCase().includes('compact')) reply = 'Pipeline **4 capas** activo: **L0 SecurityLingua** filtra inyección, **L1 Recorte** mantiene 4 turnos, **L2 Micro** colapsa herramientas >2k tokens, **L3 Presupuesto** derrama a `./data/spill`, **L4 Resumen** usa modelo barato. Emergencia `prompt_too_long` → Compactación Reactiva.'
-      if (text.toLowerCase().includes('alcance') || text.toLowerCase().includes('scope')) reply = 'Guardia de **Alcance** aplica ACL por defecto denegado. Raíces permitidas: `./workspace`, `./data`. Patrones denegados: `**/.env`, `**/.git/**`. Límite lectura 1.0 MB. Cada herramienta pasa por `alcance.verificar` antes de ejecutar.'
+        if (text.toLowerCase().includes('alcance') || text.toLowerCase().includes('scope')) reply = 'Guardia de **Alcance** aplica ACL. Con permiso `workspace_write` las raíces son `./workspace` y `./data`; con permiso `full` (Ajustes → Permisos) hay acceso a toda la PC. Patrones denegados siempre: `**/.env`, `**/*.key`. Límite lectura 1.0 MB. Cada herramienta pasa por `scope.check_path`/`check_tool` antes de ejecutar.'
       await new Promise(r => setTimeout(r, 500))
       if (stillActive()) addMessage({ id: (Date.now()+1).toString(), role: 'assistant', content: reply, timestamp: now() })
     } finally {

@@ -200,10 +200,12 @@ class Scope:
         p = Path(raw)
         if not p.is_absolute():
             p = self.project_root / p
-        # Check deny first (more specific)
+        # Check deny first (more specific) — secretos bloqueados siempre.
         if self._is_denied(p):
             raise ScopeDenied(f"ruta denegada por patrones de denegación: {p} (patrones: {self.cfg.deny_patterns})")
-        if not self._is_allowed(p):
+        # permission 'full' = acceso total a la PC (el usuario lo activa en Ajustes).
+        perm = getattr(self.cfg, "permission", "workspace_write") or "workspace_write"
+        if perm != "full" and not self._is_allowed(p):
             raise ScopeDenied(
                 f"ruta fuera de raíces permitidas: {p} (permitidas: {self.cfg.allowed_roots}). "
                 f"Para acceso total a la PC, activa Ajustes → Permisos → 'full'."
