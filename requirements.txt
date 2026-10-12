@@ -22,3 +22,8 @@ pytest>=8.0
 # entrenamiento: torch, transformers, peft, trl, datasets
 # upscale/vision: basicsr, gfpgan, realesrgan
 ruamel.yaml>=0.18
+
+# --- LSP (diagnosticos semanticos; opcional, degrada si falta) ---
+python-lsp-server>=1.15
+pyflakes>=3.0
+pycodestyle>=2.11

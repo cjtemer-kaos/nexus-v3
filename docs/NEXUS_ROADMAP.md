@@ -127,3 +127,26 @@ Ninguno de los 4 diferenciadores es defendible **tal como se enuncia**. El moat 
 3. **Sprint 2**: P0.2 diff + P0.5 checkpoints + P0.4 plan mode.
 4. **Sprint 3**: P0.8 frontera FS + P1.8 queue/steer + P1.7 review.
 5. **Sprint 4+**: worktrees + board/claims/gates + sub-agent cards + grafo citable + AGENTS.md + skills/MCP.
+
+---
+
+## 8. Estado de implementación (2026-10-12) — "termina todo"
+
+Implementado, probado (suite exit 0, `scripts/e2e_diagnostic.py` 41/41) y commiteado:
+
+| Item del roadmap | Qué se hizo | Commit |
+|---|---|---|
+| Quick wins §4 | HINT_MAPPING, `/api/sessions/global/search`, `/catalog`, `/{id}/export`, `code_search` | e70113f |
+| Tools faltantes | `edit` (str_replace), `web_search` (SearXNG+Wikipedia) | 76f884e |
+| P0.5 checkpoints | snapshot pre-write/edit + list/restore | 92a9394 |
+| P1.7 review / P0.2 diff | `POST /api/diff` + diff de checkpoint | 89072f7 |
+| P1.7 review UI | panel **Cambios** (lista + diff verde/rojo + Restaurar) | b01e888 |
+| LSP (diagnostics-in-the-loop) | sintaxis rápida + **LSP semántico** (pylsp) → `<file_diagnostics>` | 92a9394, beff580 |
+| P0.3 permisos | gate mutante opt-in (`require_confirm_mutating`) + `sandbox.run_argv` con política | 4cc8bda |
+| Scheduler | paraleliza todas las read-only (fail-closed), mutantes serial | 92a9394 |
+| Interop | **MCP serve** (inbound, 21 tools) + **ACP** (Zed) | 5de2b89 |
+| Sub-agentes | `sub_agent` / `sub_agent_message` / `sub_agent_list` (continuable, depth 3) | 5de2b89 |
+
+Pendiente (mayor / requiere UI o refactor): event-sourced session log + derive (fork/rewind),
+plan mode, worktrees, board/claims/gates, sub-agent cards en UI, grafo citable, AGENTS.md,
+gestión de skills/MCP en UI, queue/steer, status real desde procesos.
