@@ -99,17 +99,17 @@ export default function App() {
     <div className="flex h-screen overflow-hidden bg-[#15171B] text-[#EDEEF0]">
       <Sidebar />
 
-      <div className="flex flex-1 flex-col min-w-0">
+      <div className="flex flex-1 flex-col min-w-0 min-h-0">
         {/* topbar — z-30 ensures dropdowns inside header paint above main content (backdrop-blur creates stacking context) */}
         <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-[#2C3037] bg-[#15171B]/80 backdrop-blur px-3 sm:px-4">
-          {/* mobile nav */}
-          <div className="flex md:hidden items-center gap-1">
+          {/* nav compacta (solo cuando la sidebar está oculta, <640px) */}
+          <div className="flex sm:hidden items-center gap-1 overflow-x-auto max-w-[70vw] shrink-0">
             {(Object.keys(viewLabels) as Array<keyof typeof viewLabels>).map(v=>(
-              <button key={v} onClick={()=>setView(v as any)} aria-label={`Ir a ${viewLabels[v]}`} className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${view===v ? 'bg-[#0B62D6] text-white' : 'text-[#9BA1AA]'}`}>{viewLabels[v]}</button>
+              <button key={v} onClick={()=>setView(v as any)} aria-label={`Ir a ${viewLabels[v]}`} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium ${view===v ? 'bg-[#0B62D6] text-white' : 'text-[#9BA1AA]'}`}>{viewLabels[v]}</button>
             ))}
           </div>
 
-          <div className="hidden md:flex items-center gap-2 text-sm">
+          <div className="hidden lg:flex items-center gap-2 text-sm shrink-0">
             <span className="text-[#9BA1AA]">Arnés</span>
             <span className="text-zinc-700">/</span>
             <span className="font-medium">{viewLabels[view]}</span>
@@ -181,7 +181,7 @@ export default function App() {
         </header>
 
         {/* content */}
-        <main className="flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.06),_transparent_55%)]">
+        <main className="flex-1 min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.06),_transparent_55%)]">
           {view==='chat' && <ChatPanel />}
           {view==='graph' && <GraphView />}
           {view==='editor' && <FileEditor />}
