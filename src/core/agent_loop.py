@@ -735,8 +735,9 @@ class AgentLoop:
             else:
                 trajectory.append_assistant(assistant_content, iteration=iteration, turn=iteration, step="assistant", tokens=turn_tokens, model=_resp_model)
 
-            # Session log
-            if self.session_log is not None:
+            # Session log (NO persistir assistant vacio: ensucia historial/UI con
+            # burbujas vacias — pasa cuando el modelo solo emite tool_calls).
+            if self.session_log is not None and (assistant_content or "").strip():
                 try:
                     from .session_log import Message
                     self.session_log.append(session_id, Message(role="assistant", content=assistant_content, model=getattr(llm_resp, "model", ""), tokens=turn_tokens))

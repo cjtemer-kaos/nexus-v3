@@ -245,23 +245,59 @@ async def _h_todo(args, ctx):
     return SlashResult(ok=True, message="todo_write es tool del modelo; gestionado vía POST /api/todos. Uso slash: /todo para ver lista actual.",
                        data={"action": "todo_list"})
 
+
+async def _h_tools(args, ctx):
+    tools = [
+        ("read_file", "lee un archivo (jail/permiso)"),
+        ("write_file", "escribe/crea un archivo"),
+        ("list_dir", "lista un directorio"),
+        ("exec", "ejecuta un comando de shell"),
+        ("todo_write", "lista de tareas estructurada"),
+        ("web_fetch", "descarga una URL"),
+        ("learn", "guarda conocimiento en el grafo"),
+        ("recall", "consulta el grafo de conocimiento"),
+        ("mcp_list", "lista tools de servidores MCP"),
+        ("mcp_call", "llama una tool MCP"),
+        ("gema_list", "lista las gemas especializadas"),
+        ("agent_list", "lista los ayudantes configurados"),
+        ("gema_run", "delega una tarea a una gema"),
+        ("agent_run", "delega una tarea a un ayudante"),
+        ("echo", "eco (debug)"),
+    ]
+    return SlashResult(ok=True,
+                       message=f"Herramientas ({len(tools)}):\n" + "\n".join(f"  {n} — {d}" for n, d in tools),
+                       data={"action": "list_tools", "tools": [n for n, _ in tools]})
+
+
+async def _h_scope(args, ctx):
+    return SlashResult(
+        ok=True,
+        message=("Alcance: con permiso 'full' (Ajustes → Permisos) hay acceso a toda la PC; "
+                 "con 'workspace_write' solo ./workspace y ./data; con 'read_only' solo lectura. "
+                 "Secretos **/.env y **/*.key siempre bloqueados. Cambiá con /permiso <read_only|workspace_write|full>."),
+        data={"action": "scope_info"},
+    )
+
+
 # --- register defaults -------------------------------------------------
 
 for spec in (
-    SlashCommand("help",    ["h", "?"],     "show available commands",        "",            _h_help),
-    SlashCommand("clear",   ["cls"],        "clear local chat buffer",        "",            _h_clear),
-    SlashCommand("model",   ["m"],          "set model preference",           "<model_id>",  _h_model),
-    SlashCommand("persona", ["p"],          "switch persona preset",          "[preset]",    _h_persona),
-    SlashCommand("skill",   ["s"],          "invoke a skill by name",         "<name>",      _h_skill),
-    SlashCommand("agent",   ["a"],          "switch to an agent",             "<name>",      _h_agent),
-    SlashCommand("session", ["sess"],       "session ops (new/attach/list)",  "[op] [id]",   _h_session),
-    SlashCommand("plan",    [],             "toggle plan mode",               "[on|off]",    _h_plan),
-    SlashCommand("doctor",  ["dr"],         "open the diagnostic endpoint",   "",            _h_doctor),
-    SlashCommand("compact",   [],             "info compactación 4 capas",      "",            _h_compact),
-    SlashCommand("goal",      ["g"],          "gestiona objetivo largo (goal)", "[objetivo|status|clear]", _h_goal),
-    SlashCommand("permission", ["perm"],       "cambia permiso (read_only|workspace_write|full)", "<perm>", _h_permission),
-    SlashCommand("export",    [],             "exporta log de sesión ZIP",      "",            _h_export),
-    SlashCommand("feedback",  ["fb"],         "envía feedback",               "[texto]",     _h_feedback),
-    SlashCommand("todo",      [],             "ver lista todo actual",          "",            _h_todo),
+    SlashCommand("help",    ["h", "?", "ayuda"],     "show available commands",        "",            _h_help),
+    SlashCommand("clear",   ["cls", "limpiar"],      "clear local chat buffer",        "",            _h_clear),
+    SlashCommand("model",   ["m", "modelo"],         "set model preference",           "<model_id>",  _h_model),
+    SlashCommand("persona", ["p"],                   "switch persona preset",          "[preset]",    _h_persona),
+    SlashCommand("skill",   ["s"],                   "invoke a skill by name",         "<name>",      _h_skill),
+    SlashCommand("agent",   ["a", "ayudante", "ayudantes"], "switch to an agent",      "<name>",      _h_agent),
+    SlashCommand("session", ["sess", "sesion"],      "session ops (new/attach/list)",  "[op] [id]",   _h_session),
+    SlashCommand("plan",    ["planear"],             "toggle plan mode",               "[on|off]",    _h_plan),
+    SlashCommand("doctor",  ["dr"],                  "open the diagnostic endpoint",   "",            _h_doctor),
+    SlashCommand("compact",   ["compactar"],         "info compactación 4 capas",      "",            _h_compact),
+    SlashCommand("goal",      ["g", "objetivo"],     "gestiona objetivo largo (goal)", "[objetivo|status|clear]", _h_goal),
+    SlashCommand("permission", ["perm", "permiso"],  "cambia permiso (read_only|workspace_write|full)", "<perm>", _h_permission),
+    SlashCommand("export",    ["exportar"],          "exporta log de sesión ZIP",      "",            _h_export),
+    SlashCommand("feedback",  ["fb"],                "envía feedback",               "[texto]",     _h_feedback),
+    SlashCommand("todo",      ["todos"],             "ver lista todo actual",          "",            _h_todo),
+    SlashCommand("herramientas", ["tools", "herramienta"], "lista las herramientas disponibles", "", _h_tools),
+    SlashCommand("alcance",   ["scope"],             "info de alcance/permisos",       "",            _h_scope),
 ):
     registry.register(spec)
