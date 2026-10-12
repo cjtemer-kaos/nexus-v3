@@ -50,7 +50,7 @@ export function Sidebar() {
   useEffect(() => { if (inMore) setMoreOpen(true) }, [inMore])
 
   return (
-    <aside className="hidden sm:flex w-[260px] shrink-0 min-h-0 flex-col overflow-hidden border-r border-[#2C3037] bg-[#15171B]">
+    <aside className="flex w-[240px] shrink-0 min-h-0 flex-col overflow-hidden border-r border-[#2C3037] bg-[#15171B]">
       {/* brand */}
       <div className="shrink-0 px-4 py-4 border-b border-[#2C3037]">
         <div className="flex items-center gap-3">

@@ -102,21 +102,14 @@ export default function App() {
       <div className="flex flex-1 flex-col min-w-0 min-h-0">
         {/* topbar — z-30 ensures dropdowns inside header paint above main content (backdrop-blur creates stacking context) */}
         <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-[#2C3037] bg-[#15171B]/80 backdrop-blur px-3 sm:px-4">
-          {/* nav compacta (solo cuando la sidebar está oculta, <640px) */}
-          <div className="flex sm:hidden items-center gap-1 overflow-x-auto max-w-[70vw] shrink-0">
-            {(Object.keys(viewLabels) as Array<keyof typeof viewLabels>).map(v=>(
-              <button key={v} onClick={()=>setView(v as any)} aria-label={`Ir a ${viewLabels[v]}`} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium ${view===v ? 'bg-[#0B62D6] text-white' : 'text-[#9BA1AA]'}`}>{viewLabels[v]}</button>
-            ))}
-          </div>
-
-          <div className="hidden lg:flex items-center gap-2 text-sm shrink-0">
+          <div className="hidden md:flex items-center gap-2 text-sm shrink-0">
             <span className="text-[#9BA1AA]">Arnés</span>
             <span className="text-zinc-700">/</span>
             <span className="font-medium">{viewLabels[view]}</span>
             <span className="ml-2 hidden lg:inline rounded-full bg-[#3DDC84]/15 border border-[#3DDC84]/20 px-2 py-0.5 text-xs text-[#3DDC84]">WAL activado · FTS5 · sesión {activeSession}</span>
           </div>
 
-          <div className="hidden sm:flex flex-1 justify-center">
+          <div className="flex flex-1 min-w-0 justify-center px-1">
             <div className="relative w-full max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#9BA1AA]" />
               <input
@@ -198,7 +191,7 @@ export default function App() {
         </main>
 
         {/* estado inferior */}
-        <footer className="hidden sm:flex h-6 items-center gap-3 border-t border-[#2C3037] bg-[#1E2127] px-3 text-xs text-[#9BA1AA]">
+        <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-[#2C3037] bg-[#1E2127] px-3 text-xs text-[#9BA1AA]">
           <span className="flex items-center gap-1.5"><span className={`h-2 w-2 rounded-full animate-pulse ${live?.running ? 'bg-[#4C9DFF]' : 'bg-[#3DDC84]'}`} /> {live?.running ? `${live.running} run activo` : 'arnés listo'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}</span>
           <span className="hidden md:inline">·</span>
           <span className="hidden md:inline">config.yaml · nada hardcodeado · distribuible</span>
