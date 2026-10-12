@@ -3958,7 +3958,7 @@ def _sse_stream_response(message: str, session_id: str, model: str):
                 import contextlib as _ctx
                 with _ctx.suppress(BaseException):
                     await task
-        yield f"data: {_js3.dumps({'reply': reply}, ensure_ascii=False)}\n\n"
+        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id)}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 

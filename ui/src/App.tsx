@@ -38,7 +38,7 @@ const viewLabels: Record<string, string> = {
 type SearchResult = { role: string; content: string }
 
 export default function App() {
-  const { view, setView, activeSession, refreshProviders, loadSessions } = useAppStore()
+  const { view, setView, activeSession, refreshProviders, loadSessions, ensureSession } = useAppStore()
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -62,9 +62,9 @@ export default function App() {
   useEffect(() => {
     // Kick off dynamic provider detection at app start
     refreshProviders()
-    // Hidratar sesiones reales del server (SessionLog WAL+FTS)
-    loadSessions()
-  }, [refreshProviders, loadSessions])
+    // Hidratar sesiones reales del server (SessionLog WAL+FTS) y garantizar una activa
+    void (async () => { await loadSessions(); await ensureSession() })()
+  }, [refreshProviders, loadSessions, ensureSession])
 
   const runSearch = async () => {
     const q = search.trim()

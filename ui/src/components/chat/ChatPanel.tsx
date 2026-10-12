@@ -161,7 +161,8 @@ export function ChatPanel() {
       return
     }
 
-    const { activeSession, selectedModel } = useAppStore.getState()
+    let { activeSession, selectedModel } = useAppStore.getState()
+    if (!activeSession) activeSession = await useAppStore.getState().ensureSession()
     const stillActive = () => useAppStore.getState().activeSession === activeSession
     if (!uploads.length) addMessage({ id: Date.now().toString(), role: 'user', content: text, timestamp: now() })
     setInput(''); setSlashOpen(false)
@@ -206,6 +207,7 @@ export function ChatPanel() {
           else addMessage({ id: msgId, role: 'assistant', content: res.reply, timestamp: now() })
         }
       }
+      void useAppStore.getState().loadSessions()
     } catch (e) {
       const msg = (e as Error).message || String(e)
       let reply: string

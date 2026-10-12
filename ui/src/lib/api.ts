@@ -62,7 +62,7 @@ export async function chatApi(
 export async function chatStreamApi(
   message: string,
   opts: { sessionId?: string; model?: string; onDelta?: (t: string) => void } = {},
-): Promise<{ reply: string; success: boolean }> {
+): Promise<{ reply: string; success: boolean; session_id?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 180000); // cap 3 min: evita UI colgada
@@ -79,6 +79,7 @@ export async function chatStreamApi(
     const dec = new TextDecoder();
     let buf = "";
     let reply = "";
+    let sessionId = "";
     const handleEvent = (raw: string) => {
       const dataLines = raw
         .split("\n")
@@ -91,6 +92,7 @@ export async function chatStreamApi(
         const obj = JSON.parse(line);
         if (obj.delta && opts.onDelta) opts.onDelta(String(obj.delta));
         if (obj.reply) reply = String(obj.reply);
+        if (obj.session_id) sessionId = String(obj.session_id);
       } catch {
         /* chunk no-JSON: ignorar */
       }
@@ -107,7 +109,7 @@ export async function chatStreamApi(
       }
     }
     if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
-    return { reply, success: true };
+    return { reply, success: true, session_id: sessionId || undefined };
   } catch (e) {
     if ((e as Error).name === "AbortError") throw new Error("stream timeout 180s — el modelo local tarda; reintenta");
     throw e;

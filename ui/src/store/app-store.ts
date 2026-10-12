@@ -39,6 +39,7 @@ type AppState = {
   activeSession: string
   setActiveSession: (id: string) => void
   loadSessions: () => Promise<void>
+  ensureSession: () => Promise<string>
   createSession: () => void
   deleteSession: (id: string) => void
   messages: ChatMessage[]
@@ -116,6 +117,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ sessions, activeSession: get().activeSession || sessions[0]?.id || '' })
     } catch {
       // server caido — conservar sesiones locales cargadas
+    }
+  },
+  ensureSession: async () => {
+    const st = get()
+    if (st.activeSession && st.sessions.some((s) => s.id === st.activeSession)) return st.activeSession
+    if (st.sessions.length > 0) {
+      set({ activeSession: st.sessions[0].id })
+      return st.sessions[0].id
+    }
+    try {
+      const s = await createSessionApi()
+      set((x) => ({
+        sessions: [{ id: s.id, title: s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
+        activeSession: s.id,
+      }))
+      return s.id
+    } catch {
+      return ''
     }
   },
   createSession: () => {
