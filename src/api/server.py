@@ -3558,6 +3558,33 @@ def _build_budget(cfg: dict | None = None):
     )
 
 
+async def _knowledge_block(query: str, limit: int = 6) -> str:
+    """RAG automático: recupera conocimiento relevante del grafo (FTS5) e inyecta al prompt.
+
+    Hace que nexus-v3 LEA su propio conocimiento sin depender de que el modelo llame a recall.
+    """
+    q = (query or "").strip()
+    if len(q) < 4:
+        return ""
+    try:
+        from src.core.knowledge_memory import get_knowledge_memory
+        hits = await asyncio.to_thread(
+            lambda: get_knowledge_memory().fts_search(q, limit=max(1, min(8, limit))))
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for h in (hits or []):
+        title = (h.get("title") or "").strip()
+        body = (h.get("snippet") or h.get("content") or "").strip()
+        if not body:
+            continue
+        lines.append(f"- [{h.get('id', '?')}] {title}: {body[:600]}")
+    if not lines:
+        return ""
+    return ("CONOCIMIENTO RELEVANTE (recuperado AUTOMÁTICAMENTE del grafo local; usá estos datos "
+            "EXACTOS y citá el nodo [id]; NO inventes valores técnicos):\n" + "\n".join(lines))
+
+
 def _delegation_block() -> str:
     """Lista de ayudantes + gemas para que el agente default sepa a quién delegar."""
     lines: list[str] = []
@@ -3612,12 +3639,19 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
                      event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg),
                      budget=_build_budget(cfg))
+    _extra = _delegation_block() if (not agent_id or agent_id == "default") else ""
+    try:
+        _kb = await _knowledge_block(message)
+        if _kb:
+            _extra = (_extra + "\n\n" + _kb).strip()
+    except Exception:
+        pass
     result = await loop.run(task=message, session_id=session_id, hint=hint,
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
                             system_prompt=_sys or None, on_delta=on_delta,
                             steer=(lambda: _steer_drain(session_id)) if session_id else None,
-                            extra_system=(_delegation_block() if not agent_id or agent_id == "default" else None))
+                            extra_system=(_extra or None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
     return result
 
