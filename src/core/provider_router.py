@@ -31,6 +31,13 @@ HINT_MAPPING: dict[str, int] = {
     "planning": 7, "architecture": 7, "vision": 8, "creative": 9, "deep": 10,
 }
 
+
+def is_chat_model_id(mid: str) -> bool:
+    """False para modelos que NO sirven para chat (embeddings). Evita que el
+    router elija p.ej. nomic-embed-text para una tarea (Ollama da 400 con tools)."""
+    m = (mid or "").lower()
+    return not ("embed" in m or "nomic-embed" in m)
+
 # Mapa hint -> gema DirectorNexus -> modelo preferido (sobre el tier).
 # Prioridad en resolve(): preferred_model > GEMA_MAPPING > tier.
 # Evita que tareas generativas (creative/design) caigan en el director-orquestador
@@ -210,12 +217,12 @@ class ProviderRouter:
                 if m.id == gmodel and m.provider_name in self._providers:
                     return RoutedProvider(provider=self._providers[m.provider_name], model=m.id, route=m)
 
-        candidates = [m for m in self._models if m.effective_tier() >= hint_complexity]
+        candidates = [m for m in self._models if m.effective_tier() >= hint_complexity and is_chat_model_id(m.id)]
         relaxed = False
         if not candidates:
             # Ninguno alcanza el tier: usar el MÁS fuerte disponible (no el más chico),
             # excluyendo visión salvo que la pista sea vision.
-            pool = list(self._models)
+            pool = [m for m in self._models if is_chat_model_id(m.id)]
             if hint != "vision":
                 pool = [m for m in pool if "vl-" not in m.id and "janus" not in m.id and "vision" not in m.id] or pool
             # Preferir un modelo general bueno (qwen3.5-9b) antes que el director-orquestador.
@@ -309,6 +316,18 @@ class ProviderRouter:
             provider = self._providers.get(pname)
             if not provider:
                 continue
+            # Si el turno requiere tools, saltar modelos que no las soportan
+            # (ej. Ollama janus/embeddings -> 400). Los proveedores sin el metodo
+            # (cloud/llamacpp) se asumen compatibles.
+            if tools:
+                _st = getattr(provider, "supports_tools", None)
+                if _st is not None:
+                    try:
+                        if not await _st(m_id):
+                            logger.info(f"router: {pname}/{m_id} sin soporte de tools; se omite")
+                            continue
+                    except Exception:
+                        pass
             try:
                 resp = await provider.chat(messages, tools=tools, model=m_id, **kw)
                 # Success -> update stats
@@ -336,10 +355,18 @@ class ProviderRouter:
             routed = self.resolve(task_hint=hint, prefer_speed=prefer_speed)
             if routed:
                 attempts.append((routed.route.provider_name, routed.model))
+                # Fallbacks de OTROS modelos del mismo proveedor (por si el elegido
+                # no sirve: sin soporte de tools, o el modelo no existe).
+                _same = [m for m in self._models
+                         if m.provider_name == routed.route.provider_name
+                         and m.id != routed.model and is_chat_model_id(m.id)]
+                _same.sort(key=lambda x: -x.effective_tier())
+                for m in _same:
+                    attempts.append((routed.route.provider_name, m.id))
                 for pname in self.fallback_order:
                     if pname != routed.route.provider_name and pname in self._providers:
                         hint_tier = HINT_MAPPING.get((hint or "none").lower(), 0)
-                        cands = [m for m in self._models if m.provider_name == pname and m.effective_tier() >= hint_tier]
+                        cands = [m for m in self._models if m.provider_name == pname and m.effective_tier() >= hint_tier and is_chat_model_id(m.id)]
                         m_id = cands[0].id if cands else (self._models[0].id if self._models else "default")
                         attempts.append((pname, m_id))
             else:

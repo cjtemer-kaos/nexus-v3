@@ -30,11 +30,46 @@ class OllamaProvider(BaseProvider):
         except Exception:
             return model
 
+    async def supports_tools(self, model: str) -> bool:
+        """True si el modelo soporta tools (via /api/show capabilities). Cacheado."""
+        try:
+            m = await self._resolve_model(model or "")
+        except Exception:
+            m = model
+        cache = getattr(self, "_tool_caps", None)
+        if cache is None:
+            cache = {}
+            self._tool_caps = cache
+        if m in cache:
+            return cache[m]
+        ok = True
+        try:
+            r = await self._client.post(f"{self.base_url}/api/show", json={"model": m})
+            r.raise_for_status()
+            caps = r.json().get("capabilities") or []
+            if caps:
+                ok = "tools" in caps
+        except Exception:
+            ok = True
+        cache[m] = ok
+        return ok
+
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         model = await self._resolve_model(model or "qwen2.5-coder:7b")
         # Ollama /api/chat expects messages with role/content; tools is OpenAI format but Ollama supports tools
         def _wire(m):
             d = {"role": m.role, "content": m.content or ""}
+            # Preservar tool_calls (assistant) y tool_call_id (tool): sin esto
+            # Ollama rechaza un mensaje role=tool sin su tool_calls previo (500).
+            _tcs = getattr(m, "tool_calls", ()) or ()
+            if _tcs:
+                d["tool_calls"] = [
+                    {"function": {"name": tc.name, "arguments": tc.arguments or {}}}
+                    for tc in _tcs
+                ]
+            _tcid = getattr(m, "tool_call_id", "") or ""
+            if _tcid:
+                d["tool_call_id"] = _tcid
             imgs = getattr(m, "images", None)
             if imgs:
                 # Ollama pide base64 CRUDO — quitar el prefijo data:image/...;base64,
@@ -92,6 +127,16 @@ class OllamaProvider(BaseProvider):
 
         def _wire(m):
             d = {"role": m.role, "content": m.content or ""}
+            # Preservar tool_calls/tool_call_id (mismo motivo que en chat()).
+            _tcs = getattr(m, "tool_calls", ()) or ()
+            if _tcs:
+                d["tool_calls"] = [
+                    {"function": {"name": tc.name, "arguments": tc.arguments or {}}}
+                    for tc in _tcs
+                ]
+            _tcid = getattr(m, "tool_call_id", "") or ""
+            if _tcid:
+                d["tool_call_id"] = _tcid
             imgs = getattr(m, "images", None)
             if imgs:
                 d["images"] = [im.split(",", 1)[-1] if isinstance(im, str) and im.startswith("data:") else im for im in imgs]

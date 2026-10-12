@@ -463,6 +463,26 @@ class AgentLoop:
                 "No invoques herramientas innecesarias. Sé conciso."
             )))
 
+        # Inyectar ENTORNO (SO/shell) para que el modelo use comandos NATIVOS.
+        # Sin esto, en Windows intenta uname/ls/cat -> exec falla y el agente
+        # concluye "no tengo acceso" en vez de responder.
+        try:
+            import platform as _plat
+            _osn = _plat.system()  # Windows | Linux | Darwin
+            if _osn == "Windows":
+                _shell_hint = ("cmd.exe — usa 'dir', 'type', 'systeminfo', 'ver', 'where'; "
+                               "NO 'ls'/'cat'/'uname'/'grep'")
+            elif _osn == "Darwin":
+                _shell_hint = "sh/zsh — usa 'ls', 'cat', 'uname'"
+            else:
+                _shell_hint = "sh — usa 'ls', 'cat', 'uname'"
+            _env_note = (f"\n\nENTORNO DE EJECUCION: SO={_osn}. Shell={_shell_hint}. "
+                         f"Directorio de trabajo: ./workspace. Usa SOLO comandos nativos de este SO.")
+            if messages and messages[0].role == "system":
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _env_note)
+        except Exception:
+            pass
+
         # Plan-mode: si aplica, inyectar plan:policy tras el system prompt.
         # La guía se mantiene hasta fin de batch aunque se apruebe a mitad del
         # run (Approve no la retira: solo habilita la salida al final).
