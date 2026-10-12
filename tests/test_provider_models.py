@@ -33,18 +33,19 @@ def test_cache_roundtrip_and_ttl(tmp_path, monkeypatch):
 def test_byok_ids_includes_catalog_bearer_providers():
     ids = pm.byok_ids()
     assert "opencode-go" in ids
-    assert "cloud-zen" in ids
+    # Zen (cloud-zen) eliminado: solo funciona dentro de OpenCode.
+    assert "cloud-zen" not in ids
     assert "groq" in ids
     # no-bearer / local no deben estar
     assert "anthropic" not in ids
     assert "ollama" not in ids
 
 
-def test_opencode_go_catalog_unions_zen_and_has_extras():
+def test_cloud_zen_removed_from_catalog():
     from src.core.provider_catalog import get_provider_by_id
+    assert get_provider_by_id("cloud-zen") is None
     pc = get_provider_by_id("opencode-go")
     assert pc is not None
-    # Go da acceso al catalogo Zen completo -> unir en vivo
-    assert pc.get("models_union_from")
-    # modelos que el console muestra pero /v1/models no expone
-    assert "exo-free" in (pc.get("extra_models") or [])
+    # sin union a Zen ni extras de Zen
+    assert not pc.get("models_union_from")
+    assert not pc.get("extra_models")

@@ -338,6 +338,19 @@ class ProviderRouter:
                 self._record_fail(pname)
                 logger.warning(f"fallo chat enrutador {pname}/{m_id}: {e}")
                 continue
+        # Ultimo recurso: si el turno requeria tools pero ningun modelo las soporta,
+        # reintentar el principal SIN tools para que al menos responda.
+        if tools and attempts:
+            pname, m_id = attempts[0]
+            provider = self._providers.get(pname)
+            if provider:
+                try:
+                    resp = await provider.chat(messages, tools=None, model=m_id, **kw)
+                    logger.info(f"chat degradado sin tools en {pname}/{m_id}")
+                    self._record_success(pname)
+                    return resp
+                except Exception as e:
+                    last_err = e
         raise RuntimeError(f"todos los proveedores fallaron (pista={hint}): {last_err}")
 
     def _attempts(self, model: str | None, hint: str | None, prefer_speed: bool) -> list[tuple[str, str]]:
@@ -351,6 +364,13 @@ class ProviderRouter:
             ordered += [p for p in owners if p in self._providers and p not in ordered]
             for pname in ordered:
                 attempts.append((pname, model))
+            # Fallbacks: otros modelos chat del MISMO proveedor (por si el elegido
+            # no soporta tools o el id cambió). Limitado para no recorrer 100 cloud.
+            for pname in ordered:
+                _same = [m for m in self._models if m.provider_name == pname and m.id != model and is_chat_model_id(m.id)]
+                _same.sort(key=lambda x: -x.effective_tier())
+                for m in _same[:2]:
+                    attempts.append((pname, m.id))
         else:
             routed = self.resolve(task_hint=hint, prefer_speed=prefer_speed)
             if routed:
@@ -383,6 +403,17 @@ class ProviderRouter:
             provider = self._providers.get(pname)
             if not provider:
                 continue
+            # Si el turno requiere tools, saltar modelos que no las soportan
+            # (paridad con chat(): Ollama embeddings/janus -> 400).
+            if tools:
+                _st = getattr(provider, "supports_tools", None)
+                if _st is not None:
+                    try:
+                        if not await _st(m_id):
+                            logger.info(f"router.stream: {pname}/{m_id} sin soporte de tools; se omite")
+                            continue
+                    except Exception:
+                        pass
             started = False
             try:
                 async for ev in provider.stream(messages, tools=tools, model=m_id, **kw):
@@ -399,6 +430,19 @@ class ProviderRouter:
                 last_err = e
                 logger.warning(f"fallo stream enrutador {pname}/{m_id}: {e}")
                 continue
+        # Degradado: reintentar el principal SIN tools (para que al menos responda).
+        if tools and attempts:
+            pname, m_id = attempts[0]
+            provider = self._providers.get(pname)
+            if provider:
+                try:
+                    async for ev in provider.stream(messages, tools=None, model=m_id, **kw):
+                        yield ev
+                    logger.info(f"stream degradado sin tools en {pname}/{m_id}")
+                    self._record_success(pname)
+                    return
+                except Exception as e:
+                    last_err = e
         raise RuntimeError(f"todos los proveedores fallaron (stream, pista={hint}): {last_err}")
 
     def _record_success(self, provider_name: str) -> None:
