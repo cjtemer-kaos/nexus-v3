@@ -229,8 +229,15 @@ class SessionLog:
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
+            # Orfana los hijos (fork/branch) antes de borrar para no violar la FK.
+            try:
+                self._conn.execute("UPDATE sessions SET parent_session_id=NULL WHERE parent_session_id=?",
+                                   (session_id,))
+            except Exception:
+                pass
             cur = self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             # cascade deletes messages via FK
+            self._conn.commit()
             return cur.rowcount > 0
 
     def update_session(self, session_id: str, **fields) -> bool:
@@ -273,6 +280,23 @@ class SessionLog:
                 (session_id, limit, offset),
             ).fetchall()
         return [Message(*r) for r in rows]
+
+    def messages_with_ids(self, session_id: str, limit: int = 10000) -> list[dict]:
+        """Mensajes con id (para UI de rewind/edición)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, role, content, created_at FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        return [{"id": r[0], "role": r[1], "content": r[2], "created_at": r[3]} for r in rows]
+
+    def rewind(self, session_id: str, message_id: int) -> int:
+        """Borra los mensajes posteriores a message_id (exclusive). Devuelve cuántos borró."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM messages WHERE session_id=? AND id > ?", (session_id, int(message_id)))
+            self._conn.commit()
+            return cur.rowcount or 0
 
     def count_messages(self, session_id: str) -> int:
         with self._lock:

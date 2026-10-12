@@ -2122,6 +2122,153 @@ async def diff_endpoint(request: Request):
                             str(body.get("name_a", "a")), str(body.get("name_b", "b")))}
 
 
+@app.get("/api/events")
+async def events_list(limit: int = 100, kind: str = ""):
+    try:
+        evs = _event_store().list_events(kind=kind or None, limit=limit)
+        return {"events": [e.to_dict() for e in evs]}
+    except Exception as e:
+        return {"events": [], "error": str(e)}
+
+
+@app.get("/api/sessions/{session_id}/tree")
+async def session_tree(session_id: str):
+    try:
+        return _session_log().tree(session_id)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def session_fork(session_id: str, request: Request):
+    body = await _json_body(request, required=False)
+    try:
+        child = _session_log().fork(session_id)
+        if body.get("copy_messages"):
+            slog = _session_log()
+            for m in slog.get_messages(session_id, limit=10000):
+                slog.append(child.id, m)
+        return {"ok": True, "id": child.id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/sessions/{session_id}/rewind")
+async def session_rewind(session_id: str, request: Request):
+    body = await _json_body(request)
+    try:
+        n = _session_log().rewind(session_id, int(body.get("message_id")))
+        return {"ok": True, "deleted": n}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/sessions/{session_id}/messages")
+async def session_messages(session_id: str, limit: int = 10000):
+    try:
+        return {"messages": _session_log().messages_with_ids(session_id, limit=limit)}
+    except Exception as e:
+        return {"messages": [], "error": str(e)}
+
+
+@app.get("/api/sessions/{session_id}/mode")
+async def session_mode_get(session_id: str):
+    return {"mode": _SESSION_MODES.get(session_id, "act")}
+
+
+@app.post("/api/sessions/{session_id}/mode")
+async def session_mode_set(session_id: str, request: Request):
+    body = await _json_body(request)
+    mode = str(body.get("mode", "act"))
+    if mode not in ("act", "plan"):
+        raise HTTPException(status_code=400, detail="mode debe ser act|plan")
+    _SESSION_MODES[session_id] = mode
+    return {"ok": True, "mode": mode}
+
+
+@app.post("/api/sessions/{session_id}/steer")
+async def session_steer(session_id: str, request: Request):
+    body = await _json_body(request)
+    msg = str(body.get("message", "")).strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="message required")
+    e = _RUNNING.get(session_id)
+    if e is not None:
+        e.setdefault("steer", []).append(msg)
+        return {"ok": True, "queued": True}
+    return {"ok": True, "queued": False}
+
+
+@app.get("/api/status")
+async def status_endpoint():
+    running = [{"session_id": sid, "started": e.get("started"),
+                "steer_pending": len(e.get("steer", []))} for sid, e in _RUNNING.items()]
+    subs = {}
+    for sid, sp in _SUB_SPAWNERS.items():
+        try:
+            kids = sp.list_children()
+        except Exception:
+            kids = []
+        if kids:
+            subs[sid] = kids
+    modes = dict(_SESSION_MODES)
+    return {"running": running, "sub_agents": subs, "modes": modes,
+            "counts": {"running": len(running), "sessions_with_subagents": len(subs)}}
+
+
+@app.get("/api/board/tasks")
+async def board_list(status: str = "", assignee: str = ""):
+    from src.core.board import get_board
+    b = get_board(_PROJECT_ROOT / "data" / "board.db")
+    return {"tasks": b.list(status=status, assignee=assignee)}
+
+
+@app.post("/api/board/tasks")
+async def board_create(request: Request):
+    body = await _json_body(request)
+    from src.core.board import get_board
+    b = get_board(_PROJECT_ROOT / "data" / "board.db")
+    t = b.create(str(body.get("title", "")).strip(), str(body.get("description", "")),
+                 str(body.get("assignee", "")), str(body.get("created_by", "")),
+                 int(body.get("priority", 3)), str(body.get("deps", "")))
+    return {"ok": True, "task": t}
+
+
+@app.post("/api/board/{task_id}/claim")
+async def board_claim(task_id: str, request: Request):
+    body = await _json_body(request, required=False)
+    from src.core.board import get_board
+    b = get_board(_PROJECT_ROOT / "data" / "board.db")
+    return b.claim(task_id, str(body.get("agent", "opencode")))
+
+
+@app.post("/api/board/{task_id}/update")
+async def board_update(task_id: str, request: Request):
+    body = await _json_body(request)
+    from src.core.board import get_board
+    b = get_board(_PROJECT_ROOT / "data" / "board.db")
+    return b.update(task_id, str(body.get("status", "")), str(body.get("notes", "")),
+                    str(body.get("assignee", "")))
+
+
+@app.get("/api/worktree")
+async def worktree_list(repo: str = ""):
+    from src.core.worktree import list_worktrees
+    return {"worktrees": list_worktrees(repo or str(_PROJECT_ROOT))}
+
+
+@app.post("/api/worktree")
+async def worktree_add(request: Request):
+    body = await _json_body(request)
+    from src.core.worktree import add_worktree
+    repo = str(body.get("repo", "") or _PROJECT_ROOT)
+    path = str(body.get("path", "")).strip()
+    branch = str(body.get("branch", "")).strip()
+    if not path or not branch:
+        raise HTTPException(status_code=400, detail="path y branch requeridos")
+    return add_worktree(repo, path, branch, str(body.get("base", "HEAD")))
+
+
 @app.get("/api/permission")
 async def permission_get():
     from src.core.config import load_config
@@ -2572,7 +2719,7 @@ def _full_access_roots() -> tuple[str, ...]:
     return tuple(roots) or ("/",)
 
 
-def _build_scope(cfg: dict, agent_id: str | None = None):
+def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: str | None = None):
     """Scope jail desde config.scope (allowed_roots + deny_patterns + permission).
 
     Fase DECK: antes no se pasaba permission= y ScopeConfig quedaba en el default
@@ -2585,6 +2732,8 @@ def _build_scope(cfg: dict, agent_id: str | None = None):
     from src.core.scope import Scope, ScopeConfig
     scope_cfg = cfg.get("scope", {})
     permission = str(scope_cfg.get("permission", "workspace_write"))
+    if permission_override:
+        permission = permission_override
     roots = list(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
     if agent_id:
         try:
@@ -2661,6 +2810,19 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
 
 
 _SUB_SPAWNERS: dict = {}
+
+# Runs activos por sesión (para steer/queue y status real).
+_RUNNING: dict = {}
+_SESSION_MODES: dict = {}  # session_id -> "act" | "plan"
+
+
+def _steer_drain(session_id: str) -> list:
+    e = _RUNNING.get(session_id)
+    if not e:
+        return []
+    out = e.get("steer", [])[:]
+    e["steer"] = []
+    return out
 
 
 def _get_spawner(session_id: str, router, scope):
@@ -3101,7 +3263,9 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     from src.core.agent_loop import AgentLoop
     cfg = _load_config_safe()
     router = _get_router(cfg)
-    scope = _build_scope(cfg, agent_id)
+    # Plan mode: el turno corre con alcance read_only (sin mutaciones).
+    _plan = _SESSION_MODES.get(session_id) == "plan"
+    scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
     registry = _build_registry(scope, session_id, cfg, router=router)
     agent = _agent_registry().resolve(agent_id) if agent_id else None
     _gema = (agent or {}).get("gema") or ""
@@ -3120,7 +3284,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     result = await loop.run(task=message, session_id=session_id, hint=hint,
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
-                            system_prompt=_sys or None, on_delta=on_delta)
+                            system_prompt=_sys or None, on_delta=on_delta,
+                            steer=(lambda: _steer_drain(session_id)) if session_id else None)
     await _learning_record(message, session_id, result, hint=hint, model=model)
     return result
 
@@ -3543,6 +3708,7 @@ def _sse_stream_response(message: str, session_id: str, model: str):
                 await q.put({"delta": text})
 
         task = None
+        sess = None
         try:
             # Fase 8: misma construccion estandar + streaming (pi).
             from src.core.provider_router import infer_hint
@@ -3551,6 +3717,7 @@ def _sse_stream_response(message: str, session_id: str, model: str):
             sess = slog.get_session(session_id) if session_id else None
             if sess is None:
                 sess = slog.create_session(project="sse")
+            _RUNNING[sess.id] = {"steer": [], "started": time.time()}
             task = _aio.create_task(_run_agent_once(
                 message,
                 session_id=sess.id,
@@ -3572,6 +3739,8 @@ def _sse_stream_response(message: str, session_id: str, model: str):
             reply = f"Error: {e}"
         finally:
             # Si el cliente desconecta (GeneratorExit), cancelar el run para no fugarlo.
+            if sess is not None:
+                _RUNNING.pop(sess.id, None)
             if task is not None and not task.done():
                 task.cancel()
                 import contextlib as _ctx

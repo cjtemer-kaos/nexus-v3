@@ -148,6 +148,38 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_board_claims_and_gate():
+    from src.core.board import Board
+    b = Board("./data/_board_pytest.db")
+    t = b.create("t", priority=1)
+    assert b.claim(t["id"], "a")["ok"]
+    assert b.update(t["id"], status="done")["task"]["status"] == "done"
+    t3 = b.create("t3")
+    t4 = b.create("t4", deps=t3["id"])
+    assert not b.claim(t4["id"], "a")["ok"]  # dep t3 sigue open (gate)
+
+
+def test_new_endpoints_backend():
+    sid = client.post("/api/sessions", json={"project": "ep"}).json()["id"]
+    assert client.get("/api/events", params={"limit": 5}).status_code == 200
+    assert client.get(f"/api/sessions/{sid}/tree").status_code == 200
+    assert client.get(f"/api/sessions/{sid}/messages").status_code == 200
+    assert client.post(f"/api/sessions/{sid}/mode", json={"mode": "plan"}).status_code == 200
+    assert client.get(f"/api/sessions/{sid}/mode").json()["mode"] == "plan"
+    assert client.get("/api/status").status_code == 200
+    assert client.get("/api/worktree").status_code == 200
+    f = client.post(f"/api/sessions/{sid}/fork", json={}).json()
+    assert f["ok"]
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert client.delete(f"/api/sessions/{f['id']}").status_code == 200
+
+
+def test_board_endpoints():
+    t = client.post("/api/board/tasks", json={"title": "pytest-task"}).json()["task"]
+    assert client.post(f"/api/board/{t['id']}/claim", json={"agent": "pytest"}).json()["ok"]
+    assert client.post(f"/api/board/{t['id']}/update", json={"status": "done"}).json()["task"]["status"] == "done"
+
+
 def test_diagnostics_lsp_semantic():
     import importlib.util
     import pathlib

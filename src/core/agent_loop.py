@@ -381,7 +381,7 @@ class AgentLoop:
             out.append(d)
         return out
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None) -> LoopResult:
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, steer=None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -596,6 +596,20 @@ class AgentLoop:
                 _dur = max(0.0, (time.monotonic() - _t0) * 1000.0)
                 await self._emit_cycle_async(trajectory, "step/end", _it, duration_ms=_dur, end_reason=reason)
                 await self._emit_cycle_async(trajectory, "turn/end", _it, duration_ms=_dur, end_reason=reason)
+
+            # ---- Steer: mensajes inyectados por el usuario durante el run ----
+            if callable(steer):
+                try:
+                    _steer_msgs = steer() or []
+                except Exception:
+                    _steer_msgs = []
+                for _s in _steer_msgs:
+                    if _s:
+                        messages.append(LLMMessage(role="user", content=f"[steer del usuario] {_s}"))
+                        try:
+                            await self._emit_cycle_async(trajectory, "steer", iteration, content=str(_s)[:500])
+                        except Exception:
+                            pass
 
             # ---- TURN/STEP start ----
             await self._emit_cycle_async(trajectory, "turn/start", iteration, content=f"turno {iteration}")
