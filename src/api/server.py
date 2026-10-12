@@ -2108,6 +2108,20 @@ async def checkpoints_restore(request: Request):
     return restore(str(body.get("session_id", "")), str(body.get("checkpoint_id", "")))
 
 
+@app.get("/api/checkpoints/{checkpoint_id}/diff")
+async def checkpoints_diff(checkpoint_id: str, session_id: str = ""):
+    from src.core.diffutil import checkpoint_diff
+    return checkpoint_diff(session_id, checkpoint_id)
+
+
+@app.post("/api/diff")
+async def diff_endpoint(request: Request):
+    body = await _json_body(request)
+    from src.core.diffutil import unified
+    return {"diff": unified(str(body.get("a", "")), str(body.get("b", "")),
+                            str(body.get("name_a", "a")), str(body.get("name_b", "b")))}
+
+
 @app.get("/api/permission")
 async def permission_get():
     from src.core.config import load_config
