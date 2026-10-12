@@ -148,6 +148,21 @@ def test_sandbox_run_argv_policy():
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
 
 
+def test_diagnostics_lsp_semantic():
+    import importlib.util
+    import pathlib
+    if not importlib.util.find_spec("pylsp"):
+        return  # sin servidor LSP: se omite (best-effort)
+    from src.core.diagnostics import diagnostics_for
+    p = "./workspace/_lsp_pytest.py"
+    pathlib.Path(p).write_text("x = undefined_name\n", encoding="utf-8")
+    try:
+        d = diagnostics_for(p)
+        assert "file_diagnostics" in d and "undefined name" in d
+    finally:
+        pathlib.Path(p).unlink(missing_ok=True)
+
+
 def test_sub_agent_tools_registered():
     from src.api.server import _build_registry, _build_scope, _load_config_safe
     cfg = _load_config_safe()
