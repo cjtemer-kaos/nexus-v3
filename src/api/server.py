@@ -1224,8 +1224,9 @@ def _load_graph_data(
     if min_importance > 0:
         filtered = [n for n in filtered if n["importance"] >= min_importance]
     if not include_isolated:
-        # keep isolated only if search is active (user explicitly wants)
-        if not q:
+        # keep isolated only if an explicit filter is active (búsqueda o categoría):
+        # si no, filtrar por categoría devuelve 0 porque esos nodos no tienen aristas.
+        if not q and not category:
             filtered = [n for n in filtered if n["degree"] > 0]
 
     # Sort by pagerank+degree combo, take top limit
