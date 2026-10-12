@@ -30,29 +30,35 @@ class OllamaProvider(BaseProvider):
         except Exception:
             return model
 
-    async def supports_tools(self, model: str) -> bool:
-        """True si el modelo soporta tools (via /api/show capabilities). Cacheado."""
+    async def _capabilities(self, model: str) -> list[str]:
+        """Capacidades del modelo (via /api/show). Cacheado por modelo."""
         try:
             m = await self._resolve_model(model or "")
         except Exception:
             m = model
-        cache = getattr(self, "_tool_caps", None)
+        cache = getattr(self, "_caps", None)
         if cache is None:
             cache = {}
-            self._tool_caps = cache
+            self._caps = cache
         if m in cache:
             return cache[m]
-        ok = True
+        caps: list[str] = []
         try:
             r = await self._client.post(f"{self.base_url}/api/show", json={"model": m})
             r.raise_for_status()
-            caps = r.json().get("capabilities") or []
-            if caps:
-                ok = "tools" in caps
+            caps = list(r.json().get("capabilities") or [])
         except Exception:
-            ok = True
-        cache[m] = ok
-        return ok
+            caps = []
+        cache[m] = caps
+        return caps
+
+    async def supports_tools(self, model: str) -> bool:
+        caps = await self._capabilities(model)
+        return ("tools" in caps) if caps else True
+
+    async def supports_vision(self, model: str) -> bool:
+        caps = await self._capabilities(model)
+        return ("vision" in caps) if caps else False
 
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         model = await self._resolve_model(model or "qwen2.5-coder:7b")

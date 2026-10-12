@@ -82,6 +82,14 @@ class BaseProvider(abc.ABC):
     async def list_models(self) -> list[str]:
         ...
 
+    async def supports_tools(self, model: str) -> bool:
+        """True si el modelo soporta tool-calling. Default optimista (cloud)."""
+        return True
+
+    async def supports_vision(self, model: str) -> bool:
+        """True si el modelo acepta imagenes. Default optimista (cloud)."""
+        return True
+
     async def stream(
         self,
         messages: list[LLMMessage],

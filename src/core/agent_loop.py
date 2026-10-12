@@ -306,12 +306,12 @@ class AgentLoop:
             except Exception:
                 pass
 
-    async def _stream_turn(self, messages, tools, hint, force_tools) -> Any:
+    async def _stream_turn(self, messages, tools, hint, force_tools, require_vision: bool = False) -> Any:
         """Consume router.stream, reenvia deltas de texto via on_delta, devuelve la respuesta final."""
         final = None
         async for ev in self.router.stream(
             messages, tools=tools, hint=hint, force_tools=force_tools,
-            model=getattr(self, "_req_model", None),
+            model=getattr(self, "_req_model", None), require_vision=require_vision,
         ):
             et = ev.get("type") if isinstance(ev, dict) else None
             if et == "text":
@@ -540,6 +540,14 @@ class AgentLoop:
             import dataclasses as _dc
             messages[-1] = _dc.replace(messages[-1], images=tuple(images))
 
+        # Publicar las imagenes del turno en el registry para que la delegacion
+        # (gema_run/agent_run) las herede (sin esto el sub-agente no ve la imagen).
+        try:
+            if self.tools is not None:
+                self.tools.current_images = list(images or [])
+        except Exception:
+            pass
+
         # Compaction pre-check
         if self.compaction is not None:
             try:
@@ -604,9 +612,9 @@ class AgentLoop:
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
                 # Router.chat con fallback (o streaming token-a-token si hay on_delta)
                 if getattr(self, "_on_delta", None) is not None and hasattr(self.router, "stream"):
-                    llm_resp = await self._stream_turn(messages, openai_tools, hint, force_tools)
+                    llm_resp = await self._stream_turn(messages, openai_tools, hint, force_tools, require_vision=bool(images))
                 elif hasattr(self.router, "chat"):
-                    llm_resp = await self.router.chat(messages, tools=openai_tools, hint=hint, force_tools=force_tools, model=getattr(self, "_req_model", None))
+                    llm_resp = await self.router.chat(messages, tools=openai_tools, hint=hint, force_tools=force_tools, model=getattr(self, "_req_model", None), require_vision=bool(images))
                 else:
                     # Fallback: resolve then chat
                     routed = self.router.resolve(task_hint=hint)

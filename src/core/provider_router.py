@@ -309,6 +309,7 @@ class ProviderRouter:
         **kw: Any,
     ) -> LLMResponse:
         """Try providers in fallback_order until one succeeds. Records Thompson stats."""
+        require_vision = kw.pop("require_vision", False)
         attempts = self._attempts(model, hint, kw.pop("prefer_speed", False))
 
         last_err: Exception | None = None
@@ -325,6 +326,16 @@ class ProviderRouter:
                     try:
                         if not await _st(m_id):
                             logger.info(f"router: {pname}/{m_id} sin soporte de tools; se omite")
+                            continue
+                    except Exception:
+                        pass
+            # Si el turno trae imagenes, saltar modelos sin vision.
+            if require_vision:
+                _sv = getattr(provider, "supports_vision", None)
+                if _sv is not None:
+                    try:
+                        if not await _sv(m_id):
+                            logger.info(f"router: {pname}/{m_id} sin soporte de vision; se omite")
                             continue
                     except Exception:
                         pass
@@ -398,6 +409,7 @@ class ProviderRouter:
     async def stream(self, messages, tools=None, model=None, hint=None, **kw):
         """Streaming con fallback: yield de eventos del primer provider que funcione."""
         attempts = self._attempts(model, hint, kw.pop("prefer_speed", False))
+        require_vision = kw.pop("require_vision", False)
         last_err: Exception | None = None
         for pname, m_id in attempts:
             provider = self._providers.get(pname)
@@ -411,6 +423,15 @@ class ProviderRouter:
                     try:
                         if not await _st(m_id):
                             logger.info(f"router.stream: {pname}/{m_id} sin soporte de tools; se omite")
+                            continue
+                    except Exception:
+                        pass
+            if require_vision:
+                _sv = getattr(provider, "supports_vision", None)
+                if _sv is not None:
+                    try:
+                        if not await _sv(m_id):
+                            logger.info(f"router.stream: {pname}/{m_id} sin vision; se omite")
                             continue
                     except Exception:
                         pass

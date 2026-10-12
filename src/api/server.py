@@ -2528,7 +2528,7 @@ def _build_scope(cfg: dict, agent_id: str | None = None):
     ), project_root=_PROJECT_ROOT)
 
 
-async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None, cfg: dict, router) -> str:
+async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None, cfg: dict, router, images: list | None = None) -> str:
     """Ejecuta un ayudante/gema como sub-loop aislado y devuelve su salida (JSON).
 
     El LLM se asigna automáticamente (model_assign) según lo disponible en la PC,
@@ -2568,7 +2568,7 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
         distill_hook=_build_distill_hook(cfg),
         max_iterations=int((cfg.get("agent_loop", {}) or {}).get("max_iterations", 25)),
     )
-    res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None)
+    res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None, images=images or None)
     return _j.dumps({
         "gema": use_gema, "agent": (agent or {}).get("id"),
         "model": model, "provider": assign.get("provider"), "assign_reason": assign.get("reason"),
@@ -2841,7 +2841,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
         async def gema_run(gema: str, task: str) -> str:
             """Delega una tarea a una gema especializada (sub-loop aislado, LLM auto-asignado)."""
-            return await _helper_run(task, gema=gema, cfg=(cfg or {}), router=router)
+            return await _helper_run(task, gema=gema, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
         registry.register_function(
             gema_run, name="gema_run",
             description="Delega una tarea a una gema especializada. El LLM se asigna automáticamente según lo disponible. Usa gema_list para ver las gemas.",
@@ -2852,7 +2852,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
         async def agent_run(agent_id: str, task: str) -> str:
             """Delega una tarea a un ayudante configurado (su gema/prompt/LLM y workspace aislado)."""
-            return await _helper_run(task, agent_id=agent_id, cfg=(cfg or {}), router=router)
+            return await _helper_run(task, agent_id=agent_id, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
         registry.register_function(
             agent_run, name="agent_run",
             description="Delega una tarea a un ayudante por id; usa su system prompt, su LLM y su workspace aislado. Usa agent_list para verlos.",

@@ -146,6 +146,9 @@ class ToolRegistry:
         self._lock = threading.RLock()
         self._skill_loaders: list[Callable] = []
         self._mcp_loaders: list[Callable] = []
+        # Imagenes (data-URI) del turno actual: la delegacion (gema_run/agent_run)
+        # las hereda para que el sub-agente vea la imagen.
+        self.current_images: list = []
 
     # ---- registration ----
     def register(self, entry: ToolEntry) -> None:
