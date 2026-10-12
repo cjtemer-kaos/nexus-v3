@@ -150,3 +150,25 @@ Implementado, probado (suite exit 0, `scripts/e2e_diagnostic.py` 41/41) y commit
 Pendiente (mayor / requiere UI o refactor): event-sourced session log + derive (fork/rewind),
 plan mode, worktrees, board/claims/gates, sub-agent cards en UI, grafo citable, AGENTS.md,
 gestión de skills/MCP en UI, queue/steer, status real desde procesos.
+
+## 9. Segunda tanda (2026-10-12) — "no te pares"
+
+Todo implementado, probado (suite exit 0, `e2e_diagnostic` 41/41) y commiteado:
+
+| Item del roadmap | Qué se hizo | Commit |
+|---|---|---|
+| Session log | `fork`/`rewind`/`tree`/`messages` + endpoints; guard FK con 409 claro | caa757a |
+| Event-sourced | `GET /api/events` + `GET /api/sessions/{id}/replay` (vista derivada) | caa757a, dc93386 |
+| Plan mode | `POST/GET /api/sessions/{id}/mode` (act\|plan) → el turno corre con scope `read_only` | caa757a |
+| Queue/steer | `AgentLoop.run(steer=...)` inyecta mensajes entre iteraciones + `POST /api/sessions/{id}/steer` | caa757a |
+| Status real | `GET /api/status` (runs activos + subagentes + modos) + footer en vivo | caa757a, f987c33 |
+| Board/claims/gates | `src/core/board.py` (estados + claim con gate de deps fail-closed) + panel **Tareas** | caa757a, f987c33 |
+| Worktrees | `src/core/worktree.py` (git worktree add/list/remove) + endpoints | caa757a |
+| Skills/MCP UI | panel **Capacidades** (tools + skills) + `GET /api/tools`/`/api/skills` | f987c33 |
+| Sub-agent cards | panel **Sub-agentes** (tarjetas en vivo, poll /api/status) | dc93386 |
+| Grafo citable | `GET /api/graph/node/{id}/cite` → `[n{id}] title` + source | dc93386 |
+| AGENTS.md | guía completa para agentes (estructura, comandos, reglas, puertos) | f987c33 |
+
+Pendiente (grande, requiere diseño propio): unificar routers (`ProviderRouter._stats` vs
+`AdaptiveRouter`), AGENTS.md jerárquico por directorio, auto-apply assisted por defecto,
+gate real de permisos con UI de aprobación, plan mode con UI de plan editable.
