@@ -29,6 +29,9 @@ HINT_MAPPING: dict[str, int] = {
     "none": 0, "simple": 1, "categorization": 2, "coding": 3,
     "analysis": 4, "reasoning": 5, "research": 6,
     "planning": 7, "architecture": 7, "vision": 8, "creative": 9, "deep": 10,
+    # Hints que GEMA_MAPPING define pero faltaban aqui (quedaban en tier 0 -> mis-tiering).
+    "design": 9, "music": 9, "debug": 5, "test": 3,
+    "security": 6, "devops": 3, "train": 3, "prompt": 3,
 }
 
 

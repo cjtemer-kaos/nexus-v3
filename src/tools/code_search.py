@@ -54,14 +54,17 @@ async def code_search(
         
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if proc.returncode == 0:
+            import re as _re
             for line in proc.stdout.strip().split('\n'):
                 if line:
-                    parts = line.split(':', 2)
-                    if len(parts) >= 3:
+                    # Formato ripgrep: path:line:content. El path puede tener ':' (unidad
+                    # Windows C:\) -> match no-greedy hasta el primer ':digitos:'.
+                    m = _re.match(r'^(.*?):(\d+):(.*)$', line)
+                    if m:
                         results.append({
-                            "file": parts[0],
-                            "line": int(parts[1]),
-                            "text": parts[2][:200],
+                            "file": m.group(1),
+                            "line": int(m.group(2)),
+                            "text": m.group(3)[:200],
                         })
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass

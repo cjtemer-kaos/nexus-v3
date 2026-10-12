@@ -1607,6 +1607,62 @@ async def append_message(session_id: str, request: Request):
     return {"id": mid, "session_id": session_id}
 
 
+@app.get("/api/sessions/global/search")
+async def search_global(q: str, limit: int = 20):
+    """FTS5 GLOBAL (todas las sesiones). Debe declararse ANTES de /{session_id}/search."""
+    slog = _session_log()
+    try:
+        results = slog.search(q, limit=limit)
+        out = []
+        for m in results:
+            if hasattr(m, "role"):
+                out.append({"role": m.role, "content": m.content})
+            else:
+                out.append(dict(m) if isinstance(m, dict) else {"content": str(m)})
+        return {"query": q, "results": out, "count": len(out)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/catalog")
+async def sessions_catalog(limit: int = 200):
+    """Catálogo de sesiones con conteo de mensajes."""
+    slog = _session_log()
+    try:
+        out = []
+        for s in slog.list_sessions(limit=limit):
+            sid = getattr(s, "id", None)
+            try:
+                cnt = slog.count_messages(sid) if sid else 0
+            except Exception:
+                cnt = 0
+            out.append({"id": sid, "project": getattr(s, "project", ""),
+                        "summary": getattr(s, "summary", ""), "messages": cnt})
+        return {"sessions": out, "count": len(out)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    """Exporta el log de la sesión como ZIP (JSON adentro)."""
+    import io as _io, zipfile as _zip, json as _json3
+    slog = _session_log()
+    try:
+        msgs = slog.get_messages(session_id, limit=100000)
+        data = [{"role": getattr(m, "role", ""), "content": getattr(m, "content", ""),
+                 "created_at": getattr(m, "created_at", "")} for m in msgs]
+        buf = _io.BytesIO()
+        with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
+            z.writestr(f"{session_id}.json",
+                       _json3.dumps({"session_id": session_id, "messages": data}, ensure_ascii=False, indent=2))
+        buf.seek(0)
+        return Response(content=buf.read(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{session_id}.zip"'})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/sessions/{session_id}/search")
 async def search_session(session_id: str, q: str, limit: int = 20):
     slog = _session_log()
@@ -2677,6 +2733,17 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     registry.register_function(read_file_tool, name="read_file", description="Lee un archivo dentro de ./workspace o ./data (Scope jail)", category="local")
     registry.register_function(write_file_tool, name="write_file", description="Escribe un archivo dentro de ./workspace o ./data (crea dirs)", category="local")
     registry.register_function(edit_file_tool, name="edit", description="Reemplazo quirúrgico en un archivo (str_replace): reemplaza `old` por `new`; `old` debe ser único (o usá replace_all=true).", category="local")
+
+    async def code_search_tool(query: str, path: str = ".", include: str = "", limit: int = 20) -> str:
+        """Busca código (ripgrep/grep) en un directorio; devuelve coincidencias archivo:línea."""
+        import json as _j
+        p = scope.check_path(path or ".")
+        from src.tools.code_search import code_search as _cs
+        res = await _cs(query, path=str(p), include=include, limit=max(1, min(50, int(limit or 20))))
+        return _j.dumps(res, ensure_ascii=False)
+    registry.register_function(code_search_tool, name="code_search",
+                               description="Busca código (regex/texto) en el proyecto; devuelve coincidencias con archivo:línea.",
+                               category="local")
     registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
     registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado en ./workspace (bloquea destructivos)", category="local")
 
