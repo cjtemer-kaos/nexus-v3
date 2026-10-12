@@ -2379,11 +2379,14 @@ async def plan_endpoint(request: Request):
 @app.get("/api/skills")
 async def skills_list():
     out = []
-    base = _PROJECT_ROOT / "data" / "skills"
-    if base.is_dir():
+    seen: set[str] = set()
+    for base in (_PROJECT_ROOT / "skills", _PROJECT_ROOT / "data" / "skills"):
+        if not base.is_dir():
+            continue
         for d in sorted(base.iterdir()):
             md = d / "SKILL.md"
-            if md.is_file():
+            if md.is_file() and d.name not in seen:
+                seen.add(d.name)
                 name, desc = d.name, ""
                 try:
                     from src.core.skill_frontmatter import parse_frontmatter_file
@@ -3439,6 +3442,71 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         description="Lista los sub-agentes de la sesión (child_id, estado, profundidad).",
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    def image_generate_tool(prompt: str, mode: str = "t2i", image: str = "", steps: int = 20,
+                            cfg_scale: float = 2.5, negative: str = "", width: int = 1024,
+                            height: int = 1024, lightning: bool = False) -> str:
+        """Genera/edita imágenes con Qwen-Image local (ComfyUI :8188) vía la skill qwen-image-studio.
+        mode='t2i' (texto→imagen) o 'edit' (editar conservando identidad).
+        Para IDENTIDAD: steps=20, cfg=2.5, lightning=false (Lightning es más rápido pero menos fiel)."""
+        import os as _os
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _P
+        # Resolución GENÉRICA (nada hardcodeado): env > config image.script > auto-discovery
+        # de cualquier skill que exponga scripts/comfy_gen.py en las raíces de skills.
+        cands: list[str] = []
+        if _os.environ.get("NEXUS_COMFY_SCRIPT"):
+            cands.append(_os.environ["NEXUS_COMFY_SCRIPT"])
+        _img_cfg = ((cfg or {}).get("image", {}) or {})
+        if _img_cfg.get("script"):
+            cands.append(str(_img_cfg["script"]))
+        for _r in (_PROJECT_ROOT / "skills",
+                   _PROJECT_ROOT / "data" / "skills",
+                   _P.home() / ".config" / "opencode" / "skills",
+                   _P.home() / ".claude" / "skills"):
+            try:
+                if _r.is_dir():
+                    cands += [str(p) for p in sorted(_r.glob("*/scripts/comfy_gen.py"))]
+            except Exception:
+                pass
+        script = next((c for c in cands if c and _P(c).is_file()), None)
+        if script is None:
+            raise RuntimeError("no se encontró un skill de generación (scripts/comfy_gen.py); "
+                               "definí image.script en config.yaml o instalá el skill")
+        args = [_sys.executable, script, "--mode", mode, "--prompt", prompt,
+                "--steps", str(int(steps)), "--cfg", str(float(cfg_scale)),
+                "--save", str(_PROJECT_ROOT / "workspace")]
+        if image:
+            args += ["--image", image]
+        if negative:
+            args += ["--negative", negative]
+        if mode == "t2i":
+            args += ["--width", str(int(width)), "--height", str(int(height))]
+        if lightning:
+            args += ["--lightning"]
+        _env = dict(_os.environ)
+        if _img_cfg.get("url"):
+            _env["COMFYUI_URL"] = str(_img_cfg["url"])
+        try:
+            p = _sp.run(args, capture_output=True, text=True, timeout=1200, env=_env)
+        except _sp.TimeoutError:
+            return "timeout: la generación excedió 20 min (ComfyUI lento/colgado)"
+        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        return out[-2000:] or f"exit {p.returncode}"
+
+    registry.register_function(
+        image_generate_tool, name="image_generate",
+        description=("Genera/edita imágenes con Qwen-Image local (ComfyUI :8188) vía la skill qwen-image-studio. "
+                     "mode='t2i' (texto→imagen) o 'edit' (editar conservando identidad). "
+                     "Para IDENTIDAD: steps=20, cfg=2.5, lightning=false."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "prompt": {"type": "string"}, "mode": {"type": "string", "enum": ["t2i", "edit"]},
+            "image": {"type": "string"}, "steps": {"type": "integer"}, "cfg_scale": {"type": "number"},
+            "negative": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"},
+            "lightning": {"type": "boolean"}},
+            "required": ["prompt"], "additionalProperties": False},
     )
     # Sub-agentes: no registrar en hijos (evita recursión infinita).
     if not include_subagents:
