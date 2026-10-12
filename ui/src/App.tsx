@@ -96,7 +96,7 @@ export default function App() {
   }, [])
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#15171B] text-[#EDEEF0]">
+    <div className="flex h-dvh w-full overflow-hidden bg-[#15171B] text-[#EDEEF0]">
       <Sidebar />
 
       <div className="flex flex-1 flex-col min-w-0 min-h-0">

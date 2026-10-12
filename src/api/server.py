@@ -3794,7 +3794,7 @@ if _UI_DIST.exists():
 
     @app.get("/", include_in_schema=False)
     async def _spa_root():
-        return FileResponse(str(_UI_DIST / "index.html"))
+        return FileResponse(str(_UI_DIST / "index.html"), headers={"Cache-Control": "no-store"})
 
     
 # OPENAI
@@ -4000,7 +4000,7 @@ async def _spa_fallback(full_path: str, request: Request):
         if _os.path.splitext(full_path)[1]:
             raise HTTPException(status_code=404, detail="not found")
         # Fallback to index.html for client-side routing
-        return FileResponse(str(base / "index.html"))
+        return FileResponse(str(base / "index.html"), headers={"Cache-Control": "no-store"})
 
 
 if not _UI_DIST.exists():

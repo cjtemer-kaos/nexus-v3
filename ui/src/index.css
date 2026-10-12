@@ -30,7 +30,9 @@
 
 * { border-color: #2C3037; }
 html { scrollbar-width: thin; scrollbar-color: #2C3037 transparent; }
+html, body, #root { height: 100%; width: 100%; }
 body {
+  margin: 0;
   background: #15171B;
   color: #EDEEF0;
   font-family: var(--font-sans);
