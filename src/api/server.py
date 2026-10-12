@@ -2975,7 +2975,7 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
         provider_router=router, tool_registry=sub_reg, scope=scope, session_log=slog,
         event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
         distill_hook=_build_distill_hook(cfg),
-        max_iterations=int((cfg.get("agent_loop", {}) or {}).get("max_iterations", 25)),
+        budget=_build_budget(cfg),
     )
     res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None, images=images or None)
     return _j.dumps({
@@ -3477,6 +3477,19 @@ async def _learning_record(task: str, session_id: str, result,
         logger.debug("learning record skipped: %s", e)
 
 
+def _build_budget(cfg: dict | None = None):
+    """IterationBudget desde config.agent_loop.budget (defaults holgados para modelos locales)."""
+    from src.core.iteration_budget import IterationBudget
+    al = (cfg or {}).get("agent_loop", {}) or {}
+    b = al.get("budget", {}) or {}
+    return IterationBudget(
+        max_iterations=int(b.get("max_iterations", al.get("max_iterations", 25))),
+        max_tokens=int(b.get("max_tokens", 32000)),
+        max_wall_ms=float(b.get("max_wall_ms", 900_000)),
+        max_tool_calls=int(b.get("max_tool_calls", 60)),
+    )
+
+
 def _delegation_block() -> str:
     """Lista de ayudantes + gemas para que el agente default sepa a quién delegar."""
     lines: list[str] = []
@@ -3529,7 +3542,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
         except Exception:
             pass
     loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
-                     event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
+                     event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg),
+                     budget=_build_budget(cfg))
     result = await loop.run(task=message, session_id=session_id, hint=hint,
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
