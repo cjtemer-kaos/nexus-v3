@@ -146,3 +146,31 @@ def test_sandbox_run_argv_policy():
     sb = SandboxService()
     assert asyncio.run(sb.run_argv(["git", "status"], policy="read_only")).return_code == -2
     assert asyncio.run(sb.run_argv(["python", "-c", "print(2)"], policy="read_only")).success
+
+
+def test_sub_agent_tools_registered():
+    from src.api.server import _build_registry, _build_scope, _load_config_safe
+    cfg = _load_config_safe()
+    scope = _build_scope(cfg)
+    names = [t.name for t in _build_registry(scope, "x", cfg).list()]
+    assert "sub_agent" in names and "sub_agent_message" in names and "sub_agent_list" in names
+
+
+def test_mcp_server_handle():
+    import asyncio
+    from src.mcp_server import NexusMCPServer
+    srv = NexusMCPServer()
+    r = asyncio.run(srv.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"}))
+    assert r["result"]["serverInfo"]["name"] == "nexus-v3"
+    tl = asyncio.run(srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
+    assert len(tl["result"]["tools"]) >= 20
+
+
+def test_acp_server_handle():
+    import asyncio
+    from src.acp_server import NexusACPAgent
+    a = NexusACPAgent()
+    r = asyncio.run(a.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"}))
+    assert r["result"]["agentInfo"]["name"] == "nexus-v3"
+    n = asyncio.run(a.handle({"jsonrpc": "2.0", "id": 2, "method": "session/new"}))
+    assert n["result"]["sessionId"]

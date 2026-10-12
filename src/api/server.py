@@ -2660,6 +2660,30 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
     }, ensure_ascii=False)
 
 
+_SUB_SPAWNERS: dict = {}
+
+
+def _get_spawner(session_id: str, router, scope):
+    """Spawner de sub-agentes por sesión (reusa el router para el LLM del hijo)."""
+    sp = _SUB_SPAWNERS.get(session_id)
+    if sp is None:
+        from src.core.provider_base import LLMMessage
+        from src.core.sub_agent_spawner import SubAgentSpawner
+
+        async def _exec(task: str, gem: str = "auto", context: str = ""):
+            sys_p = ("Eres un sub-agente de nexus-v3. Resolvés la tarea delegada y devolvés "
+                     "un resultado conciso y directo, sin rodeos.")
+            user = (context + "\n\n" if context else "") + task
+            r = await router.chat([LLMMessage(role="system", content=sys_p),
+                                   LLMMessage(role="user", content=user)])
+            return r.content or ""
+
+        roots = tuple(getattr(getattr(scope, "cfg", None), "allowed_roots", ()) or ())
+        sp = SubAgentSpawner(executor=_exec, scope_roots=roots, parent_session_id=session_id)
+        _SUB_SPAWNERS[session_id] = sp
+    return sp
+
+
 def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True):
     """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
     from src.core.tool_registry import ToolRegistry
@@ -2995,6 +3019,56 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             parameters={"type": "object", "properties": {"agent_id": {"type": "string"}, "task": {"type": "string"}},
                         "required": ["agent_id", "task"], "additionalProperties": False},
         )
+    async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "") -> str:
+        """Delega una tarea a un sub-agente aislado (contexto propio, depth limit 3).
+        mode='continuable' lo mantiene vivo para más mensajes vía sub_agent_message."""
+        if router is None:
+            raise RuntimeError("sub_agent requiere router (helpers=True)")
+        import json as _json
+        from src.core.sub_agent_spawner import SubAgentSpec
+        sp = _get_spawner(session_id, router, scope)
+        spec = SubAgentSpec(task=task, gem=gema, context=context,
+                            mode=mode if mode in ("one-shot", "continuable") else "one-shot")
+        res = await sp.spawn_child(spec)
+        return _json.dumps({"child_id": res.child_id, "status": res.status.value,
+                            "result": res.result, "error": res.error}, ensure_ascii=False, default=str)
+
+    def sub_agent_message_tool(child_id: str, message: str) -> str:
+        """Envía un mensaje a un sub-agente continuable (child_id de sub_agent)."""
+        sp = _SUB_SPAWNERS.get(session_id)
+        if sp is None:
+            raise RuntimeError("no hay sub-agentes en esta sesión")
+        return "ok" if sp.send_message(child_id, message) else "child_id no encontrado"
+
+    def sub_agent_list_tool() -> str:
+        """Lista los sub-agentes de la sesión (child_id, estado, profundidad)."""
+        import json as _json
+        sp = _SUB_SPAWNERS.get(session_id)
+        return _json.dumps(sp.list_children() if sp else [], ensure_ascii=False, default=str)
+
+    registry.register_function(
+        sub_agent_tool, name="sub_agent",
+        description="Delega una tarea a un sub-agente aislado (contexto propio, depth limit 3). mode='continuable' lo mantiene vivo para más mensajes con sub_agent_message.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "task": {"type": "string"},
+            "mode": {"type": "string", "enum": ["one-shot", "continuable"]},
+            "gema": {"type": "string"}, "context": {"type": "string"}},
+            "required": ["task"], "additionalProperties": False},
+    )
+    registry.register_function(
+        sub_agent_message_tool, name="sub_agent_message",
+        description="Envía un mensaje a un sub-agente continuable (child_id devuelto por sub_agent).",
+        category="local",
+        parameters={"type": "object", "properties": {"child_id": {"type": "string"}, "message": {"type": "string"}},
+                    "required": ["child_id", "message"], "additionalProperties": False},
+    )
+    registry.register_function(
+        sub_agent_list_tool, name="sub_agent_list",
+        description="Lista los sub-agentes de la sesión (child_id, estado, profundidad).",
+        category="local",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    )
     return registry
 
 
