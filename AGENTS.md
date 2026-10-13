@@ -25,11 +25,17 @@ docs/                 CAPABILITY_MATRIX, NEXUS_ROADMAP, COMPETITOR_AUTOPSY, PI_I
 ```
 
 ## Comandos
-- Backend (silencioso): `wscript scripts\start_hidden_ft.vbs`  (puerto **8765**)
+**Modo app (real, el del acceso directo)**: `wscript scripts\nexus-v3-launch.vbs`
+  → Electron levanta el backend en un **puerto libre** (efímero) y sirve `ui/dist`.
+  El puerto NO es fijo: se lee de `data/backend.log` o del propio Electron.
+  Log del backend: **`data/backend.log`** (ahí va stdout/stderr del server).
+**Modo dev (backend + Vite + Electron)**: `npm run dev` (backend fijo :8765, Vite :5174).
+- Backend solo (dev, fijo): `wscript scripts\start_hidden_ft.vbs` (puerto **8765**).
 - Suite: `.venv-ft314\Scripts\python.exe -m pytest -q`
 - Diagnóstico E2E: `.venv-ft314\Scripts\python.exe scripts\e2e_diagnostic.py` (y `--llm`)
 - UI dev: `cd ui && npm run dev` (**5174**) · build: `cd ui && npm run build`
 - Compilar rápido: `.venv-ft314\Scripts\python.exe -m py_compile <archivo>`
+- Electron main: `npm run build:electron` (tsc → `electron/dist/main.js`, gitignored)
 
 ## Reglas (no negociables)
 1. **Nada hardcodeado**: config env>archivo>autodetección. Usá `_load_config_safe()` /
@@ -52,7 +58,9 @@ docs/                 CAPABILITY_MATRIX, NEXUS_ROADMAP, COMPETITOR_AUTOPSY, PI_I
 5. Commit sólo cuando se pide. Mensaje en español, cuerpo con el "por qué".
 
 ## Puertos
-8765 backend · 5174 UI dev · 11434 ollama · 8789 STT · 8790 Studio · 8188 ComfyUI · 4096 opencode.
+Backend: **dinámico** (puerto libre) en modo app Electron; **8765** en modo dev.
+UI: :5174 (dev) · :11434 ollama · :8789 STT · :8790 Studio · :8188 ComfyUI · :4096 opencode.
+DBs: `data/session.db` (sesiones WAL+FTS), `data/event_store.db` (eventos), `brain/knowledge_graph.db` (grafo).
 
 ## Mapa de features
 Loop TDAO · compactación · hooks (3 gates) · event-store · session log (WAL+FTS, fork/rewind/tree) ·

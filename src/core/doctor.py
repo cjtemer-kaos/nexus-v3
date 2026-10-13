@@ -170,9 +170,11 @@ class Doctor:
 
     async def _check_database(self) -> List[CheckResult]:
         results = []
+        root = brain_path().parent
         db_paths = [
             brain_path() / "message_board.db",
-            brain_path() / "sessions.db",
+            root / "data" / "session.db",
+            root / "data" / "event_store.db",
         ]
         for db_path in db_paths:
             if db_path.exists():
