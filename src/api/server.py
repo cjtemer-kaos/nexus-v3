@@ -3604,6 +3604,18 @@ async def _knowledge_block(query: str, limit: int = 6) -> str:
             "EXACTOS y citá el nodo [id]; NO inventes valores técnicos):\n" + "\n".join(lines))
 
 
+def _so_rules() -> str:
+    """Reglas del SO, inyectadas AL FINAL del prompt para que el modelo no use comandos de otro SO."""
+    import platform as _p
+    so = _p.system()
+    if so == "Windows":
+        return ("REGLAS DEL SO (OBLIGATORIAS): estás en WINDOWS (shell cmd.exe). Para archivos y "
+                "comandos usá SOLO: type (leer), dir (listar), findstr (buscar), where, ver, more, copy, del. "
+                "PROHIBIDO usar comandos Unix (cat, ls, grep, head, tail, pwd, uname, rm, chmod): FALLAN en cmd.exe. "
+                "La tool exec corre con cwd=la raíz del proyecto; los archivos van en ./workspace (ej: 'type workspace/x.md').")
+    return (f"REGLAS DEL SO (OBLIGATORIAS): estás en {so}. Usá SOLO comandos nativos de este SO.")
+
+
 def _delegation_block() -> str:
     """Lista de ayudantes + gemas para que el agente default sepa a quién delegar."""
     lines: list[str] = []
@@ -3664,6 +3676,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                      event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg),
                      budget=_build_budget(cfg))
     _extra = _delegation_block() if (not agent_id or agent_id == "default") else ""
+    _so = _so_rules()
+    _extra = (_extra + "\n\n" + _so).strip() if _extra else _so
     try:
         _kb = await _knowledge_block(message)
         if _kb:
