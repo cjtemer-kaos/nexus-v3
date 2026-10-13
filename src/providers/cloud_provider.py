@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import uuid
 import logging
 import httpx
 from pathlib import Path
@@ -14,7 +15,7 @@ _FREE_RE = re.compile(r"free", re.I)
 
 class CloudProvider(BaseProvider):
     def __init__(self, base_url: str, api_key: str | None = None, auth_style: str = "bearer",
-                 timeout_s: float = 60, strict_tools: bool = False):
+                 timeout_s: float = 60, strict_tools: bool = False, session_id: str | None = None):
         self.base_url = base_url.rstrip("/")
         # P3 (pi/constrained sampling): strict tool schemas (OpenAI) -> tool calls
         # validos al 1er intento, menos reintentos. Opt-in (algunos endpoints no lo soportan).
@@ -27,18 +28,24 @@ class CloudProvider(BaseProvider):
                 raw_key = os.environ.get(m.group(1), "")
         self.api_key = raw_key
         self.auth_style = auth_style
+        # opencode Go EXIGE x-opencode-session (id estable por conversacion): sin el,
+        # devuelve 400 MissingSessionID. Default estable por instancia; se puede
+        # overridear por llamada con kw["session_id"] (id de la sesion de chat).
+        self.session_id = session_id or uuid.uuid4().hex
         self._client = httpx.AsyncClient(timeout=timeout_s)
         # Cache for free-model discovery (mem + file)
         self._free_cache: list[str] | None = None
         self._free_cache_ts: float = 0.0
         self._free_ttl_s: float = 300.0  # 5 min — Zen cambia gratis varias veces por semana
 
-    def _headers(self) -> dict:
+    def _headers(self, session_id: str | None = None) -> dict:
         # Headers tipo navegador: Cloudflare (Zen) bloquea clientes "desnudos" con 403.
         base = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
             "Origin": "https://opencode.ai",
             "Referer": "https://opencode.ai/",
+            # opencode Go: sin x-opencode-session -> 400 MissingSessionID (routing/caching).
+            "x-opencode-session": session_id or self.session_id,
         }
         if not self.api_key:
             return base
@@ -128,7 +135,7 @@ class CloudProvider(BaseProvider):
         if tools:
             payload["tools"] = self._strict_tools(tools) if self.strict_tools else tools
             payload["tool_choice"] = "required" if kw.get("force_tools") else kw.get("tool_choice", "auto")
-        r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers())
+        r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers(kw.get("session_id")))
         r.raise_for_status()
         data = r.json()
         choice = (data.get("choices") or [{}])[0]
