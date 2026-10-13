@@ -276,13 +276,15 @@ class SessionLog:
         return [Message(*r) for r in rows]
 
     def messages_with_ids(self, session_id: str, limit: int = 10000) -> list[dict]:
-        """Mensajes con id (para UI de rewind/edición)."""
+        """Mensajes con id (para UI de rewind/edición). Shape completo."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, created_at FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                " FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
-        return [{"id": r[0], "role": r[1], "content": r[2], "created_at": r[3]} for r in rows]
+        return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
+                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7]} for r in rows]
 
     def rewind(self, session_id: str, message_id: int) -> int:
         """Borra los mensajes posteriores a message_id (exclusive). Devuelve cuántos borró."""

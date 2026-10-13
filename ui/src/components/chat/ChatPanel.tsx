@@ -197,7 +197,7 @@ export function ChatPanel() {
           streamed = false
         }
       }
-      if (!streamed) {
+      if (!streamed && !placed) {
         const res: any = await chatApi(text, activeSession || undefined, undefined, model,
           uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })),
           (activeAgent && activeAgent !== 'default') ? activeAgent : undefined)

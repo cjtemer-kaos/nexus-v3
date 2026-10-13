@@ -221,8 +221,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   openFile: (path, content = '# new file\n') => set((s) => {
     const existing = s.tabs.findIndex((t) => t.path === path)
     if (existing >= 0) {
-      // ya abierto: no duplicar pestaña; solo activarla (y refrescar contenido si vino explícito)
-      const tabs = content === '# new file\n' ? s.tabs : s.tabs.map((t, i) => (i === existing ? { ...t, content } : t))
+      // ya abierto: no duplicar pestaña; solo activarla (y refrescar contenido si vino
+      // explícito Y el tab NO está modificado sin guardar — no pisar cambios).
+      const tabs = (content === '# new file\n' || s.tabs[existing].dirty)
+        ? s.tabs
+        : s.tabs.map((t, i) => (i === existing ? { ...t, content } : t))
       return { tabs, activeTab: existing }
     }
     return {

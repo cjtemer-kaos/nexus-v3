@@ -1582,17 +1582,13 @@ async def delete_session_endpoint(session_id: str):
 
 
 @app.get("/api/sessions/{session_id}/messages")
-async def get_messages(session_id: str, limit: int = 100, offset: int = 0):
+async def get_messages(session_id: str, limit: int = 10000, offset: int = 0):
     slog = _session_log()
-    msgs = slog.get_messages(session_id, limit=limit, offset=offset)
-    # Serialize Message dataclass
-    out = []
-    for m in msgs:
-        if hasattr(m, "role"):
-            out.append({"role": m.role, "content": m.content, "tool_call_id": getattr(m, "tool_call_id", ""), "tool_name": getattr(m, "tool_name", ""), "tokens": getattr(m, "tokens", 0), "model": getattr(m, "model", ""), "created_at": getattr(m, "created_at", "")})
-        else:
-            out.append(dict(m) if isinstance(m, dict) else {"content": str(m)})
-    return {"session_id": session_id, "messages": out, "count": len(out)}
+    try:
+        rows = slog.messages_with_ids(session_id, limit=limit)
+    except Exception:
+        rows = []
+    return {"session_id": session_id, "messages": rows, "count": len(rows)}
 
 
 @app.post("/api/sessions/{session_id}/messages")
@@ -2163,14 +2159,6 @@ async def session_rewind(session_id: str, request: Request):
         return {"ok": True, "deleted": n}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
-
-@app.get("/api/sessions/{session_id}/messages")
-async def session_messages(session_id: str, limit: int = 10000):
-    try:
-        return {"messages": _session_log().messages_with_ids(session_id, limit=limit)}
-    except Exception as e:
-        return {"messages": [], "error": str(e)}
 
 
 @app.get("/api/sessions/{session_id}/mode")
@@ -3837,7 +3825,8 @@ async def chat(request: Request):
             raise RuntimeError("no healthy provider — echo fallback")
 
         # Scope + tools (mismo helper que /v1, /ws y /stream)
-        scope = _build_scope(cfg, agent_id)
+        _plan = _SESSION_MODES.get(session_id) == "plan"
+        scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
         registry = _build_registry(scope, session_id, cfg, router=router)
 
         _gema = (_agent_cfg or {}).get("gema") or ""
@@ -3990,15 +3979,6 @@ async def end_session_endpoint(session_id: str):
     return {"ok": True, "result": res}
 
 
-@app.post("/api/sessions/{session_id}/fork")
-async def fork_session_endpoint(session_id: str):
-    """Crea una rama (hijo) de la sesion — sesiones en arbol (pi-style)."""
-    if _session_log().get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail="sesión no encontrada")
-    child = _session_log().fork(session_id)
-    return {"ok": True, "session": child.to_dict() if hasattr(child, "to_dict") else {"id": child.id}}
-
-
 @app.post("/api/sessions/{session_id}/branch")
 async def branch_session_endpoint(session_id: str, copy_messages: bool = False):
     """Rama con (opcional) copia de mensajes — sesiones en arbol (pi-style)."""
@@ -4006,14 +3986,6 @@ async def branch_session_endpoint(session_id: str, copy_messages: bool = False):
         raise HTTPException(status_code=404, detail="sesión no encontrada")
     child = _session_log().branch(session_id, copy_messages=copy_messages)
     return {"ok": True, "session": child.to_dict() if hasattr(child, "to_dict") else {"id": child.id}}
-
-
-@app.get("/api/sessions/{session_id}/tree")
-async def session_tree_endpoint(session_id: str):
-    """Arbol de la sesion: ancestros + hijos (pi-style)."""
-    if _session_log().get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail="sesión no encontrada")
-    return _session_log().tree(session_id)
 
 
 @app.get("/api/runtime")
