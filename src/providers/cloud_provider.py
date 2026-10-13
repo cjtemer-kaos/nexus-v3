@@ -57,6 +57,19 @@ class CloudProvider(BaseProvider):
             return {**base, "x-api-key": self.api_key}
         return {**base, "Authorization": f"Bearer {self.api_key}"}
 
+    def _raise_http(self, r) -> None:
+        """Como raise_for_status pero incluye el CUERPO de la respuesta.
+        opencode-go devuelve 400/403 con JSON util (p.ej. MissingSessionID); sin el cuerpo
+        el error es opaco ('400 Bad Request')."""
+        if r.status_code >= 400:
+            body = ""
+            try:
+                body = (r.text or "")[:600]
+            except Exception:
+                pass
+            url = str(getattr(getattr(r, "request", None), "url", self.base_url))
+            raise RuntimeError(f"HTTP {r.status_code} en {url}: {body}")
+
     @staticmethod
     def _strict_tools(tools: list[dict]) -> list[dict]:
         """Marca los tools como strict (OpenAI), recursivo: additionalProperties=false +
@@ -140,7 +153,7 @@ class CloudProvider(BaseProvider):
             payload["tools"] = self._strict_tools(tools) if self.strict_tools else tools
             payload["tool_choice"] = "required" if kw.get("force_tools") else kw.get("tool_choice", "auto")
         r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers(kw.get("session_id")))
-        r.raise_for_status()
+        self._raise_http(r)
         data = r.json()
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
@@ -168,7 +181,7 @@ class CloudProvider(BaseProvider):
 
     async def list_models(self) -> list[str]:
         r = await self._client.get(f"{self.base_url}/v1/models", headers=self._headers())
-        r.raise_for_status()
+        self._raise_http(r)
         ids = [m.get("id", "") for m in r.json().get("data", []) if m.get("id")]
         if self.model_exclude:
             ids = [mid for mid in ids if not any(mid.lower().startswith(p) for p in self.model_exclude)]
