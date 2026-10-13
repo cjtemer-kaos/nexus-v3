@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { Search, Maximize2, RefreshCw, X, Network, Sparkles } from 'lucide-react'
+import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch } from '@/lib/api'
@@ -9,7 +9,7 @@ type GNode = {
   id: number; label: string; title: string; category: string; source: string;
   importance: number; degree: number; community: number; pagerank: number;
   size: number; color: string; content?: string;
-  x?: number; y?: number; fx?: number | null; fy?: number | null;
+  x?: number; y?: number; z?: number; fx?: number | null; fy?: number | null; fz?: number | null;
 }
 type GLink = { id: number; source: number | GNode; target: number | GNode; relation: string; weight: number; label: string }
 type GData = {
@@ -25,10 +25,43 @@ type NodeDetail = {
   tags: string; content: string; access_count: number; degree: number;
   neighbors: { edge_id: number; relation: string; weight: number; other_id: number; other_title: string; other_category: string; direction: string }[];
 }
+type Mode = '3d' | '2d'
+type CamMode = 'seguir' | 'girar' | 'quieto'
 
 const CATEGORY_COLOR: Record<string, string> = {
   general: '#788493', architecture: '#4C9DFF', concept: '#61C5D9',
   deploy: '#FFC857', fix: '#3DDC84', fact: '#F2A65A', lesson: '#A7B8CC',
+}
+
+function hexA(hex: string, a: number): string {
+  const h = hex.replace('#', '')
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  return `rgba(${r},${g},${b},${a})`
+}
+
+let THREE_LIB: any = null
+let SPRITE_TEXT: any = null
+
+const glowCache = new Map<string, any>()
+function glowTexture(color: string): any {
+  if (!THREE_LIB) return null
+  const cached = glowCache.get(color)
+  if (cached) return cached
+  const S = 128
+  const cv = document.createElement('canvas'); cv.width = cv.height = S
+  const ctx = cv.getContext('2d')!
+  const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2)
+  g.addColorStop(0, '#ffffff')
+  g.addColorStop(0.18, color)
+  g.addColorStop(0.5, hexA(color, 0.35))
+  g.addColorStop(1, hexA(color, 0))
+  ctx.fillStyle = g
+  ctx.beginPath(); ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2); ctx.fill()
+  const tex = new THREE_LIB.CanvasTexture(cv)
+  tex.colorSpace = THREE_LIB.SRGBColorSpace
+  glowCache.set(color, tex)
+  return tex
 }
 
 export function GraphView() {
@@ -49,6 +82,9 @@ export function GraphView() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [mode, setMode] = useState<Mode>('3d')
+  const [camMode, setCamMode] = useState<CamMode>('girar')
+  const [FG3D, setFG3D] = useState<any>(null)
   const detailSeq = useRef(0)
   const [dims, setDims] = useState({ w: 800, h: 500 })
   const [searchResults, setSearchResults] = useState<SearchHit[]>([])
@@ -84,7 +120,7 @@ export function GraphView() {
       const res = await apiFetch(`/api/knowledge/graph?${params.toString()}`)
       if (!res.ok) throw new Error(`graph ${res.status}`)
       const d = (await res.json()) as GData
-      if (seq !== loadSeq.current) return // respuesta vieja: descartar (evita pisar la nueva)
+      if (seq !== loadSeq.current) return
       if (d.stats?.error) throw new Error(d.stats.error)
       setData(d)
       setSelected(null); setDetail(null)
@@ -98,6 +134,21 @@ export function GraphView() {
   }, [qApplied, category, community, relation, minWeight, centrality])
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let alive = true
+    Promise.all([
+      import('react-force-graph-3d'),
+      import('three'),
+      import('three-spritetext'),
+    ]).then(([g, t, s]) => {
+      if (!alive) return
+      THREE_LIB = t
+      SPRITE_TEXT = (s as any).default
+      setFG3D(() => (g as any).default)
+    }).catch(() => { /* 3D no disponible: queda 2D */ })
+    return () => { alive = false }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -165,6 +216,86 @@ export function GraphView() {
     return s
   }, [focusId, data])
 
+  const labelThreshold = useMemo(() => {
+    const vals = (data?.nodes ?? []).map(n => n.importance ?? 0).sort((a, b) => b - a)
+    if (!vals.length) return Infinity
+    return vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.15))]
+  }, [data])
+
+  const nodeColor = useCallback((n: any) => n.color ?? CATEGORY_COLOR[n.category] ?? '#4C9DFF', [])
+
+  const nodeThreeObject = useCallback((n: any) => {
+    if (!THREE_LIB) return null
+    const color = n.color ?? CATEGORY_COLOR[n.category] ?? '#4C9DFF'
+    const size = Math.max(2, n.size ?? 4)
+    const grp = new THREE_LIB.Group()
+    const mat = new THREE_LIB.SpriteMaterial({
+      map: glowTexture(color), transparent: true, blending: THREE_LIB.AdditiveBlending, depthWrite: false,
+    })
+    const sprite = new THREE_LIB.Sprite(mat)
+    sprite.scale.set(size * 3, size * 3, 1)
+    grp.add(sprite)
+    const core = new THREE_LIB.Mesh(
+      new THREE_LIB.SphereGeometry(Math.max(0.6, size * 0.28), 10, 10),
+      new THREE_LIB.MeshBasicMaterial({ color }),
+    )
+    grp.add(core)
+    if ((n.importance ?? 0) >= labelThreshold && SPRITE_TEXT) {
+      const label = new SPRITE_TEXT(String(n.label ?? n.id).slice(0, 40))
+      label.color = '#C9D2E0'
+      label.textHeight = 1.9
+      label.backgroundColor = 'rgba(11,13,16,0.55)'
+      label.padding = 0.5
+      label.borderRadius = 2
+      label.position.set(0, size * 2 + 3.5, 0)
+      grp.add(label)
+    }
+    return grp
+  }, [labelThreshold])
+
+  const linkColor = useCallback((l: any) => {
+    const s = typeof l.source === 'object' ? l.source.id : l.source
+    const t = typeof l.target === 'object' ? l.target.id : l.target
+    if (focusId != null && (s === focusId || t === focusId)) return 'rgba(140,193,255,0.85)'
+    return 'rgba(139,147,167,0.16)'
+  }, [focusId])
+
+  const linkWidth = useCallback((l: any) => Math.max(0.4, (l.weight ?? 0.3) * 2.2), [])
+
+  const flyTo = useCallback((id: number) => {
+    if (mode !== '3d') return
+    const fg = fgRef.current
+    const n = (graphData.nodes as GNode[]).find(x => x.id === id)
+    if (!fg || !n || n.x == null) return
+    const r = Math.hypot(n.x ?? 0, n.y ?? 0, n.z ?? 0) || 1
+    const ratio = 1 + 90 / r
+    fg.cameraPosition(
+      { x: (n.x ?? 0) * ratio, y: (n.y ?? 0) * ratio, z: (n.z ?? 0) * ratio },
+      { x: n.x ?? 0, y: n.y ?? 0, z: n.z ?? 0 },
+      900,
+    )
+  }, [mode, graphData])
+
+  const openNode = useCallback((id: number) => {
+    loadDetail(id)
+    if (camMode === 'seguir') flyTo(id)
+  }, [loadDetail, camMode, flyTo])
+
+  useEffect(() => {
+    if (mode !== '3d') return
+    const fg = fgRef.current
+    if (!fg) return
+    const controls = fg.controls?.()
+    if (controls) {
+      controls.autoRotate = camMode === 'girar'
+      controls.autoRotateSpeed = 0.7
+      controls.enableDamping = true
+      controls.dampingFactor = 0.08
+    }
+    fg.d3Force?.('charge')?.strength(-70)
+    fg.d3Force?.('link')?.distance(38)
+  }, [mode, camMode, data])
+
   const submitSearch = (e?: React.FormEvent) => {
     e?.preventDefault()
     const query = q.trim()
@@ -199,6 +330,20 @@ export function GraphView() {
       .then(data => { if (requestId === searchSequence.current) setSearchResults(data.results ?? []) })
       .catch(() => { if (requestId === searchSequence.current) setSearchResults([]) })
       .finally(() => { if (requestId === searchSequence.current) setSearchLoading(false) })
+  }
+
+  const commonProps: any = {
+    graphData,
+    backgroundColor: mode === '3d' ? '#0B0D10' : 'rgba(0,0,0,0)',
+    nodeLabel: (n: any) => `${n.label}`,
+    linkColor,
+    linkWidth,
+    cooldownTicks: 140,
+    d3AlphaDecay: 0.02,
+    d3VelocityDecay: 0.3,
+    onNodeClick: (n: any) => openNode(n.id),
+    onNodeHover: (n: any) => setHovered(n ? n.id : null),
+    onBackgroundClick: () => { setSelected(null); setDetail(null) },
   }
 
   return (
@@ -259,6 +404,36 @@ export function GraphView() {
             onKeyUp={e => load({ minWeight: Number(e.currentTarget.value) })}
           />
         </label>
+        <div className="flex items-center gap-1 rounded-xl border border-[#2C3037] bg-[#1E2127] p-0.5" role="group" aria-label="Vista 2D o 3D">
+          <button
+            onClick={() => setMode('3d')} aria-pressed={mode === '3d'} title="Vista 3D (neuronas)"
+            className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${mode === '3d' ? 'bg-[#4C9DFF]/20 text-[#8CC1FF]' : 'text-[#9BA1AA] hover:text-[#EDEEF0]'}`}
+          >
+            <Box className="h-3.5 w-3.5" /> 3D
+          </button>
+          <button
+            onClick={() => setMode('2d')} aria-pressed={mode === '2d'} title="Vista 2D"
+            className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${mode === '2d' ? 'bg-[#4C9DFF]/20 text-[#8CC1FF]' : 'text-[#9BA1AA] hover:text-[#EDEEF0]'}`}
+          >
+            <Square className="h-3.5 w-3.5" /> 2D
+          </button>
+        </div>
+        {mode === '3d' && (
+          <div className="flex items-center gap-1 rounded-xl border border-[#2C3037] bg-[#1E2127] p-0.5" role="group" aria-label="Cámara">
+            <button onClick={() => setCamMode('seguir')} aria-pressed={camMode === 'seguir'} title="Cámara: seguir el nodo elegido"
+              className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${camMode === 'seguir' ? 'bg-[#4C9DFF]/20 text-[#8CC1FF]' : 'text-[#9BA1AA] hover:text-[#EDEEF0]'}`}>
+              <Crosshair className="h-3.5 w-3.5" /> Seguir
+            </button>
+            <button onClick={() => setCamMode('girar')} aria-pressed={camMode === 'girar'} title="Cámara: girar el cerebro"
+              className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${camMode === 'girar' ? 'bg-[#4C9DFF]/20 text-[#8CC1FF]' : 'text-[#9BA1AA] hover:text-[#EDEEF0]'}`}>
+              <Orbit className="h-3.5 w-3.5" /> Girar
+            </button>
+            <button onClick={() => setCamMode('quieto')} aria-pressed={camMode === 'quieto'} title="Cámara: quieta"
+              className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${camMode === 'quieto' ? 'bg-[#4C9DFF]/20 text-[#8CC1FF]' : 'text-[#9BA1AA] hover:text-[#EDEEF0]'}`}>
+              <Pause className="h-3.5 w-3.5" /> Quieto
+            </button>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             variant="ghost" size="sm" aria-expanded={showEntities}
@@ -303,7 +478,7 @@ export function GraphView() {
             {!searchLoading && searchResults.length === 0 && <div className="text-xs text-[#9BA1AA]">Sin coincidencias FTS5.</div>}
             <div className="max-h-56 space-y-1 overflow-auto">
               {searchResults.map(hit => (
-                <button key={hit.id} onClick={() => loadDetail(hit.id)} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-[#22262D]">
+                <button key={hit.id} onClick={() => openNode(hit.id)} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-[#22262D]">
                   <span className="block truncate text-xs font-medium text-[#EDEEF0]">{hit.title || `Nodo #${hit.id}`}</span>
                   <span className="mt-0.5 block line-clamp-2 text-[10px] leading-relaxed text-[#9BA1AA]">{hit.snippet}</span>
                 </button>
@@ -311,26 +486,41 @@ export function GraphView() {
             </div>
           </div>
         )}
-        {data && data.nodes.length > 0 && (
+        {data && data.nodes.length > 0 && mode === '3d' && FG3D && (
+          <FG3D
+            ref={fgRef}
+            width={dims.w}
+            height={dims.h}
+            {...commonProps}
+            showNavInfo={false}
+            nodeThreeObject={nodeThreeObject}
+            nodeVal={(n: any) => Math.max(2, n.size ?? 4)}
+            nodeOpacity={1}
+            linkOpacity={0.35}
+            linkDirectionalParticles={(l: any) => ((l.weight ?? 0) > 0.5 ? 2 : 0)}
+            linkDirectionalParticleWidth={1.4}
+            linkDirectionalParticleSpeed={0.006}
+            enableNodeDrag
+            enableNavigationControls
+          />
+        )}
+        {data && data.nodes.length > 0 && mode === '3d' && !FG3D && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-[#9BA1AA]">
+            <RefreshCw className="h-5 w-5 animate-spin mr-2" /> Preparando el cerebro 3D…
+          </div>
+        )}
+        {data && data.nodes.length > 0 && mode === '2d' && (
           <ForceGraph2D
             ref={fgRef}
             width={dims.w}
             height={dims.h}
-            graphData={graphData}
-            nodeLabel={(n: any) => `${n.label}`}
-            nodeColor={(n: any) => n.color ?? CATEGORY_COLOR[n.category] ?? '#4C9DFF'}
+            {...commonProps}
+            nodeColor={nodeColor}
             nodeVal={(n: any) => Math.max(2, n.size ?? 4)}
             nodeRelSize={4}
-            linkColor={() => 'rgba(139,147,167,0.25)'}
-            linkWidth={0.6}
             linkDirectionalParticles={2}
             linkDirectionalParticleWidth={1.5}
-            cooldownTicks={120}
-            d3AlphaDecay={0.02}
-            d3VelocityDecay={0.3}
             onNodeClick={(n: any) => loadDetail(n.id)}
-            onNodeHover={(n: any) => setHovered(n ? n.id : null)}
-            onBackgroundClick={() => { setSelected(null); setDetail(null) }}
             nodeCanvasObjectMode={() => 'after'}
             nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
               if (focusId === null || (neighborIds !== null && !neighborIds.has(n.id))) return
@@ -376,7 +566,7 @@ export function GraphView() {
                     <div className="text-[#9BA1AA] tracking-widest text-[11px] mb-1">VECINOS ({detail.neighbors?.length ?? 0})</div>
                     <div className="space-y-1">
                       {(detail.neighbors ?? []).slice(0, 12).map(nb => (
-                        <button key={nb.edge_id} onClick={() => loadDetail(nb.other_id)} className="block w-full text-left rounded-lg bg-[#1E2127] hover:bg-[#22262D] px-2 py-1.5">
+                        <button key={nb.edge_id} onClick={() => openNode(nb.other_id)} className="block w-full text-left rounded-lg bg-[#1E2127] hover:bg-[#22262D] px-2 py-1.5">
                           <span className="text-[#8CC1FF] font-mono text-[11px]">{nb.relation}</span>{' '}
                           <span className="text-[#EDEEF0]">{(nb.other_title ?? '').slice(0, 60)}</span>
                         </button>
