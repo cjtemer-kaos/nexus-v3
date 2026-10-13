@@ -3140,7 +3140,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
         return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
 
-    def exec_tool(command: str, cwd: str = "./workspace", timeout: int = 15) -> str:
+    def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
         """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
         import subprocess as _sp
         cmd = (command or "").strip()
@@ -3150,7 +3150,15 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if _blk is not None:
             raise PermissionError(f"comando bloqueado por politica ({_blk})")
         scope.check_tool("exec", {"command": cmd})
-        cwd_p = scope.check_path(cwd or "./workspace")
+        # cwd por defecto: la RAÍZ del proyecto (consistente con write_file: "workspace/x").
+        # Si la raíz no está permitida por el scope, cae a ./workspace.
+        if not cwd:
+            try:
+                scope.check_path(str(_PROJECT_ROOT))
+                cwd = str(_PROJECT_ROOT)
+            except Exception:
+                cwd = "./workspace"
+        cwd_p = scope.check_path(cwd)
         if not cwd_p.exists():
             cwd_p.mkdir(parents=True, exist_ok=True)
         if not cwd_p.is_dir():
@@ -3182,7 +3190,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                description="Busca código (regex/texto) en el proyecto; devuelve coincidencias con archivo:línea.",
                                category="local")
     registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
-    registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado en ./workspace (bloquea destructivos)", category="local")
+    registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado (cwd=raíz del proyecto; los archivos están en ./workspace, ej: 'python workspace/x.py'). Bloquea destructivos.", category="local")
 
     # --- todo_write (harness parity whole-list replacement) ---
     _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)
@@ -3232,14 +3240,25 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
 
     async def web_search_tool(query: str, limit: int = 6) -> str:
-        """Busca en la web (open source: SearXNG via SEARXNG_URL, fallback Wikipedia)."""
+        """Busca en la web. PRIORIDAD: MCP parallel-search (resultados reales, gratis); fallback SearXNG/Wikipedia."""
         import json as _j
         scope.check_tool("web_fetch", {"url": "search"})  # network gate
+        # 1) MCP parallel-search (keyless, resultados reales de Google/Bing)
+        try:
+            from src.core.mcp_client import get_mcp_client
+            cli = get_mcp_client(_PROJECT_ROOT)
+            res = await asyncio.to_thread(cli.call, "parallel-search", "web_search",
+                                          {"objective": query, "search_queries": [query]})
+            if isinstance(res, dict) and not res.get("isError") and res.get("content"):
+                return res["content"]
+        except Exception:
+            pass
+        # 2) fallback: SearXNG (SEARXNG_URL) / Wikipedia
         from src.tools.web_search import web_search as _ws
-        res = await _ws(query, limit=max(1, min(10, int(limit or 6))))
-        return _j.dumps(res, ensure_ascii=False)
+        r = await _ws(query, limit=max(1, min(10, int(limit or 6))))
+        return _j.dumps(r, ensure_ascii=False)
     registry.register_function(web_search_tool, name="web_search",
-                               description="Busca en la web y devuelve título+url+snippet (SearXNG open source; fallback Wikipedia).",
+                               description="Busca en la web (PRIORIDAD: MCP parallel-search, resultados reales; fallback SearXNG/Wikipedia).",
                                category="local")
 
     # --- learn (Método OPCODE: vía única de escritura de conocimiento) ---
@@ -3605,10 +3624,11 @@ def _delegation_block() -> str:
             lines.append("GEMAS (delegá con la tool gema_run(gema, task)): " + ", ".join(gs))
     except Exception:
         pass
-    web = ("BÚSQUEDA WEB (MCP, gratis y sin API key): para investigar en internet usá "
+    web = ("BÚSQUEDA WEB — PRIORIDAD: usá SIEMPRE el MCP para buscar en internet: "
            "mcp_call(server='parallel-search', tool='web_search', arguments={\"objective\":\"...\","
-           "\"search_queries\":[\"...\"]}); para leer una URL, tool='web_fetch'. "
-           "Usá mcp_list(server='parallel-search') para ver las tools.")
+           "\"search_queries\":[\"...\"]}); para leer una URL, tool='web_fetch' con arguments={\"urls\":[\"...\"]}. "
+           "Es el buscador PRINCIPAL (resultados reales de Google/Bing). El tool web_search local es SOLO fallback "
+           "(SearXNG/Wikipedia) — no lo uses si el MCP está disponible. mcp_list(server='parallel-search') lista sus tools.")
     if not lines:
         return web
     return ("AYUDANTES Y GEMAS DISPONIBLES — cuando la tarea encaje con la especialidad de uno, "

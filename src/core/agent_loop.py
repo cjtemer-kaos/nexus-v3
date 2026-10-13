@@ -480,7 +480,10 @@ class AgentLoop:
             else:
                 _shell_hint = "sh — usa 'ls', 'cat', 'uname'"
             _env_note = (f"\n\nENTORNO DE EJECUCION: SO={_osn}. Shell={_shell_hint}. "
-                         f"Directorio de trabajo: ./workspace. Usa SOLO comandos nativos de este SO.")
+                         f"Directorio de trabajo: ./workspace. Usa SOLO comandos nativos de este SO. "
+                         f"IMPORTANTE: la tool exec corre con cwd=la RAÍZ del proyecto; referí los archivos "
+                         f"por su ruta desde la raíz (ej: 'python workspace/mi_script.py') y los archivos que "
+                         f"creás con write_file van a ./workspace.")
             if messages and messages[0].role == "system":
                 messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _env_note)
         except Exception:
