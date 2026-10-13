@@ -16,7 +16,7 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell } from "electron";
 import { spawn, ChildProcess } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,6 +46,8 @@ function getProjectRoot(): string {
 const ROOT = getProjectRoot();
 const UI_DIST = join(ROOT, "ui", "dist");
 const PYTHON_CANDIDATES_WIN = [
+  join(ROOT, ".venv-ft314", "Scripts", "python.exe"),
+  join(ROOT, ".venv-ft314", "Scripts", "pythonw.exe"),
   join(ROOT, ".venv", "Scripts", "python.exe"),
   join(ROOT, ".venv", "Scripts", "pythonw.exe"),
   "python",
@@ -62,17 +64,49 @@ let isQuitting = false;
 let backendReady = false;
 
 // ——————————————————————————————————————————————
+// Backend log → data/backend.log (el stdout de Electron se PIERDE al abrir por
+// acceso directo; sin esto no hay evidencia de por qué el backend no levanta).
+// ——————————————————————————————————————————————
+let _blogStream: WriteStream | null = null;
+function blog(tag: string, s: string): void {
+  const line = `${new Date().toISOString()} ${tag} ${s}`;
+  console.log(line);
+  try {
+    if (!_blogStream) {
+      const dir = join(ROOT, "data");
+      try { mkdirSync(dir, { recursive: true }); } catch {}
+      _blogStream = createWriteStream(join(dir, "backend.log"), { flags: "a" });
+    }
+    _blogStream.write(line + "\n");
+  } catch { /* noop */ }
+}
+
+// ——————————————————————————————————————————————
 // Single-instance lock (must be first)
 // ——————————————————————————————————————————————
 const singleLock = app.requestSingleInstanceLock();
 if (!singleLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", async () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+    }
+    // Auto-sanacion: si la instancia viva NO tiene backend, respawnearlo. Sin esto,
+    // el acceso directo solo enfoca una ventana existente (p.ej. con backend muerto).
+    let alive = backendReady;
+    if (alive) {
+      try {
+        const r = await fetch(`${backendUrl}/api/health`, { signal: AbortSignal.timeout(2500) });
+        alive = r.ok;
+      } catch { alive = false; }
+    }
+    if (!alive) {
+      blog("[main]", "second-instance: backend no vivo -> restartBackend()");
+      const res = await restartBackend();
+      if (res.ok && mainWindow) await mainWindow.loadURL(backendUrl);
     }
   });
 }
@@ -158,7 +192,7 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
   const dataDir = join(ROOT, "data");
   try { mkdirSync(dataDir, { recursive: true }); } catch {}
 
-  console.log(`[main] spawning backend: ${py} ${args.join(" ")} (cwd=${ROOT})`);
+  blog("[main]", `spawning backend: ${py} ${args.join(" ")} (cwd=${ROOT})`);
 
   // On Windows, use shell:false to allow proper kill; use detached:false so we own the process tree
   const proc = spawn(py, args, {
@@ -171,18 +205,18 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
 
   proc.stdout?.on("data", (d: Buffer) => {
     const s = d.toString().trim();
-    if (s) console.log(`[py] ${s}`);
+    if (s) blog("[py]", s);
   });
   proc.stderr?.on("data", (d: Buffer) => {
     const s = d.toString().trim();
-    if (s) console.warn(`[py:err] ${s}`);
+    if (s) blog("[py:err]", s);
   });
   proc.on("error", (err) => {
-    console.error(`[main] backend spawn error: ${err.message}`);
+    blog("[main]", `backend spawn error: ${err.message}`);
     dialog.showErrorBox("Nexus v3 — Backend error", `No se pudo iniciar el backend Python.\n\nComando: ${py} ${args.join(" ")}\nError: ${err.message}\n\nVerifica que Python 3.13+ esté instalado y que 'pip install -r requirements.txt' se haya ejecutado (si aplica).`);
   });
   proc.on("exit", (code, signal) => {
-    console.log(`[main] backend exit code=${code} signal=${signal} quitting=${isQuitting}`);
+    blog("[main]", `backend exit code=${code} signal=${signal} quitting=${isQuitting}`);
     if (!isQuitting && code !== 0 && code !== null) {
       // Unexpected crash — notify but don't auto-restart aggressively
       backendReady = false;
@@ -196,7 +230,7 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
 async function killBackend(): Promise<void> {
   if (!pyProc || pyProc.killed) return;
   const pid = pyProc.pid;
-  console.log(`[main] killing backend pid=${pid}`);
+  blog("[main]", `killing backend pid=${pid}`);
   isQuitting = true;
 
   // Best-effort graceful
@@ -379,7 +413,7 @@ async function start() {
     backendPort = 8765;
   }
   backendUrl = `http://127.0.0.1:${backendPort}`;
-  console.log(`[main] backendUrl=${backendUrl} root=${ROOT}`);
+  blog("[main]", `backendUrl=${backendUrl} root=${ROOT}`);
 
   // IPC before spawn so renderer can query even during loading
   ipcMain.handle("nexus:getBackendUrl", () => backendUrl);
@@ -395,7 +429,7 @@ async function start() {
   // Poll backend readiness, then navigate to correct URL
   const ok = await waitForBackend(backendUrl, 60000);
   backendReady = ok;
-  console.log(`[main] backend ready=${ok}`);
+  blog("[main]", `backend ready=${ok}`);
 
   if (!mainWindow) return;
 
@@ -414,7 +448,7 @@ async function start() {
     } else {
       target = backendUrl;
     }
-    console.log(`[main] loading ${target}`);
+    blog("[main]", `loading ${target}`);
     await mainWindow.loadURL(target);
   } else {
     const msg = `Backend no disponible en ${backendUrl}.\nVerifica que Python este instalado y que las dependencias esten instaladas.\n\nIntenta Reiniciar backend desde la bandeja.`;
@@ -436,7 +470,7 @@ app.on("activate", () => {
 
 // Window-all-closed: kill backend and quit (like Hermes/Goose — proper program, not daemon)
 app.on("window-all-closed", async () => {
-  console.log("[main] window-all-closed — killing backend and quitting");
+  blog("[main]", "window-all-closed — killing backend and quitting");
   await killBackend();
   // On macOS, keep app alive only if tray wants it; here we follow Hermes: quit when last window closed unless tray keeps alive
   // Requirement: "kills it on window-all-closed" — so quit unconditionally

@@ -25,8 +25,12 @@ If Not fso.FileExists(electron) Then
          "Ejecuta 'npm install' en " & root, 48, "Nexus v3"
   WScript.Quit 1
 End If
+' Si falta el main compilado, compilarlo solo (en vez de abortar).
 If Not fso.FileExists(mainJs) Then
-  MsgBox "Falta electron\dist\main.js." & vbCrLf & _
+  sh.Run "cmd /c npm run build:electron", 0, True
+End If
+If Not fso.FileExists(mainJs) Then
+  MsgBox "No se pudo compilar electron\dist\main.js." & vbCrLf & _
          "Ejecuta 'npm run build:electron' en " & root, 48, "Nexus v3"
   WScript.Quit 1
 End If
