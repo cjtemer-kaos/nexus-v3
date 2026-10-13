@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause } from 'lucide-react'
+import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause, Brain } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch } from '@/lib/api'
@@ -8,7 +8,7 @@ import { apiFetch } from '@/lib/api'
 type GNode = {
   id: number; label: string; title: string; category: string; source: string;
   importance: number; degree: number; community: number; pagerank: number;
-  size: number; color: string; content?: string;
+  size: number; color: string; content?: string; updatedAt?: string;
   x?: number; y?: number; z?: number; fx?: number | null; fy?: number | null; fz?: number | null;
 }
 type GLink = { id: number; source: number | GNode; target: number | GNode; relation: string; weight: number; label: string }
@@ -42,6 +42,38 @@ function hexA(hex: string, a: number): string {
 
 let THREE_LIB: any = null
 let SPRITE_TEXT: any = null
+
+function lobeTargets(nodes: GNode[]): Map<number, { x: number; y: number; z: number }> {
+  const byComm = new Map<number, GNode[]>()
+  for (const n of nodes) {
+    const c = n.community ?? 0
+    if (!byComm.has(c)) byComm.set(c, [])
+    byComm.get(c)!.push(n)
+  }
+  const times = nodes.map(n => Date.parse(n.updatedAt ?? '') || 0)
+  const minT = times.length ? Math.min(...times) : 0
+  const maxT = times.length ? Math.max(...times) : 0
+  const span = Math.max(1, maxT - minT)
+  const comms = [...byComm.keys()]
+  const N = Math.max(1, comms.length)
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5))
+  const map = new Map<number, { x: number; y: number; z: number }>()
+  comms.forEach((c, i) => {
+    const y = 1 - (i / Math.max(1, N - 1)) * 2
+    const rr = Math.sqrt(Math.max(0, 1 - y * y))
+    const phi = i * GOLDEN
+    const dx = Math.cos(phi) * rr, dz = Math.sin(phi) * rr
+    const count = byComm.get(c)!.length
+    const R = 48 + Math.min(90, count * 2.4)
+    for (const n of byComm.get(c)!) {
+      const t = Date.parse(n.updatedAt ?? '') || minT
+      const recency = (t - minT) / span
+      const rad = R * (1 - 0.55 * recency)
+      map.set(n.id, { x: dx * rad, y: y * rad, z: dz * rad })
+    }
+  })
+  return map
+}
 
 const glowCache = new Map<string, any>()
 function glowTexture(color: string): any {
@@ -84,6 +116,7 @@ export function GraphView() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [mode, setMode] = useState<Mode>('3d')
   const [camMode, setCamMode] = useState<CamMode>('girar')
+  const [lobes, setLobes] = useState(true)
   const [FG3D, setFG3D] = useState<any>(null)
   const detailSeq = useRef(0)
   const [dims, setDims] = useState({ w: 800, h: 500 })
@@ -256,11 +289,11 @@ export function GraphView() {
   const linkColor = useCallback((l: any) => {
     const s = typeof l.source === 'object' ? l.source.id : l.source
     const t = typeof l.target === 'object' ? l.target.id : l.target
-    if (focusId != null && (s === focusId || t === focusId)) return 'rgba(140,193,255,0.85)'
-    return 'rgba(139,147,167,0.16)'
+    if (focusId != null && (s === focusId || t === focusId)) return 'rgba(160,205,255,0.95)'
+    return 'rgba(126,168,232,0.5)'
   }, [focusId])
 
-  const linkWidth = useCallback((l: any) => Math.max(0.4, (l.weight ?? 0.3) * 2.2), [])
+  const linkWidth = useCallback((l: any) => Math.max(0.6, (l.weight ?? 0.3) * 2.4), [])
 
   const flyTo = useCallback((id: number) => {
     if (mode !== '3d') return
@@ -292,9 +325,27 @@ export function GraphView() {
       controls.enableDamping = true
       controls.dampingFactor = 0.08
     }
-    fg.d3Force?.('charge')?.strength(-70)
-    fg.d3Force?.('link')?.distance(38)
-  }, [mode, camMode, data])
+  }, [mode, camMode, data, FG3D])
+
+  useEffect(() => {
+    if (mode !== '3d' || !data || !FG3D) return
+    let cancelled = false
+    ;(async () => {
+      const d3: any = await import('d3-force-3d')
+      if (cancelled || !fgRef.current) return
+      const g = fgRef.current
+      const targets = lobes ? lobeTargets(data.nodes) : null
+      const s = lobes ? 0.1 : 0
+      g.d3Force('lobeX', d3.forceX((n: any) => targets?.get(n.id)?.x ?? 0).strength(s))
+      g.d3Force('lobeY', d3.forceY((n: any) => targets?.get(n.id)?.y ?? 0).strength(s))
+      g.d3Force('lobeZ', d3.forceZ((n: any) => targets?.get(n.id)?.z ?? 0).strength(s))
+      g.d3Force('charge')?.strength(lobes ? -34 : -70)
+      g.d3Force('link')?.distance(lobes ? 22 : 38)
+      g.d3ReheatSimulation?.()
+      if (lobes) setTimeout(() => { if (!cancelled) g.zoomToFit?.(900, 40) }, 800)
+    })()
+    return () => { cancelled = true }
+  }, [mode, data, lobes, FG3D])
 
   const submitSearch = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -434,6 +485,12 @@ export function GraphView() {
             </button>
           </div>
         )}
+        {mode === '3d' && (
+          <button onClick={() => setLobes(v => !v)} aria-pressed={lobes} title="Agrupar por comunidad (lóbulos) + lo reciente al centro"
+            className={`flex items-center gap-1 rounded-xl border px-2.5 py-2 text-xs ${lobes ? 'border-[#4C9DFF]/40 bg-[#4C9DFF]/15 text-[#8CC1FF]' : 'border-[#2C3037] bg-[#1E2127] text-[#9BA1AA] hover:text-[#EDEEF0]'}`}>
+            <Brain className="h-3.5 w-3.5" /> Lóbulos
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             variant="ghost" size="sm" aria-expanded={showEntities}
@@ -496,7 +553,7 @@ export function GraphView() {
             nodeThreeObject={nodeThreeObject}
             nodeVal={(n: any) => Math.max(2, n.size ?? 4)}
             nodeOpacity={1}
-            linkOpacity={0.35}
+            linkOpacity={0.75}
             linkDirectionalParticles={(l: any) => ((l.weight ?? 0) > 0.5 ? 2 : 0)}
             linkDirectionalParticleWidth={1.4}
             linkDirectionalParticleSpeed={0.006}

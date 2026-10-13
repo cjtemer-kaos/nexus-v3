@@ -1127,7 +1127,7 @@ def _load_graph_data(
         con = sqlite3.connect(str(db_path), timeout=5.0)
         con.row_factory = sqlite3.Row
         cur = con.cursor()
-        cur.execute("SELECT id, title, category, source, importance, tags, content, access_count FROM nodes ORDER BY id")
+        cur.execute("SELECT id, title, category, source, importance, tags, content, access_count, updated_at FROM nodes ORDER BY id")
         rows = cur.fetchall()
         cur.execute("SELECT id, from_node, to_node, relation, weight, note FROM edges")
         edge_rows = cur.fetchall()
@@ -1201,6 +1201,7 @@ def _load_graph_data(
             "content": content[:400] if content else "",
             "fullContent": content,
             "accessCount": int(r["access_count"] or 0),
+            "updatedAt": r["updated_at"] or "",
             "pagerank": pr,
             "degree": d,
             "community": comm,
