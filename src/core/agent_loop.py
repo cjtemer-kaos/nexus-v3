@@ -694,17 +694,16 @@ class AgentLoop:
                 await _close_turn("error")
                 break
 
-            # Track tokens
+            # Track tokens. El budget cuenta SOLO los tokens de GENERACIÓN (completion):
+            # contar el prompt reenviado cada turno hace que el acumulado llegue a 32k en
+            # 2-4 turnos y corte el run prematuramente (bug). total_tokens = observabilidad.
             usage = getattr(llm_resp, "usage", {}) or {}
-            turn_tokens = int(usage.get("total_tokens", 0) or usage.get("prompt_tokens", 0) or 0)
-            if turn_tokens:
-                total_tokens += turn_tokens
-                self.budget.add_tokens(turn_tokens)
-            else:
-                # Estimate
-                est = len((llm_resp.content or "")) // 4
-                total_tokens += est
-                self.budget.add_tokens(est)
+            _completion = int(usage.get("completion_tokens", 0) or 0)
+            if not _completion:
+                _completion = len((llm_resp.content or "")) // 4
+            turn_tokens = int(usage.get("total_tokens", 0) or _completion)
+            total_tokens += turn_tokens
+            self.budget.add_tokens(_completion)
 
             # Append assistant message to history
             assistant_content = llm_resp.content or ""
@@ -853,6 +852,24 @@ class AgentLoop:
                 # Act
                 tool_result_str = ""
                 tool_success = False
+                # Anti doom-loop (deepseek repeat-tool-reminder): cuenta TODAS las llamadas,
+                # incluidas las que FALLAN (un tool que falla idéntico en bucle = loop a cortar).
+                try:
+                    _fp = (tool_name, json.dumps(tool_args if isinstance(tool_args, dict) else {}, sort_keys=True, default=str))
+                    _win = getattr(self, "_tool_fp_window", [])
+                    _win.append(_fp)
+                    self._tool_fp_window = _win[-3:]  # type: ignore[attr-defined]
+                    if len(self._tool_fp_window) == 3 and all(x == self._tool_fp_window[0] for x in self._tool_fp_window):
+                        final_output = f"[doom-loop: {tool_name} repetido 3 veces con mismos args — bucle detenido; sin respuesta final]"
+                        try:
+                            messages.append(LLMMessage(role="tool", content=f"[doom-loop detenido: {tool_name}]", tool_call_id=getattr(tc, 'id', '')))
+                        except Exception:
+                            pass
+                        success = False
+                        iteration = max_iters  # force exit
+                        break
+                except Exception:
+                    pass
                 try:
                     if self.tools is None:
                         raise KeyError(f"sin registro de herramientas; no se puede despachar {tool_name}")
@@ -884,26 +901,6 @@ class AgentLoop:
                                 _diag = diagnostics_for(tool_args.get("path"))
                                 if _diag:
                                     tool_result_str = (tool_result_str or "") + _diag
-                    except Exception:
-                        pass
-                    # Anti doom-loop (aden-hive): 3 llamadas idénticas consecutivas → cortar
-                    try:
-                        _fp = (tool_name, json.dumps(tool_args if isinstance(tool_args, dict) else {}, sort_keys=True, default=str))
-                        _win = getattr(self, "_tool_fp_window", [])
-                        _win.append(_fp)
-                        self._tool_fp_window = _win[-3:]  # type: ignore[attr-defined]
-                        if len(self._tool_fp_window) == 3 and all(x == self._tool_fp_window[0] for x in self._tool_fp_window):
-                            # success=False: no hubo respuesta final del modelo —
-                            # declarar exito aqui persistiria un falso positivo en
-                            # trajectory/event_store/session summary (capa 12).
-                            final_output = f"[doom-loop: {tool_name} repetido 3 veces con mismos args — bucle detenido; sin respuesta final]"
-                            try:
-                                messages.append(LLMMessage(role="tool", content=tool_result_str, tool_call_id=getattr(tc, 'id', '')))
-                            except Exception:
-                                pass
-                            success = False
-                            iteration = max_iters  # force exit
-                            break
                     except Exception:
                         pass
                 except Exception as e:

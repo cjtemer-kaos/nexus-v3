@@ -348,7 +348,7 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_run(message, session_id, hint=None, model=None, force_tools=False):
+    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, agent_id=None):
         captured.update(message=message, session_id=session_id, hint=hint, model=model)
         return SimpleNamespace(final_output="respuesta real del modelo", success=True)
 
@@ -382,7 +382,7 @@ def test_chat_stream_sse_uses_standard_loop(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None):
+    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None, agent_id=None):
         captured.update(message=message, session_id=session_id, model=model)
         if on_delta is not None:
             await on_delta("respuesta ")

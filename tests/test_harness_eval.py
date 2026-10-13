@@ -48,12 +48,15 @@ def test_tool_arg_validation():
     schema = {"type": "object", "properties": {"text": {"type": "string"}},
               "required": ["text"], "additionalProperties": False}
     assert validate_args("echo", {"text": "ok"}, schema) == {"text": "ok"}
-    for bad in ({}, {"text": 5}, {"text": "x", "extra": 1}):
+    # coercion de escalares (modelos chicos): "3"->3 no aplica acá (string); types malos se rechazan
+    for bad in ({}, {"text": 5}):
         try:
             validate_args("echo", bad, schema)
             raise AssertionError(f"deberia rechazar {bad}")
         except ValueError:
             pass
+    # claves extra se DESCARTAN (no rompen el run) en vez de rechazarse
+    assert validate_args("echo", {"text": "x", "extra": 1}, schema) == {"text": "x"}
 
 
 def test_security_hook_is_load_bearing():

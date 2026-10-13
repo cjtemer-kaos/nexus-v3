@@ -93,7 +93,8 @@ IDEMPOTENT_TOOLS = frozenset({
 MUTATING_TOOLS = frozenset({
     "write", "edit", "write_file", "patch", "terminal", "bash", "execute_code",
     "browser_click", "browser_type", "browser_press", "browser_navigate",
-    "send_message", "delegate_task", "execute",
+    "send_message", "delegate_task", "execute", "exec",
+    "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run",
 })
 
 NETWORK_TOOLS = frozenset({

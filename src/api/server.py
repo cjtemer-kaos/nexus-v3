@@ -3198,6 +3198,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed."""
         if not isinstance(todos, list):
             raise ValueError("todos must be array")
+        scope.check_tool("todo_write", {"todos": todos})
         res = _todo_store.write(session_id, todos)
         return _json2.dumps(res, ensure_ascii=False)
     registry.register_function(todo_write, name="todo_write", description="Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed", category="local", parameters={"type":"object","properties":{"todos":{"type":"array","description":"The COMPLETE task list, replacing any previous list.","items":{"type":"object","additionalProperties":False,"properties":{"content":{"type":"string","description":"What the task is — short imperative line."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"pending|in_progress|completed"}}}}},"required":["todos"],"additionalProperties":False})
@@ -3270,6 +3271,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         lessons. content = the knowledge (1-3 sentences or short block);
         topic_key = stable slug for evolving topics (e.g. 'auth/jwt-rotation')
         enables UPSERT (revision++); tags = comma-separated."""
+        scope.check_tool("learn", {"content": content})
         import json as _j
         from src.core.knowledge_memory import get_knowledge_memory
         mem = ((cfg or {}).get("memory", {}) or {})
@@ -3468,6 +3470,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """Genera/edita imágenes con Qwen-Image local (ComfyUI :8188) vía la skill qwen-image-studio.
         mode='t2i' (texto→imagen) o 'edit' (editar conservando identidad).
         Para IDENTIDAD: steps=20, cfg=2.5, lightning=false (Lightning es más rápido pero menos fiel)."""
+        scope.check_tool("image_generate", {"prompt": prompt})
         import os as _os
         import subprocess as _sp
         import sys as _sys
@@ -3577,10 +3580,11 @@ def _build_budget(cfg: dict | None = None):
     )
 
 
-async def _knowledge_block(query: str, limit: int = 6) -> str:
+async def _knowledge_block(query: str, limit: int = 3) -> str:
     """RAG automático: recupera conocimiento relevante del grafo (FTS5) e inyecta al prompt.
 
     Hace que nexus-v3 LEA su propio conocimiento sin depender de que el modelo llame a recall.
+    Limitado (3 hits × 250 chars) para no meter ruido en el contexto.
     """
     q = (query or "").strip()
     if len(q) < 4:
@@ -3588,7 +3592,7 @@ async def _knowledge_block(query: str, limit: int = 6) -> str:
     try:
         from src.core.knowledge_memory import get_knowledge_memory
         hits = await asyncio.to_thread(
-            lambda: get_knowledge_memory().fts_search(q, limit=max(1, min(8, limit))))
+            lambda: get_knowledge_memory().fts_search(q, limit=max(1, min(5, limit))))
     except Exception:
         return ""
     lines: list[str] = []
@@ -3597,7 +3601,7 @@ async def _knowledge_block(query: str, limit: int = 6) -> str:
         body = (h.get("snippet") or h.get("content") or "").strip()
         if not body:
             continue
-        lines.append(f"- [{h.get('id', '?')}] {title}: {body[:600]}")
+        lines.append(f"- [{h.get('id', '?')}] {title}: {body[:250]}")
     if not lines:
         return ""
     return ("CONOCIMIENTO RELEVANTE (recuperado AUTOMÁTICAMENTE del grafo local; usá estos datos "
@@ -3636,11 +3640,8 @@ def _delegation_block() -> str:
             lines.append("GEMAS (delegá con la tool gema_run(gema, task)): " + ", ".join(gs))
     except Exception:
         pass
-    web = ("BÚSQUEDA WEB — PRIORIDAD: usá SIEMPRE el MCP para buscar en internet: "
-           "mcp_call(server='parallel-search', tool='web_search', arguments={\"objective\":\"...\","
-           "\"search_queries\":[\"...\"]}); para leer una URL, tool='web_fetch' con arguments={\"urls\":[\"...\"]}. "
-           "Es el buscador PRINCIPAL (resultados reales de Google/Bing). El tool web_search local es SOLO fallback "
-           "(SearXNG/Wikipedia) — no lo uses si el MCP está disponible. mcp_list(server='parallel-search') lista sus tools.")
+    web = ("BÚSQUEDA WEB: usá la tool web_search(query) para buscar en internet (resultados reales, "
+           "sin API key). Para leer una URL, usá web_fetch(url). No hace falta llamar al MCP a mano.")
     if not lines:
         return web
     return ("AYUDANTES Y GEMAS DISPONIBLES — cuando la tarea encaje con la especialidad de uno, "
@@ -3676,14 +3677,15 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                      event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg),
                      budget=_build_budget(cfg))
     _extra = _delegation_block() if (not agent_id or agent_id == "default") else ""
-    _so = _so_rules()
-    _extra = (_extra + "\n\n" + _so).strip() if _extra else _so
     try:
         _kb = await _knowledge_block(message)
         if _kb:
-            _extra = (_extra + "\n\n" + _kb).strip()
+            _extra = (_extra + "\n\n" + _kb).strip() if _extra else _kb
     except Exception:
         pass
+    # Las reglas del SO van AL FINAL (lo último que ve el modelo antes de generar).
+    _so = _so_rules()
+    _extra = (_extra + "\n\n" + _so).strip() if _extra else _so
     result = await loop.run(task=message, session_id=session_id, hint=hint,
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,

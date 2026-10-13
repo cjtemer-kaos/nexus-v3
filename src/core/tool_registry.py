@@ -119,34 +119,63 @@ _JSON_TYPES = {
 }
 
 
+def _coerce(val, want):
+    """Coerciona escalares que los modelos chicos mandan como string (patrón continue)."""
+    try:
+        if want == "integer" and isinstance(val, str):
+            return int(float(val.strip()))
+        if want == "number" and isinstance(val, str):
+            return float(val.strip())
+        if want == "boolean" and isinstance(val, str):
+            s = val.strip().lower()
+            if s in ("true", "1", "yes", "si", "sí"):
+                return True
+            if s in ("false", "0", "no"):
+                return False
+        if want == "array" and isinstance(val, str):
+            return [s.strip() for s in val.split(",") if s.strip()]
+        if want == "object" and isinstance(val, str):
+            import json as _j
+            return _j.loads(val)
+    except Exception:
+        pass
+    return val
+
+
 def validate_args(name: str, args: dict, schema: dict) -> dict:
-    """Valida args contra JSON Schema (ligero). Devuelve args normalizados; lanza ValueError."""
+    """Valida args contra JSON Schema (ligero). Coerciona tipos y descarta claves extra
+    (los modelos chicos mandan "3"/"true"/campos inventados). Lanza ValueError accionable."""
     if not isinstance(schema, dict) or not schema:
         return args
     props = schema.get("properties", {}) or {}
     required = schema.get("required", []) or []
-    for key in required:
-        if key not in args or args[key] is None:
-            raise ValueError(f"{name}: falta argumento requerido '{key}'")
+    # Coerción de tipos por propiedad
+    out: dict = {}
+    for k, v in (args or {}).items():
+        spec = props.get(k)
+        want = spec.get("type") if isinstance(spec, dict) else None
+        out[k] = _coerce(v, want) if want else v
+    # Descartar claves extra (evita "argumentos no permitidos" que rompe el run)
     if not schema.get("additionalProperties", True):
-        extra = [k for k in args if k not in props]
-        if extra:
-            raise ValueError(f"{name}: argumentos no permitidos {extra}")
-    for key, val in list(args.items()):
+        for k in [k for k in out if k not in props]:
+            out.pop(k, None)
+    for key in required:
+        if key not in out or out[key] is None:
+            want = (props.get(key) or {}).get("type", "?")
+            raise ValueError(
+                f"{name}: falta el argumento requerido '{key}' (tipo {want}). "
+                f"Argumentos válidos: {sorted(props)}")
+    for key, val in list(out.items()):
         spec = props.get(key)
         if not isinstance(spec, dict) or val is None:
             continue
         want = spec.get("type")
         expected = _JSON_TYPES.get(want) if isinstance(want, str) else None
         if expected is not None and not isinstance(val, expected):
-            if want == "integer" and isinstance(val, bool):
-                raise ValueError(f"{name}: '{key}' debe ser integer")
-            if isinstance(expected, tuple) or want in ("number",):
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    continue
-            if want in ("string", "integer", "number", "boolean", "array", "object"):
-                raise ValueError(f"{name}: '{key}' debe ser {want}, recibido {type(val).__name__}")
-    return args
+            if want in ("number",) and isinstance(val, (int, float)) and not isinstance(val, bool):
+                continue
+            raise ValueError(f"{name}: '{key}' debe ser {want} (recibido {type(val).__name__})")
+    return out
 
 
 # ---------------------------------------------------------------------------
