@@ -407,6 +407,7 @@ class AgentLoop:
         self._retry_counts.clear()
         self._replan_counts.clear()
         self._tool_fp_window = []  # type: ignore[attr-defined]
+        self._tool_repeat = {}  # type: ignore[attr-defined]
         try:
             if self.budget is not None:
                 self.budget.reset()  # reset per-run (budget persiste en instancias reusadas)
@@ -852,19 +853,27 @@ class AgentLoop:
                 # Act
                 tool_result_str = ""
                 tool_success = False
-                # Anti doom-loop (deepseek repeat-tool-reminder): cuenta TODAS las llamadas,
-                # incluidas las que FALLAN (un tool que falla idéntico en bucle = loop a cortar).
+                # Anti doom-loop (deepseek repeat-tool-reminder): cuenta TODAS las llamadas
+                # (incl. fallidas). A las 3 y 5 inyecta un RECORDATORIO (no corta: el modelo
+                # puede corregir); a las 7 corta de verdad.
                 try:
                     _fp = (tool_name, json.dumps(tool_args if isinstance(tool_args, dict) else {}, sort_keys=True, default=str))
-                    _win = getattr(self, "_tool_fp_window", [])
-                    _win.append(_fp)
-                    self._tool_fp_window = _win[-3:]  # type: ignore[attr-defined]
-                    if len(self._tool_fp_window) == 3 and all(x == self._tool_fp_window[0] for x in self._tool_fp_window):
-                        final_output = f"[doom-loop: {tool_name} repetido 3 veces con mismos args — bucle detenido; sin respuesta final]"
+                    _cnt = getattr(self, "_tool_repeat", None)
+                    if _cnt is None:
+                        _cnt = {}
+                        self._tool_repeat = _cnt  # type: ignore[attr-defined]
+                    _n = _cnt.get(_fp, 0) + 1
+                    _cnt[_fp] = _n
+                    if _n in (2, 3):
                         try:
-                            messages.append(LLMMessage(role="tool", content=f"[doom-loop detenido: {tool_name}]", tool_call_id=getattr(tc, 'id', '')))
+                            messages.append(LLMMessage(role="user", content=(
+                                f"[recordatorio del sistema] repetiste la herramienta '{tool_name}' {_n} veces con "
+                                f"los MISMOS argumentos y no avanzás. CAMBIÁ de estrategia (otros args, otra tool) "
+                                f"o da tu respuesta final con lo que ya tenés.")))
                         except Exception:
                             pass
+                    elif _n >= 4:
+                        final_output = f"[doom-loop: {tool_name} repetido {_n} veces con mismos args — bucle detenido; sin respuesta final]"
                         success = False
                         iteration = max_iters  # force exit
                         break
