@@ -3051,7 +3051,11 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     # --- Real tools for AgentLoop (Scope-guarded, no mock) ---
     def echo_tool(text: str) -> str:
         return text
-    registry.register_function(echo_tool, name="echo", description="Echo text back (debug)", category="local")
+    registry.register_function(echo_tool, name="echo",
+        description="Echo text back (debug).",
+        category="local",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}},
+                    "required": ["text"], "additionalProperties": False})
 
     def read_file_tool(path: str) -> str:
         """Lee un archivo dentro de allowed_roots (./workspace, ./data)."""
@@ -3140,7 +3144,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
         return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
 
-    def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
+    async def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
         """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
         import subprocess as _sp
         cmd = (command or "").strip()
@@ -3167,7 +3171,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if _jail is not None:
             raise PermissionError(_jail)
         timeout = max(1, min(60, int(timeout)))
-        proc = _sp.run(cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
+        proc = await asyncio.to_thread(_sp.run, cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
         out = (proc.stdout or "") + (proc.stderr or "")
         if len(out) > 20000:
             out = out[:20000] + "\n... [truncado]"
@@ -3175,9 +3179,28 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             out = f"[exit {proc.returncode}]"
         return out or f"[exit {proc.returncode} sin salida]"
 
-    registry.register_function(read_file_tool, name="read_file", description="Lee un archivo dentro de ./workspace o ./data (Scope jail)", category="local")
-    registry.register_function(write_file_tool, name="write_file", description="Escribe un archivo dentro de ./workspace o ./data (crea dirs)", category="local")
-    registry.register_function(edit_file_tool, name="edit", description="Reemplazo quirúrgico en un archivo (str_replace): reemplaza `old` por `new`; `old` debe ser único (o usá replace_all=true).", category="local")
+    registry.register_function(read_file_tool, name="read_file",
+        description="Lee un archivo de texto y devuelve su contenido.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "path": {"type": "string", "description": "Ruta del archivo (ej: workspace/nota.md, src/api/server.py)"}},
+            "required": ["path"], "additionalProperties": False})
+    registry.register_function(write_file_tool, name="write_file",
+        description="Crea o sobrescribe un archivo con el contenido dado (crea los directorios intermedios).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "path": {"type": "string", "description": "Ruta destino (ej: workspace/nota.md)"},
+            "content": {"type": "string", "description": "Contenido completo del archivo"}},
+            "required": ["path", "content"], "additionalProperties": False})
+    registry.register_function(edit_file_tool, name="edit",
+        description="Reemplazo quirúrgico (str_replace) en un archivo: cambia `old` por `new`. `old` debe ser único (o usá replace_all=true).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "path": {"type": "string", "description": "Ruta del archivo"},
+            "old": {"type": "string", "description": "Texto exacto a reemplazar (debe existir en el archivo)"},
+            "new": {"type": "string", "description": "Texto de reemplazo"},
+            "replace_all": {"type": "boolean", "description": "Reemplazar TODAS las ocurrencias (default false)"}},
+            "required": ["path", "old", "new"], "additionalProperties": False})
 
     async def code_search_tool(query: str, path: str = ".", include: str = "", limit: int = 20) -> str:
         """Busca código (ripgrep/grep) en un directorio; devuelve coincidencias archivo:línea."""
@@ -3188,9 +3211,27 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return _j.dumps(res, ensure_ascii=False)
     registry.register_function(code_search_tool, name="code_search",
                                description="Busca código (regex/texto) en el proyecto; devuelve coincidencias con archivo:línea.",
-                               category="local")
-    registry.register_function(list_dir_tool, name="list_dir", description="Lista un directorio dentro de allowed_roots", category="local")
-    registry.register_function(exec_tool, name="exec", description="Ejecuta un comando shell jail-ado (cwd=raíz del proyecto; los archivos están en ./workspace, ej: 'python workspace/x.py'). Bloquea destructivos.", category="local")
+                               category="local",
+                               parameters={"type": "object", "properties": {
+                                   "query": {"type": "string", "description": "Patrón de búsqueda (regex o texto)"},
+                                   "path": {"type": "string", "description": "Directorio raíz de búsqueda (default '.')"},
+                                   "include": {"type": "string", "description": "Filtro de archivos glob (ej: *.py)"},
+                                   "limit": {"type": "integer", "description": "Máximo de resultados (1-50, default 20)"}},
+                                   "required": ["query"], "additionalProperties": False})
+    registry.register_function(list_dir_tool, name="list_dir",
+                               description="Lista los archivos y carpetas de un directorio.",
+                               category="local",
+                               parameters={"type": "object", "properties": {
+                                   "path": {"type": "string", "description": "Ruta del directorio (default '.')"}},
+                                   "additionalProperties": False})
+    registry.register_function(exec_tool, name="exec",
+                               description="Ejecuta un comando shell (cwd=raíz del proyecto; archivos en ./workspace, ej: 'type workspace/x.md', 'python workspace/x.py'). Bloquea comandos destructivos.",
+                               category="local",
+                               parameters={"type": "object", "properties": {
+                                   "command": {"type": "string", "description": "Comando a ejecutar (Windows cmd)"},
+                                   "cwd": {"type": "string", "description": "Directorio de trabajo (opcional; default raíz del proyecto)"},
+                                   "timeout": {"type": "integer", "description": "Segundos (2-60, default 15)"}},
+                                   "required": ["command"], "additionalProperties": False})
 
     # --- todo_write (harness parity whole-list replacement) ---
     _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)
@@ -3238,7 +3279,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise
         except Exception as e:
             raise RuntimeError(f"web_fetch failed: {e}")
-    registry.register_function(web_fetch, name="web_fetch", description="Fetch URL and return text (network gate, truncates 15k)", category="local")
+    registry.register_function(web_fetch, name="web_fetch",
+        description="Descarga una URL y devuelve su texto (trunca a 15k).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "url": {"type": "string", "description": "URL http(s) a leer"},
+            "timeout": {"type": "integer", "description": "Segundos (2-30, default 12)"}},
+            "required": ["url"], "additionalProperties": False})
 
     async def web_search_tool(query: str, limit: int = 6) -> str:
         """Busca en la web. PRIORIDAD: MCP parallel-search (resultados reales, gratis); fallback SearXNG/Wikipedia."""
@@ -3259,8 +3306,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         r = await _ws(query, limit=max(1, min(10, int(limit or 6))))
         return _j.dumps(r, ensure_ascii=False)
     registry.register_function(web_search_tool, name="web_search",
-                               description="Busca en la web (PRIORIDAD: MCP parallel-search, resultados reales; fallback SearXNG/Wikipedia).",
-                               category="local")
+                               description="Busca en internet y devuelve resultados (título+url+snippet). Resultados reales.",
+                               category="local",
+                               parameters={"type": "object", "properties": {
+                                   "query": {"type": "string", "description": "Consulta de búsqueda"},
+                                   "limit": {"type": "integer", "description": "Máximo de resultados (1-10, default 6)"}},
+                                   "required": ["query"], "additionalProperties": False})
 
     # --- learn (Método OPCODE: vía única de escritura de conocimiento) ---
     async def learn_tool(content: str, topic_key: str = "", category: str = "general",
@@ -3322,14 +3373,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "required": ["query"], "additionalProperties": False},
     )
 
-    def mcp_list(server: str = "") -> str:
+    async def mcp_list(server: str = "") -> str:
         """Lista los servidores MCP del bundle y sus tools (server vacío = solo servidores)."""
         import json as _j
         from src.core.mcp_client import get_mcp_client
         cli = get_mcp_client(_PROJECT_ROOT)
         if not server:
-            return _j.dumps({"servers": cli.list_servers()}, ensure_ascii=False)
-        return _j.dumps({"server": server, "tools": cli.list_tools(server)}, ensure_ascii=False)
+            return _j.dumps({"servers": await asyncio.to_thread(cli.list_servers)}, ensure_ascii=False)
+        return _j.dumps({"server": server, "tools": await asyncio.to_thread(cli.list_tools, server)}, ensure_ascii=False)
     registry.register_function(
         mcp_list, name="mcp_list",
         description="Lista servidores MCP del bundle portable y sus tools. server='' lista servidores; server='<nombre>' lista sus tools (arranca el servidor just-in-time).",
@@ -3464,7 +3515,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
-    def image_generate_tool(prompt: str, mode: str = "t2i", image: str = "", steps: int = 20,
+    async def image_generate_tool(prompt: str, mode: str = "t2i", image: str = "", steps: int = 20,
                             cfg_scale: float = 2.5, negative: str = "", width: int = 1024,
                             height: int = 1024, lightning: bool = False) -> str:
         """Genera/edita imágenes con Qwen-Image local (ComfyUI :8188) vía la skill qwen-image-studio.
@@ -3511,7 +3562,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if _img_cfg.get("url"):
             _env["COMFYUI_URL"] = str(_img_cfg["url"])
         try:
-            p = _sp.run(args, capture_output=True, text=True, timeout=1200, env=_env)
+            p = await asyncio.to_thread(_sp.run, args, capture_output=True, text=True, timeout=1200, env=_env)
         except _sp.TimeoutError:
             return "timeout: la generación excedió 20 min (ComfyUI lento/colgado)"
         out = ((p.stdout or "") + (p.stderr or "")).strip()
