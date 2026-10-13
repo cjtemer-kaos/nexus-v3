@@ -17,6 +17,20 @@ logger = logging.getLogger("nexus-mcp-client")
 
 _manifest_cache: dict[str, list[dict]] = {}
 
+_SENSITIVE_ENV = __import__("re").compile(r"KEY|PASSWORD|SECRET|TOKEN|CREDENTIAL|AUTH", __import__("re").I)
+
+
+def _scrubbed_env(extra: dict | None = None) -> dict:
+    """Env para subprocesos MCP: NO hereda credenciales (patrón deepseek scrubbedParentEnv).
+
+    Los paquetes npx/uvx de terceros NO deben ver OPENCODE_API_KEY, GITHUB_TOKEN, etc.
+    Se conservan las vars normales (PATH, HOME, locale) + las declaradas por el manifest.
+    """
+    out = {k: v for k, v in os.environ.items() if not _SENSITIVE_ENV.search(k)}
+    if extra:
+        out.update({str(k): str(v) for k, v in extra.items()})
+    return out
+
 
 def load_manifest(project_root: str | Path) -> list[dict]:
     key = str(project_root)
@@ -97,7 +111,7 @@ class MCPClient:
         try:
             params = StdioServerParameters(
                 command=cmd[0], args=list(cmd[1:]),
-                env={**os.environ, **(entry.get("env") or {})},
+                env=_scrubbed_env(entry.get("env")),
             )
             read, write = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(ClientSession(read, write))

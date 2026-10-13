@@ -106,7 +106,10 @@ NETWORK_TOOLS = frozenset({
 @dataclass(frozen=True, slots=True)
 class ScopeConfig:
     allowed_roots: tuple[str, ...] = ("./workspace", "./data")
-    deny_patterns: tuple[str, ...] = ("**/.env", "**/*.key", "**/brain/*.db-shm", "**/brain/*.db-wal")
+    deny_patterns: tuple[str, ...] = ("**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/*.pfx",
+                                      "**/*.p12", "**/id_rsa*", "**/id_ed25519*", "**/.git-credentials",
+                                      "**/.npmrc", "**/.aws/**", "**/.ssh/**", "**/credentials*",
+                                      "**/.netrc", "**/brain/*.db-shm", "**/brain/*.db-wal")
     max_read_bytes: int = 1_048_576
     max_file_read_bytes: int = 1_048_576  # alias, compat with config.yaml
     allow_network: bool = False
