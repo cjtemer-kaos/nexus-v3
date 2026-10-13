@@ -641,11 +641,14 @@ def _build_router_from_config(cfg: dict):
             if not base.endswith("/v1") or pc["id"] == "cohere":
                 continue
             pid = pc["id"]
-            router.register_provider(pid, CloudProvider(base_url=base[:-3], api_key=key, auth_style="bearer"))
+            _excl = [e.lower() for e in (pc.get("models_exclude") or [])]
+            router.register_provider(pid, CloudProvider(base_url=base[:-3], api_key=key, auth_style="bearer", model_exclude=_excl))
             # Registrar TODOS los modelos conocidos: cache en vivo (aunque este
             # vencida) o, si no hay, el catalogo estatico. Asi el routing cubre
             # los modelos que el proveedor expone hoy (el catalogo envejece).
             known = _pm.cached_models(pid, max_age_s=-1) or ((pc.get("models") or [pc["default_model"]]) + (pc.get("extra_models") or []))
+            if _excl:
+                known = [m for m in known if not any(m.lower().startswith(p) for p in _excl)]
             for mid in known:
                 router.register_model(ModelRoute(id=mid, provider_name=pid))
             if pid not in router.fallback_order:

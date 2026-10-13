@@ -15,7 +15,8 @@ _FREE_RE = re.compile(r"free", re.I)
 
 class CloudProvider(BaseProvider):
     def __init__(self, base_url: str, api_key: str | None = None, auth_style: str = "bearer",
-                 timeout_s: float = 60, strict_tools: bool = False, session_id: str | None = None):
+                 timeout_s: float = 60, strict_tools: bool = False, session_id: str | None = None,
+                 model_exclude: list[str] | None = None):
         self.base_url = base_url.rstrip("/")
         # P3 (pi/constrained sampling): strict tool schemas (OpenAI) -> tool calls
         # validos al 1er intento, menos reintentos. Opt-in (algunos endpoints no lo soportan).
@@ -32,6 +33,9 @@ class CloudProvider(BaseProvider):
         # devuelve 400 MissingSessionID. Default estable por instancia; se puede
         # overridear por llamada con kw["session_id"] (id de la sesion de chat).
         self.session_id = session_id or uuid.uuid4().hex
+        # Prefijos de modelos a OCULTAR (no van por /v1/chat/completions: p.ej. en opencode-go
+        # los de /messages o /responses dan 400 -> mejor no listarlos en la UI).
+        self.model_exclude = [e.lower() for e in (model_exclude or [])]
         self._client = httpx.AsyncClient(timeout=timeout_s)
         # Cache for free-model discovery (mem + file)
         self._free_cache: list[str] | None = None
@@ -165,7 +169,10 @@ class CloudProvider(BaseProvider):
     async def list_models(self) -> list[str]:
         r = await self._client.get(f"{self.base_url}/v1/models", headers=self._headers())
         r.raise_for_status()
-        return [m.get("id", "") for m in r.json().get("data", []) if m.get("id")]
+        ids = [m.get("id", "") for m in r.json().get("data", []) if m.get("id")]
+        if self.model_exclude:
+            ids = [mid for mid in ids if not any(mid.lower().startswith(p) for p in self.model_exclude)]
+        return ids
 
     async def probe_free_models_health(self, models: list[str], timeout_s: float = 12.0) -> dict[str, dict]:
         """Prueba real por modelo con mini chat (max_tokens=5). Solo 400 'Model is unavailable'

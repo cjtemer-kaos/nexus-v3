@@ -24,6 +24,8 @@ PROVIDER_CATALOG = [
                    "hy3", "space-bunny", "longcat-2.5-preview-free", "step-5-preview-free"],
         "tags": ["cloud", "subscription", "premium"],
         "description": "Modelos premium via OpenCode Go (kimi, glm, deepseek, mimo).",
+        # Estos NO van por /v1/chat/completions (usan /messages o /responses): ocultarlos.
+        "models_exclude": ["grok-", "gpt-", "claude-", "muse-spark-"],
     },
 
     # === MAJOR CLOUD ===
