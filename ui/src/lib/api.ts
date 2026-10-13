@@ -38,7 +38,7 @@ export async function chatApi(
   agentId?: string,
 ): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string; images?: string[] }> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 90000);
+  const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
     const res = await apiFetch("/api/chat", {
       method: "POST",
@@ -52,7 +52,7 @@ export async function chatApi(
     }
     return res.json();
   } catch (e: unknown) {
-    if ((e as Error).name === "AbortError") throw new Error("chat timeout 90s — el modelo local tarda; reintenta o elige otro modelo");
+    if ((e as Error).name === "AbortError") throw new Error("chat timeout 300s — el modelo local tarda; reintenta o elige otro modelo");
     throw e;
   } finally {
     clearTimeout(timer);
@@ -66,7 +66,7 @@ export async function chatStreamApi(
 ): Promise<{ reply: string; success: boolean; session_id?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 180000); // cap 3 min: evita UI colgada
+  const timer = setTimeout(() => ctrl.abort(), 900000); // cap 15 min: alineado con el budget del server
   try {
     // POST con body: no expone el mensaje en la URL (logs/límite) y envía session_id.
     const res = await fetch(`${base}/api/chat/stream`, {
@@ -112,7 +112,7 @@ export async function chatStreamApi(
     if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
     return { reply, success: true, session_id: sessionId || undefined };
   } catch (e) {
-    if ((e as Error).name === "AbortError") throw new Error("stream timeout 180s — el modelo local tarda; reintenta");
+    if ((e as Error).name === "AbortError") throw new Error("stream timeout 900s — el modelo local tarda; reintenta");
     throw e;
   } finally {
     clearTimeout(timer);
