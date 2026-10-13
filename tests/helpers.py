@@ -93,6 +93,18 @@ class LoopProvider(BaseProvider):
         return ["loop"]
 
 
+class EmptyProvider(BaseProvider):
+    """Modelo que SIEMPRE devuelve respuesta vacía sin tool_calls (caso 'reply vacío')."""
+    async def chat(self, messages, tools=None, model=None, **kw):
+        return LLMResponse(content="", tool_calls=(), finish_reason="stop", model="empty")
+
+    async def health(self):
+        return True
+
+    async def list_models(self):
+        return ["empty"]
+
+
 class SecretProvider(BaseProvider):
     async def chat(self, messages, tools=None, model=None, **kw):
         tc = ToolCall(id="c1", name="read_secret", arguments={"path": ".env"})

@@ -30,7 +30,7 @@ from src.core.provider_router import ModelRoute, ProviderRouter
 from src.core.session_log import Message, SessionLog
 from src.core.tool_registry import ToolRegistry
 from src.core.memory_extractor import MemoryExtractor
-from helpers import FinalAnswerProvider, LoopProvider
+from helpers import FinalAnswerProvider, LoopProvider, EmptyProvider
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -211,6 +211,28 @@ def test_doom_loop_is_honest_failure():
             assert not res.success, "doom-loop no debe declarar exito"
             assert "doom-loop" in res.final_output
             assert "sin respuesta final" in res.final_output
+        finally:
+            slog.close()
+
+    asyncio.run(run())
+
+
+def test_empty_reply_not_false_success():
+    """Un modelo que siempre responde vacío NO debe declarar éxito con output vacío."""
+    async def run():
+        slog = SessionLog(":memory:")
+        try:
+            sess = slog.create_session(project="phase8-empty")
+            reg = ToolRegistry()
+            reg.register_function(lambda text: "ok", name="echo")
+            router = ProviderRouter()
+            router.register_provider("mock", EmptyProvider())
+            router.register_model(ModelRoute(id="empty", provider_name="mock"))
+            loop = AgentLoop(provider_router=router, tool_registry=reg,
+                             budget=IterationBudget(max_iterations=10), session_log=slog)
+            res = await loop.run(task="di algo", session_id=sess.id, hint="coding")
+            assert not (res.success and not (res.final_output or "").strip()), \
+                "no debe ser success con output vacío"
         finally:
             slog.close()
 

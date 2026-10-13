@@ -381,6 +381,22 @@ class AgentLoop:
             out.append(d)
         return out
 
+    def _synthesize_from_tools(self, messages) -> str:
+        """Fallback cuando el modelo no da respuesta final: resume el último resultado de tool.
+
+        Evita declarar 'éxito' con output vacío (bug de 'reply vacío').
+        """
+        last = ""
+        for m in reversed(messages):
+            if getattr(m, "role", "") == "tool" and (getattr(m, "content", "") or "").strip():
+                last = (m.content or "").strip()
+                break
+        if not last:
+            return ""
+        if len(last) > 1500:
+            last = last[:1500] + "\n…[truncado]"
+        return "Listo (respuesta sintetizada de las herramientas ejecutadas):\n" + last
+
     async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
@@ -751,8 +767,9 @@ class AgentLoop:
                     if _reason:
                         _reason_retries = getattr(self, "_reason_retries", 0)
                         if _reason_retries >= 3:
-                            final_output = f"[razonamiento sin respuesta final tras {_reason_retries} intentos]"
-                            success = False
+                            _fb = self._synthesize_from_tools(messages)
+                            final_output = _fb or f"[razonamiento sin respuesta final tras {_reason_retries} intentos]"
+                            success = bool(_fb)
                             await _close_turn("reason-only")
                             break
                         self._reason_retries = _reason_retries + 1  # type: ignore[attr-defined]
@@ -761,12 +778,21 @@ class AgentLoop:
                         messages.append(LLMMessage(role="user", content="Continúa: usa tus herramientas si la tarea lo requiere, o da tu respuesta final."))
                         await _close_turn("empty-retry")
                         continue
-                    elif _empty_retries < 2:
+                    elif _empty_retries < 3:
                         self._empty_retries = _empty_retries + 1  # type: ignore[attr-defined]
-                        steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta vacía ({self._empty_retries}/2): reintentando"))
+                        steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta vacía ({self._empty_retries}/3): reintentando"))
                         messages.append(LLMMessage(role="user", content="Tu respuesta anterior llegó vacía. Responde de nuevo, de forma concisa."))
                         await _close_turn("empty-retry")
                         continue
+                    else:
+                        # Agotados los reintentos: NO declarar éxito con output vacío.
+                        # Sintetizar una respuesta desde el último resultado de tool (si lo hay).
+                        _fb = self._synthesize_from_tools(messages)
+                        final_output = _fb or "[sin respuesta del modelo tras varios intentos]"
+                        success = bool(_fb)
+                        steps.append(LoopStep(iteration=iteration, phase="decide", content="respuesta vacía agotada: " + ("sintetizada de tools" if _fb else "sin output")))
+                        await _close_turn("empty-exhausted")
+                        break
             messages.append(LLMMessage(role="assistant", content=assistant_content, tool_calls=llm_resp.tool_calls if llm_resp.has_tool_calls else ()))
 
             # Trajectory
