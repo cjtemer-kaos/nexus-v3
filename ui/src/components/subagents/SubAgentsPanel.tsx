@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { statusApi } from '@/lib/api'
+import { useAppStore } from '@/store/app-store'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Bot, RefreshCw, Loader2, GitBranch } from 'lucide-react'
@@ -20,26 +19,10 @@ const STATUS: Record<string, string> = {
 }
 
 export function SubAgentsPanel() {
-  const [subs, setSubs] = useState<Record<string, Child[]>>({})
-  const [loading, setLoading] = useState(false)
-  const alive = useRef(true)
-  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
-
-  const load = async () => {
-    setLoading(true)
-    try {
-      const s = await statusApi()
-      if (alive.current) setSubs(s.sub_agents as Record<string, Child[]>)
-    } catch { /* best-effort */ } finally {
-      if (alive.current) setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    void load()
-    const iv = setInterval(() => void load(), 4000)
-    return () => clearInterval(iv)
-  }, [])
+  const { liveStatus, loadStatus } = useAppStore()
+  const subs = (liveStatus?.sub_agents ?? {}) as Record<string, Child[]>
+  const loading = false
+  const load = () => void loadStatus()
 
   const total = Object.values(subs).reduce((n, a) => n + a.length, 0)
 

@@ -24,6 +24,6 @@ export function TabsTrigger({ value, children, className }: { value: string; chi
 }
 export function TabsContent({ value, children, className }: { value: string; children: React.ReactNode; className?: string }) {
   const ctx = React.useContext(TabsCtx)!
-  if (ctx.value !== value) return null
-  return <div className={cn(className)}>{children}</div>
+  // Se mantiene MONTADO (oculto con `hidden`) al cambiar de tab: no perder estado/drafts.
+  return <div className={cn(ctx.value === value ? '' : 'hidden', className)}>{children}</div>
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { providersApi, sessionsApi, createSessionApi, deleteSessionApi, sessionMessagesApi } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi, deleteSessionApi, sessionMessagesApi, statusApi, type NexusStatus } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
@@ -40,6 +40,8 @@ type AppState = {
   setActiveSession: (id: string) => void
   activeAgent: string
   setActiveAgent: (id: string) => void
+  liveStatus: NexusStatus | null
+  loadStatus: () => Promise<void>
   loadSessions: () => Promise<void>
   ensureSession: () => Promise<string>
   createSession: () => void
@@ -110,6 +112,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveSession: (activeSession) =>
     set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] })),
   setActiveAgent: (activeAgent) => set({ activeAgent }),
+  liveStatus: null,
+  loadStatus: async () => {
+    try { set({ liveStatus: await statusApi() }) } catch { /* best-effort */ }
+  },
   loadSessions: async () => {
     try {
       const data = await sessionsApi()

@@ -18,7 +18,7 @@ import { useAppStore } from '@/store/app-store'
 import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState, useEffect } from 'react'
-import { searchApi, statusApi } from '@/lib/api'
+import { searchApi } from '@/lib/api'
 
 const viewLabels: Record<string, string> = {
   chat: 'Chat',
@@ -39,26 +39,20 @@ const viewLabels: Record<string, string> = {
 type SearchResult = { role: string; content: string }
 
 export default function App() {
-  const { view, setView, activeSession, refreshProviders, loadSessions, ensureSession } = useAppStore()
+  const { view, setView, activeSession, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus } = useAppStore()
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [showNotifications, setShowNotifications] = useState(false)
-  const [live, setLive] = useState<{ running: number; subs: number } | null>(null)
 
   useEffect(() => {
-    let stop = false
-    const tick = async () => {
-      try {
-        const s = await statusApi()
-        if (!stop) setLive({ running: s.counts.running, subs: s.counts.sessions_with_subagents })
-      } catch { /* best-effort */ }
-    }
-    void tick()
-    const iv = setInterval(tick, 4000)
-    return () => { stop = true; clearInterval(iv) }
-  }, [])
+    // Poll único de /api/status (lo comparten App + SubAgentsPanel vía el store).
+    void loadStatus()
+    const iv = setInterval(() => { void loadStatus() }, 4000)
+    return () => clearInterval(iv)
+  }, [loadStatus])
+  const live = liveStatus ? { running: liveStatus.counts.running, subs: liveStatus.counts.sessions_with_subagents } : null
 
   useEffect(() => {
     // Kick off dynamic provider detection at app start

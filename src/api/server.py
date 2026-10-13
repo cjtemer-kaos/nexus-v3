@@ -3476,6 +3476,15 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         import json as _json
         from src.core.sub_agent_spawner import SubAgentSpec
         sp = _get_spawner(session_id, router, scope, cfg)
+        # Seed de contexto: si el modelo no pasó context, darle los últimos turnos del padre
+        # (así "arreglá eso" no queda huérfano). Compacto: últimos msgs × 300 chars.
+        if not context:
+            try:
+                _recent = _session_log().get_messages(session_id, limit=6)
+                context = "\n".join(f"[{m.role}] {(m.content or '')[:300]}"
+                                    for m in _recent if (m.content or "").strip())
+            except Exception:
+                context = ""
         spec = SubAgentSpec(task=task, gem=gema, context=context,
                             mode=mode if mode in ("one-shot", "continuable") else "one-shot")
         res = await sp.spawn_child(spec)
