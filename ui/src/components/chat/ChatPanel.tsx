@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText, Database } from 'lucide-react'
+import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText, Database, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
@@ -11,10 +11,20 @@ type Pending = { key: string; file: File; preview?: string }
 const now = () => new Date().toLocaleTimeString().slice(0, 5)
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
+// Resumen de una línea para el bloque colapsable de una tool (estilo opencode).
+const summarize = (s: string) => {
+  const first = (s || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '(sin salida)'
+  return first.length > 90 ? first.slice(0, 88) + '…' : first
+}
+
 export function ChatPanel() {
   const { messages, addMessage, activeSession, loadMessages } = useAppStore()
   const [input, setInput] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpanded = useCallback((id: string) => setExpanded(prev => {
+    const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n
+  }), [])
   const [attachToast, setAttachToast] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -268,13 +278,36 @@ export function ChatPanel() {
           </div>
         )}
         {messages.map((m) => (
+          m.role === 'tool' ? (
+            <div key={m.id} className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
+              <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">
+                <Wrench className="h-3.5 w-3.5 shrink-0 text-[#FFB86B]" />
+                <span className="shrink-0 font-mono text-[#FFB86B]">{m.toolName || 'tool'}</span>
+                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(m.content)}</span>
+                <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
+                <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
+              </button>
+              {expanded.has(m.id) && (
+                <div className="max-h-80 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">
+                  {m.content}
+                  <div className="mt-1.5">
+                    <button onClick={() => { void navigator.clipboard.writeText(m.content).catch(()=>{}); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
+                      className="text-[10px] text-[#8CC1FF] hover:underline">
+                      {copied===m.id ? 'copiado' : 'copiar salida'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
           <div key={m.id} className={cn('flex gap-3', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             {m.role !== 'user' && (
-              <div className={cn('mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full', m.role === 'tool' ? 'bg-[#FFB86B]/15 text-[#FFB86B]' : 'bg-[#0B62D6] text-white')}>
-                {m.role === 'tool' ? <Wrench className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#0B62D6] text-white">
+                <Bot className="h-3.5 w-3.5" />
               </div>
             )}
-            <div className={cn('group relative max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed', m.role === 'user' ? 'bg-[#0B62D6] text-white rounded-br-sm' : m.role === 'tool' ? 'bg-[#FFB86B]/10 border border-[#FFB86B]/20 text-[#FFE0B0]' : 'bg-[#1E2127] border border-[#2C3037] text-[#EDEEF0]')}>
+            <div className={cn('group relative max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed', m.role === 'user' ? 'bg-[#0B62D6] text-white rounded-br-sm' : 'bg-[#1E2127] border border-[#2C3037] text-[#EDEEF0]')}>
               {m.toolName && <div className="mb-1 text-xs font-mono text-[#FFB86B]/80">{m.toolName}</div>}
               {m.images && m.images.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-2">
@@ -297,6 +330,7 @@ export function ChatPanel() {
             </div>
             {m.role === 'user' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#22262D] text-[#9BA1AA]"><User className="h-3.5 w-3.5" /></div>}
           </div>
+          )
         ))}
         {(lastTodos && lastTodos.todos?.length > 0) && (
           <div className="rounded-xl border border-[#4C9DFF]/20 bg-[#4C9DFF]/10 p-3 text-xs">
