@@ -282,20 +282,6 @@ export function ChatPanel() {
             </div>
           </div>
         )}
-        {reasoning && (
-          <div className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
-            <button onClick={() => setShowReasoning(v => !v)} aria-expanded={showReasoning}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">
-              <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#C5A3FF]" />
-              <span className="shrink-0 text-[#C5A3FF]">Pensando…</span>
-              <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(reasoning)}</span>
-              <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', showReasoning && 'rotate-90')} />
-            </button>
-            {showReasoning && (
-              <div className="max-h-60 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">{reasoning}</div>
-            )}
-          </div>
-        )}
         {messages.map((m) => (
           m.role === 'tool' ? (
             <div key={m.id} className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
@@ -361,6 +347,20 @@ export function ChatPanel() {
           <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs">
             <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trajectory: {lastSteps.length} pasos {showTraj? '▾':'▸'}</button>
             {showTraj && <div className="mt-2 space-y-2 max-h-64 overflow-auto">{lastSteps.map((s:any,i:number)=>(<div key={i} className="rounded-lg border border-[#2C3037] bg-[#15171B] p-2"><div className="flex gap-2 text-[#9BA1AA]">#{s.iteration} <span className="text-[#4C9DFF]">{s.phase}</span> {s.tool_used && <span className="text-[#FFB86B]">{s.tool_used}</span>}</div><div className="mt-1 whitespace-pre-wrap text-[#EDEEF0]">{String(s.content||'').slice(0,600)}</div></div>))}</div>}
+          </div>
+        )}
+        {reasoning && (
+          <div className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
+            <button onClick={() => setShowReasoning(v => !v)} aria-expanded={showReasoning}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#C5A3FF]" />
+              <span className="shrink-0 text-[#C5A3FF]">Pensando…</span>
+              <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(reasoning)}</span>
+              <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', showReasoning && 'rotate-90')} />
+            </button>
+            {showReasoning && (
+              <div className="max-h-60 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">{reasoning}</div>
+            )}
           </div>
         )}
         {isStreaming && (
