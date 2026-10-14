@@ -321,6 +321,15 @@ class AgentLoop:
                         await _r
                 except Exception:
                     pass
+            elif et == "reasoning":
+                _onr = getattr(self, "_on_reasoning", None)
+                if _onr is not None:
+                    try:
+                        _r = _onr(ev.get("text", ""))
+                        if asyncio.iscoroutine(_r):
+                            await _r
+                    except Exception:
+                        pass
             elif et == "final":
                 final = ev.get("response")
         if final is None:
@@ -397,7 +406,7 @@ class AgentLoop:
             last = last[:1500] + "\n…[truncado]"
         return "Listo (respuesta sintetizada de las herramientas ejecutadas):\n" + last
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, steer=None, extra_system: str | None = None) -> LoopResult:
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, on_reasoning=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -431,6 +440,7 @@ class AgentLoop:
             pass
         self._req_model = model  # type: ignore[attr-defined]
         self._on_delta = on_delta  # type: ignore[attr-defined]
+        self._on_reasoning = on_reasoning  # type: ignore[attr-defined]
         # P0 prompt-cache stickiness: fija el modelo UNA vez por run (si no se pidió uno)
         # para no invalidar el prompt/KV cache cambiando de modelo entre turnos.
         if (self._req_model is None and getattr(self, "router", None) is not None
@@ -724,6 +734,14 @@ class AgentLoop:
 
             # Append assistant message to history
             assistant_content = llm_resp.content or ""
+            # Emitir el RAZONAMIENTO del modelo (si lo hay) via callback -> la UI lo
+            # muestra como una linea "Pensando…" colapsable (estilo opencode).
+            _rc = (getattr(llm_resp, "reasoning_content", "") or "").strip()
+            if _rc and getattr(self, "_on_reasoning", None) is not None:
+                try:
+                    await self._on_reasoning(_rc)
+                except Exception:
+                    pass
             # Max-tokens: si el provider cortó por límite y no hay contenido ni
             # tool calls, NO inyectar un assistant vacío (rompe el protocolo y
             # contamina la trayectoria). Se cierran turno/paso y se sale.

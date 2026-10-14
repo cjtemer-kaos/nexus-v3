@@ -399,6 +399,18 @@ function createWindow() {
     console.error("[main] render-process-gone", details);
   });
 
+  // Zoom por teclado (Ctrl+= / Ctrl+- / Ctrl+0). Electron NO lo trae por defecto sin
+  // un menu con esos roles, por eso andaba en la version web y no en la app.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || !input.control) return;
+    const wc = mainWindow?.webContents;
+    if (!wc) return;
+    const k = input.key;
+    if (k === "=" || k === "+" || k === "Add") { wc.setZoomLevel(wc.getZoomLevel() + 0.5); event.preventDefault(); }
+    else if (k === "-" || k === "_" || k === "Subtract") { wc.setZoomLevel(wc.getZoomLevel() - 0.5); event.preventDefault(); }
+    else if (k === "0") { wc.setZoomLevel(0); event.preventDefault(); }
+  });
+
   return mainWindow;
 }
 

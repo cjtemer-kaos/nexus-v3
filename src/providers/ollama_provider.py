@@ -125,7 +125,8 @@ class OllamaProvider(BaseProvider):
                         args = {}
                 tcs.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=args if isinstance(args, dict) else {}))
         finish = "tool_calls" if tcs else "stop"
-        return LLMResponse(content=content, tool_calls=tuple(tcs), finish_reason=finish, model=model, usage={"total_tokens": data.get("eval_count", 0)})
+        _think = msg.get("thinking") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+        return LLMResponse(content=content, tool_calls=tuple(tcs), finish_reason=finish, model=model, usage={"total_tokens": data.get("eval_count", 0)}, reasoning_content=(_think or None))
 
     async def stream(self, messages, tools=None, model=None, **kw):
         """Streaming real via /api/chat con stream:true (deltas token a token)."""
@@ -160,6 +161,7 @@ class OllamaProvider(BaseProvider):
         if tools:
             payload["tools"] = tools
         content = ""
+        _think = ""
         tcs: list[ToolCall] = []
         _seen: set = set()
         _usage: dict = {}
@@ -178,6 +180,10 @@ class OllamaProvider(BaseProvider):
                 if chunk:
                     content += chunk
                     yield {"type": "text", "text": chunk}
+                _tchunk = msg.get("thinking") or msg.get("reasoning_content") or ""
+                if _tchunk:
+                    _think += _tchunk
+                    yield {"type": "reasoning", "text": _tchunk}
                 for tc in msg.get("tool_calls") or []:
                     _tid = tc.get("id", "")
                     # dedup estable por contenido (el conteo cambia -> duplicaba en reenvíos)
@@ -199,7 +205,8 @@ class OllamaProvider(BaseProvider):
                     break
         yield {"type": "final", "response": LLMResponse(
             content=content, tool_calls=tuple(tcs),
-            finish_reason=(_done_reason or ("tool_calls" if tcs else "stop")), model=model, usage=_usage)}
+            finish_reason=(_done_reason or ("tool_calls" if tcs else "stop")), model=model, usage=_usage,
+            reasoning_content=(_think or None))}
 
     async def health(self) -> bool:
         try:

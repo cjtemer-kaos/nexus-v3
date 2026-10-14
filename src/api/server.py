@@ -3718,7 +3718,7 @@ def _delegation_block() -> str:
 
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False,
-                          agent_id: str | None = None, on_delta=None):
+                          agent_id: str | None = None, on_delta=None, on_reasoning=None):
     """Un run de AgentLoop con la construccion estandar (config segura)."""
     from src.core.config import load_config
     from src.core.agent_loop import AgentLoop
@@ -3756,7 +3756,7 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     result = await loop.run(task=message, session_id=session_id, hint=hint,
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
-                            system_prompt=_sys or None, on_delta=on_delta,
+                            system_prompt=_sys or None, on_delta=on_delta, on_reasoning=on_reasoning,
                             steer=(lambda: _steer_drain(session_id)) if session_id else None,
                             extra_system=(_extra or None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
@@ -4164,6 +4164,10 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
             if text:
                 await q.put({"delta": text})
 
+        async def _on_reasoning(text: str):
+            if text:
+                await q.put({"reasoning": text})
+
         task = None
         sess = None
         try:
@@ -4182,6 +4186,7 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 model=None if model == "auto" else model,
                 agent_id=(agent_id or None),
                 on_delta=_on_delta,
+                on_reasoning=_on_reasoning,
             ))
             while not task.done():
                 try:

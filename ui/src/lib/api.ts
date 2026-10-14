@@ -62,7 +62,7 @@ export async function chatApi(
 // Streaming token-a-token (pi): consume /api/chat/stream (SSE) y llama onDelta por chunk.
 export async function chatStreamApi(
   message: string,
-  opts: { sessionId?: string; model?: string; agentId?: string; onDelta?: (t: string) => void } = {},
+  opts: { sessionId?: string; model?: string; agentId?: string; onDelta?: (t: string) => void; onReasoning?: (t: string) => void } = {},
 ): Promise<{ reply: string; success: boolean; session_id?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
@@ -92,6 +92,7 @@ export async function chatStreamApi(
       try {
         const obj = JSON.parse(line);
         if (obj.delta && opts.onDelta) opts.onDelta(String(obj.delta));
+        if (obj.reasoning && opts.onReasoning) opts.onReasoning(String(obj.reasoning));
         if (obj.reply) reply = String(obj.reply);
         if (obj.session_id) sessionId = String(obj.session_id);
       } catch {
