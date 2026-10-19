@@ -43,6 +43,8 @@ export function AgentsPanel() {
   const [saving, setSaving] = useState(false)
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [autoModel, setAutoModel] = useState('')
+  const [assignErr, setAssignErr] = useState<string | null>(null)
+  const [gemasErr, setGemasErr] = useState<string | null>(null)
   const assignSeq = useRef(0)
 
   const reload = async () => {
@@ -53,7 +55,10 @@ export function AgentsPanel() {
   }
 
   useEffect(() => { void reload() }, [])
-  useEffect(() => { gemasApi().then((r) => setGemas(r.gemas)).catch(() => {}) }, [])
+  useEffect(() => {
+    gemasApi().then((r) => { setGemas(r.gemas); setGemasErr(null) })
+      .catch((e) => setGemasErr(String(e).slice(0, 200)))
+  }, [])
   useEffect(() => { if (models.length === 0) void refreshProviders() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const applyGema = (gemaName: string) => {
@@ -65,8 +70,11 @@ export function AgentsPanel() {
       system_prompt: d.system_prompt || (g ? g.system_prompt : ''),
     }))
     setAutoModel('')
+    setAssignErr(null)
     const seq = ++assignSeq.current
-    if (gemaName) assignApi({ gema: gemaName }).then((r) => { if (seq === assignSeq.current) setAutoModel(r.assign.model) }).catch(() => {})
+    if (gemaName) assignApi({ gema: gemaName })
+      .then((r) => { if (seq === assignSeq.current) setAutoModel(r.assign.model) })
+      .catch((e) => { if (seq === assignSeq.current) setAssignErr(String(e).slice(0, 200)) })
   }
 
   const saveModel = async (a: Agent, model: string) => {
@@ -97,14 +105,17 @@ export function AgentsPanel() {
     catch (e) { setErr(String(e).slice(0, 200)) }
   }
 
-  const openCreate = () => { setDraft(EMPTY); setCreating(true); assignSeq.current++; setAutoModel('') }
+  const openCreate = () => { setDraft(EMPTY); setCreating(true); assignSeq.current++; setAutoModel(''); setAssignErr(null) }
   const openEdit = (a: Agent) => {
     setDraft({ name: a.name, emoji: a.emoji || '🤖', model: a.model, system_prompt: a.system_prompt, description: a.description, gema: a.gema || '' })
     setEditing(a)
     // recomputar el hint de modelo auto para la gema de ESTE agente (no dejar el de otro)
     setAutoModel('')
+    setAssignErr(null)
     const seq = ++assignSeq.current
-    if (a.gema && !a.model) assignApi({ gema: a.gema }).then((r) => { if (seq === assignSeq.current) setAutoModel(r.assign.model) }).catch(() => {})
+    if (a.gema && !a.model) assignApi({ gema: a.gema })
+      .then((r) => { if (seq === assignSeq.current) setAutoModel(r.assign.model) })
+      .catch((e) => { if (seq === assignSeq.current) setAssignErr(String(e).slice(0, 200)) })
   }
   const dialogOpen = creating || editing !== null
 
@@ -218,6 +229,7 @@ export function AgentsPanel() {
                   {gemas.map((g) => <option key={g.name} value={g.name}>{g.name} · {g.description}</option>)}
                 </select>
                 <div className="mt-1 text-[10px] text-[#9BA1AA]">La gema define la especialidad: si no escribes un system prompt, se usa el suyo y su hint de modelo.</div>
+                {gemasErr && <div className="mt-1 text-[10px] text-[#FFA8A8]">No se pudieron cargar las gemas: {gemasErr}. Podés elegir el modelo a mano.</div>}
               </div>
 
               <div>
@@ -228,9 +240,11 @@ export function AgentsPanel() {
                 <div className="mt-1 text-[10px] text-[#9BA1AA]">
                   {draft.model
                     ? 'Modelo explícito del ayudante.'
-                    : autoModel
-                      ? `Auto: el arnés le asignaría ${autoModel} (según lo disponible en la PC).`
-                      : 'Auto: el arnés elige el LLM según lo disponible en la PC.'}
+                    : assignErr
+                      ? `No se pudo calcular el modelo automático: ${assignErr}`
+                      : autoModel
+                        ? `Auto: el arnés le asignaría ${autoModel} (según lo disponible en la PC).`
+                        : 'Auto: el arnés elige el LLM según lo disponible en la PC.'}
                 </div>
               </div>
 

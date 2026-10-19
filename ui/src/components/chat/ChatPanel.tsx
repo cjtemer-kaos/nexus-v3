@@ -239,7 +239,9 @@ export function ChatPanel() {
             const pr = await apiFetch('/api/permission')
             const pj = await pr.json()
             if (stillActive()) addMessage({ id: uid(), role: 'tool', content: 'permiso ahora: ' + pj.permission, toolName: 'permission', timestamp: now() })
-          } catch {}
+          } catch (e) {
+            if (stillActive()) addMessage({ id: uid(), role: 'tool', content: `permiso: no se pudo releer (/api/permission): ${(e as Error).message.slice(0, 140)}`, toolName: 'permission', timestamp: now() })
+          }
         }
       } catch (e) { if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: now() }) }
       busyRef.current = false
