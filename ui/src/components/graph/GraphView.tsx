@@ -3,7 +3,7 @@ import ForceGraph2D from 'react-force-graph-2d'
 import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause, Brain } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, resError } from '@/lib/api'
 
 type GNode = {
   id: number; label: string; title: string; category: string; source: string;
@@ -24,6 +24,12 @@ type NodeDetail = {
   id: number; title: string; category: string; source: string; importance: number;
   tags: string; content: string; access_count: number; degree: number;
   neighbors: { edge_id: number; relation: string; weight: number; other_id: number; other_title: string; other_category: string; direction: string }[];
+}
+type NodeRevision = { revision: number; title: string; category: string; source: string; importance: number; tags: string; content: string; archived_at: string }
+type NodeHistory = {
+  node_id: number; topic_key: string; revision_count: number;
+  current: { revision: number; title: string; content: string; updated_at: string };
+  revisions: NodeRevision[];
 }
 type Mode = '3d' | '2d'
 type CamMode = 'seguir' | 'girar' | 'quieto'
@@ -104,6 +110,7 @@ export function GraphView() {
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [qApplied, setQApplied] = useState('')
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [category, setCategory] = useState('')
   const [community, setCommunity] = useState('')
   const [relation, setRelation] = useState('')
@@ -112,6 +119,7 @@ export function GraphView() {
   const [selected, setSelected] = useState<number | null>(null)
   const [detail, setDetail] = useState<NodeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
   const [hovered, setHovered] = useState<number | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [mode, setMode] = useState<Mode>('3d')
@@ -126,6 +134,11 @@ export function GraphView() {
   const [entities, setEntities] = useState<GraphEntity[] | null>(null)
   const [entityError, setEntityError] = useState<string | null>(null)
   const [graphStatus, setGraphStatus] = useState<GraphStatus | null>(null)
+  const [history, setHistory] = useState<NodeHistory | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyMsg, setHistoryMsg] = useState<string | null>(null)
+  const [citeMsg, setCiteMsg] = useState<string | null>(null)
+  const [restoringRev, setRestoringRev] = useState<number | null>(null)
   const searchSequence = useRef(0)
 
   const loadSeq = useRef(0)
@@ -215,18 +228,53 @@ export function GraphView() {
   const loadDetail = useCallback(async (id: number) => {
     const seq = ++detailSeq.current
     setSelected(id); setDetail(null); setDetailLoading(true)
+    setDetailError(null)
+    setHistory(null); setHistoryMsg(null)
     try {
       const res = await apiFetch(`/api/graph/node/${id}`)
-      if (!res.ok) throw new Error(`nodo ${res.status}`)
+      if (!res.ok) throw new Error(await resError(res, `nodo ${res.status}`))
       const j = await res.json()
       if (seq !== detailSeq.current) return
       setDetail(j)
-    } catch {
-      if (seq === detailSeq.current) setDetail(null)
+    } catch (e) {
+      if (seq === detailSeq.current) { setDetail(null); setDetailError((e as Error).message) }
     } finally {
       if (seq === detailSeq.current) setDetailLoading(false)
     }
   }, [])
+
+  const loadHistory = useCallback(async (id: number) => {
+    setHistoryLoading(true); setHistoryMsg(null)
+    try {
+      const res = await apiFetch(`/api/graph/node/${id}/history`)
+      if (!res.ok) throw new Error(res.status === 404 ? 'nodo sin historial' : `historial ${res.status}`)
+      setHistory(await res.json())
+    } catch (e) {
+      setHistory(null); setHistoryMsg((e as Error).message)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
+  const restoreRevision = async (revision: number) => {
+    if (!detail || restoringRev !== null) return
+    setRestoringRev(revision)
+    setHistoryMsg(null)
+    try {
+      const res = await apiFetch(`/api/graph/node/${detail.id}/restore`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(j?.detail || `restore ${res.status}`)
+      await Promise.all([loadDetail(detail.id), loadHistory(detail.id)])
+      setHistoryMsg(`Restaurada la revisión ${revision}: ahora es la v${j.new_revision}`)
+    } catch (e) {
+      setHistoryMsg((e as Error).message)
+    } finally {
+      setRestoringRev(null)
+    }
+  }
 
   const graphData = useMemo(() => {
     if (!data) return { nodes: [], links: [] }
@@ -235,7 +283,6 @@ export function GraphView() {
       links: data.edges.map(e => ({ ...e, source: e.source, target: e.target })),
     }
   }, [data])
-
   const focusId = hovered ?? selected
   const neighborIds = useMemo(() => {
     if (!focusId || !data) return null
@@ -361,10 +408,11 @@ export function GraphView() {
     }
     setSearchResults([])
     setSearchLoading(true)
+    setSearchError(null)
     apiFetch(`/api/graph/search?q=${encodeURIComponent(query)}&limit=8`)
       .then(res => res.ok ? res.json() : Promise.reject(new Error(`búsqueda ${res.status}`)))
       .then(data => { if (requestId === searchSequence.current) setSearchResults(data.results ?? []) })
-      .catch(() => { if (requestId === searchSequence.current) setSearchResults([]) })
+      .catch((e) => { if (requestId === searchSequence.current) { setSearchResults([]); setSearchError((e as Error).message) } })
       .finally(() => { if (requestId === searchSequence.current) setSearchLoading(false) })
   }
 
@@ -376,10 +424,11 @@ export function GraphView() {
     const requestId = ++searchSequence.current
     setSearchResults([])
     setSearchLoading(true)
+    setSearchError(null)
     apiFetch(`/api/graph/search?q=${encodeURIComponent(name)}&limit=8`)
       .then(res => res.ok ? res.json() : Promise.reject(new Error(`búsqueda ${res.status}`)))
       .then(data => { if (requestId === searchSequence.current) setSearchResults(data.results ?? []) })
-      .catch(() => { if (requestId === searchSequence.current) setSearchResults([]) })
+      .catch((e) => { if (requestId === searchSequence.current) { setSearchResults([]); setSearchError((e as Error).message) } })
       .finally(() => { if (requestId === searchSequence.current) setSearchLoading(false) })
   }
 
@@ -529,10 +578,11 @@ export function GraphView() {
           <div className="absolute left-4 top-4 z-20 w-[min(22rem,calc(100%-2rem))] rounded-2xl border border-[#2C3037] bg-[#1E2127]/95 p-3 shadow-2xl backdrop-blur">
             <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-[#9BA1AA]">
               <span>Recall FTS5 · {searchResults.length} resultados</span>
-              <button aria-label="Cerrar resultados de búsqueda" onClick={() => { setSearchResults([]); setQApplied('') }} className="rounded p-1 hover:bg-[#2C3037]"><X className="h-3.5 w-3.5" /></button>
+              <button aria-label="Cerrar resultados de búsqueda" onClick={() => { setSearchResults([]); setQApplied(''); setSearchError(null) }} className="rounded p-1 hover:bg-[#2C3037]"><X className="h-3.5 w-3.5" /></button>
             </div>
             {searchLoading && <div className="text-xs text-[#9BA1AA]">Buscando en el grafo…</div>}
-            {!searchLoading && searchResults.length === 0 && <div className="text-xs text-[#9BA1AA]">Sin coincidencias FTS5.</div>}
+            {!searchLoading && searchError && <div className="text-xs text-[#FFA8A8]">No se pudo buscar: {searchError}</div>}
+            {!searchLoading && !searchError && searchResults.length === 0 && <div className="text-xs text-[#9BA1AA]">Sin coincidencias FTS5.</div>}
             <div className="max-h-56 space-y-1 overflow-auto">
               {searchResults.map(hit => (
                 <button key={hit.id} onClick={() => openNode(hit.id)} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-[#22262D]">
@@ -602,6 +652,7 @@ export function GraphView() {
               <button aria-label="Cerrar detalle" onClick={() => { setSelected(null); setDetail(null) }} className="rounded p-1 hover:bg-[#2C3037] text-[#9BA1AA]"><X className="h-4 w-4" /></button>
             </div>
             {detailLoading && <div className="mt-2 text-xs text-[#9BA1AA]">Cargando detalle…</div>}
+            {detailError && !detailLoading && <div className="mt-2 text-xs text-[#FFA8A8]">No se pudo cargar el nodo: {detailError}</div>}
             {detail && (
               <div className="mt-2 space-y-2 text-xs">
                 <div className="font-medium text-[#EDEEF0] leading-snug">{detail.title?.split('\n')[0]?.slice(0, 120)}</div>
@@ -610,14 +661,48 @@ export function GraphView() {
                   <Badge variant="outline">importancia {detail.importance}</Badge>
                   <Badge variant="outline">{detail.degree} conexiones</Badge>
                 </div>
-                <Button variant="outline" size="sm" onClick={async () => {
-                  try {
-                    const r = await apiFetch(`/api/graph/node/${detail.id}/cite`)
-                    const j = await r.json()
-                    await navigator.clipboard.writeText(j.citation || `[n${detail.id}] ${detail.title}`)
-                  } catch { /* clipboard no disponible */ }
-                }}>Copiar cita</Button>
+                <div className="flex flex-wrap gap-1">
+                  <Button variant="outline" size="sm" onClick={async () => {
+                    setCiteMsg(null)
+                    try {
+                      const r = await apiFetch(`/api/graph/node/${detail.id}/cite`)
+                      if (!r.ok) throw new Error(`cita ${r.status}`)
+                      const j = await r.json()
+                      await navigator.clipboard.writeText(j.citation || `[n${detail.id}] ${detail.title}`)
+                      setCiteMsg('cita copiada al portapapeles')
+                    } catch (e) {
+                      setCiteMsg('no se pudo copiar: ' + (e as Error).message)
+                    }
+                  }}>Copiar cita</Button>
+                  <Button variant="outline" size="sm" onClick={() => void loadHistory(detail.id)}>
+                    {historyLoading ? 'Cargando…' : 'Historial'}
+                  </Button>
+                </div>
+                {historyMsg && <div className="text-[10px] text-[#8CC1FF]">{historyMsg}</div>}
+                {citeMsg && <div className={`text-[10px] ${citeMsg.startsWith('no ') ? 'text-[#FFA8A8]' : 'text-[#3DDC84]'}`}>{citeMsg}</div>}
                 {detail.content && <div className="text-[#9BA1AA] leading-relaxed whitespace-pre-wrap max-h-40 overflow-auto">{detail.content.slice(0, 600)}{detail.content.length > 600 ? '…' : ''}</div>}
+                {history && (
+                  <div>
+                    <div className="text-[#9BA1AA] tracking-widest text-[11px] mb-1">HISTORIAL ({history.revision_count})</div>
+                    <div className="space-y-1">
+                      <div className="rounded-lg bg-[#22262D] px-2 py-1.5">
+                        <div className="font-mono text-[11px] text-[#3DDC84]">v{history.current.revision} · actual</div>
+                        <div className="line-clamp-2 whitespace-pre-wrap text-[10px] text-[#9BA1AA]">{history.current.content.slice(0, 200)}</div>
+                      </div>
+                      {history.revisions.map(rev => (
+                        <div key={rev.revision} className="rounded-lg bg-[#1E2127] px-2 py-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[11px] text-[#8CC1FF]">v{rev.revision}</span>
+                            <span className="text-[10px] text-[#9BA1AA]">{(rev.archived_at || '').replace('T', ' ').replace('Z', '')}</span>
+                            <Button variant="ghost" size="sm" className="ml-auto" disabled={restoringRev !== null} onClick={() => void restoreRevision(rev.revision)}>{restoringRev === rev.revision ? 'Restaurando…' : 'Restaurar'}</Button>
+                          </div>
+                          <div className="line-clamp-3 whitespace-pre-wrap text-[10px] text-[#9BA1AA]">{rev.content.slice(0, 300)}</div>
+                        </div>
+                      ))}
+                      {history.revisions.length === 0 && <div className="text-[10px] text-[#9BA1AA]">Sin versiones anteriores archivadas.</div>}
+                    </div>
+                  </div>
+                )}
                 {(detail.neighbors?.length ?? 0) > 0 && (
                   <div>
                     <div className="text-[#9BA1AA] tracking-widest text-[11px] mb-1">VECINOS ({detail.neighbors?.length ?? 0})</div>

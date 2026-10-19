@@ -29,6 +29,17 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   return fetch(url, init);
 }
 
+/** Mensaje legible de una respuesta no-ok: usa `detail` de FastAPI si existe. */
+export async function resError(res: Response, fallback = ""): Promise<string> {
+  const raw = (await res.text()).slice(0, 400);
+  try {
+    const j = JSON.parse(raw) as { detail?: unknown; error?: unknown };
+    const d = j?.detail ?? j?.error;
+    if (typeof d === "string" && d) return d;
+  } catch { /* body no-JSON */ }
+  return raw || fallback;
+}
+
 export async function chatApi(
   message: string,
   sessionId?: string,
@@ -63,7 +74,7 @@ export async function chatApi(
 export async function chatStreamApi(
   message: string,
   opts: { sessionId?: string; model?: string; agentId?: string; onDelta?: (t: string) => void; onReasoning?: (t: string) => void } = {},
-): Promise<{ reply: string; success: boolean; session_id?: string }> {
+): Promise<{ reply: string; success: boolean; error?: string; session_id?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 900000); // cap 15 min: alineado con el budget del server
@@ -81,6 +92,8 @@ export async function chatStreamApi(
     let buf = "";
     let reply = "";
     let sessionId = "";
+    let success = true;
+    let errorMsg = "";
     const handleEvent = (raw: string) => {
       const dataLines = raw
         .split("\n")
@@ -95,6 +108,8 @@ export async function chatStreamApi(
         if (obj.reasoning && opts.onReasoning) opts.onReasoning(String(obj.reasoning));
         if (obj.reply) reply = String(obj.reply);
         if (obj.session_id) sessionId = String(obj.session_id);
+        if (typeof obj.success === "boolean") success = obj.success;
+        if (obj.error) errorMsg = String(obj.error);
       } catch {
         /* chunk no-JSON: ignorar */
       }
@@ -111,7 +126,7 @@ export async function chatStreamApi(
       }
     }
     if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
-    return { reply, success: true, session_id: sessionId || undefined };
+    return { reply, success, error: errorMsg || undefined, session_id: sessionId || undefined };
   } catch (e) {
     if ((e as Error).name === "AbortError") throw new Error("stream timeout 900s — el modelo local tarda; reintenta");
     throw e;
@@ -195,9 +210,21 @@ export async function sessionsApi(limit = 1000): Promise<{ sessions: SessionInfo
   return res.json();
 }
 
-export async function createSessionApi(project = "default"): Promise<SessionInfo> {
-  const res = await apiFetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project }) });
+export async function createSessionApi(project = "default", parentId?: string): Promise<SessionInfo> {
+  const body: Record<string, unknown> = { project };
+  if (parentId) body.parent_id = parentId;
+  const res = await apiFetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`sessions POST ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function forkSessionApi(sessionId: string, copyMessages = true): Promise<{ ok: boolean; id: string }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ copy_messages: copyMessages }),
+  });
+  if (!res.ok) throw new Error(await resError(res, "no se pudo bifurcar la sesión"));
   return res.json();
 }
 
@@ -209,7 +236,7 @@ export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean
 
 export type SessionMessage = { role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number }
 
-export async function sessionMessagesApi(sessionId: string, limit = 200): Promise<SessionMessage[]> {
+export async function sessionMessagesApi(sessionId: string, limit = 10000): Promise<SessionMessage[]> {
   const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`);
   if (!res.ok) throw new Error(`messages ${res.status}`);
   const j = await res.json();
@@ -217,11 +244,12 @@ export async function sessionMessagesApi(sessionId: string, limit = 200): Promis
 }
 
 /** FTS5 global (todas las sesiones). El path de la sesión solo fija la ruta; la búsqueda es global. */
-export async function searchApi(query: string): Promise<{ role: string; content: string }[]> {
+export type SearchHit = { role: string; content: string; session_id?: string; id?: number | null; created_at?: string }
+export async function searchApi(query: string): Promise<SearchHit[]> {
   const res = await apiFetch(`/api/sessions/global/search?q=${encodeURIComponent(query)}`);
-  if (!res.ok) throw new Error(`search ${res.status}`);
+  if (!res.ok) throw new Error(await resError(res, `search ${res.status}`));
   const j = await res.json();
-  return (j.results ?? []) as { role: string; content: string }[];
+  return (j.results ?? []) as SearchHit[];
 }
 
 /* -- DECK: adjuntos, voz, keys, permisos ----------------------- */
@@ -236,12 +264,22 @@ export async function uploadApi(file: File): Promise<UploadResult> {
   return res.json()
 }
 
-export type VoiceStatus = { tts_available: boolean; stt_available: boolean; stt_model?: string; tts_model?: string }
+export type VoiceStatus = { tts_available: boolean; stt_available: boolean; stt_model?: string; tts_model?: string; tts_backend?: string; tts_voice?: string }
 
 export async function voiceStatusApi(): Promise<VoiceStatus> {
   const res = await apiFetch("/api/voice/status")
   if (!res.ok) throw new Error(`voice ${res.status}`)
   return res.json()
+}
+
+export async function voiceTtsApi(text: string): Promise<Blob> {
+  const res = await apiFetch("/api/voice/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 200))
+  return res.blob()
 }
 
 export async function voiceSttApi(audio: Blob, language = "es"): Promise<{ text: string; duration?: number }> {
@@ -394,7 +432,7 @@ export async function checkpointRestoreApi(sessionId: string, id: string): Promi
   return res.json()
 }
 
-export type BoardTask = { id: string; title: string; description: string; status: string; assignee: string; created_by: string; priority: number; deps: string[]; notes: string }
+export type BoardTask = { id: string; title: string; description: string; status: string; assignee: string; created_by: string; priority: number; deps: string[]; notes: string; lease_expires_at?: number | null }
 
 export async function boardApi(): Promise<{ tasks: BoardTask[] }> {
   const res = await apiFetch("/api/board/tasks")
@@ -451,13 +489,13 @@ export async function approvalsApi(sessionId = ""): Promise<{ approvals: Approva
 
 export async function approvalApproveApi(id: string): Promise<{ ok: boolean; status?: string; error?: string }> {
   const res = await apiFetch(`/api/approvals/${encodeURIComponent(id)}/approve`, { method: "POST" })
-  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  if (!res.ok) throw new Error(await resError(res, "no se pudo aprobar"))
   return res.json()
 }
 
-export async function approvalRejectApi(id: string): Promise<{ ok: boolean; status?: string }> {
+export async function approvalRejectApi(id: string): Promise<{ ok: boolean; status?: string; error?: string }> {
   const res = await apiFetch(`/api/approvals/${encodeURIComponent(id)}/reject`, { method: "POST" })
-  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  if (!res.ok) throw new Error(await resError(res, "no se pudo rechazar"))
   return res.json()
 }
 
@@ -487,12 +525,12 @@ export async function worktreesApi(repo = ""): Promise<{ worktrees: Worktree[] }
 }
 export async function worktreeAddApi(payload: { path: string; branch: string; repo?: string }): Promise<{ ok: boolean; output?: string; error?: string }> {
   const res = await apiFetch("/api/worktree", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  if (!res.ok) throw new Error(await resError(res, "no se pudo crear el worktree"))
   return res.json()
 }
 export async function worktreeRemoveApi(payload: { path: string; repo?: string }): Promise<{ ok: boolean; output?: string }> {
   const res = await apiFetch("/api/worktree/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  if (!res.ok) throw new Error(await resError(res, "no se pudo quitar el worktree"))
   return res.json()
 }
 
@@ -510,7 +548,7 @@ export async function pluginsApi(): Promise<{ plugins: PluginInfo[] }> {
   if (!res.ok) throw new Error(`plugins ${res.status}`)
   return res.json()
 }
-export async function pluginsReloadApi(): Promise<{ ok: boolean; loaded: string[] }> {
+export async function pluginsReloadApi(): Promise<{ ok: boolean; loaded: string[]; available: string[]; errors: { plugin: string; error: string }[]; failed: string[]; dir: string }> {
   const res = await apiFetch("/api/plugins/reload", { method: "POST" })
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()

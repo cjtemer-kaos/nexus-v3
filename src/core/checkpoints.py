@@ -28,8 +28,11 @@ def snapshot(session_id: str, path: str | Path) -> str | None:
         base = _session_dir(session_id)
         base.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
+        # sufijo sub-segundo: dos snapshots del mismo archivo en el mismo segundo
+        # no deben pisarse (si no, se pierde el undo intermedio).
+        uniq = f"{time.time_ns() % 1_000_000:06d}"
         h = hashlib.sha1(str(p.resolve()).encode("utf-8", "replace")).hexdigest()[:8]
-        dest = base / f"{ts}__{p.name}__{h}"
+        dest = base / f"{ts}_{uniq}__{p.name}__{h}"
         shutil.copy2(p, dest)
         with (base / "index.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps({"id": dest.name, "path": str(p), "ts": ts}, ensure_ascii=False) + "\n")

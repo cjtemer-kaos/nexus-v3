@@ -1,8 +1,6 @@
 """Sección [6] Config validation (paridad run_tests.py)."""
 from __future__ import annotations
 
-import os
-
 import pytest
 from src.core.config import CONFIG_PATH, SCHEMA_PATH, check_config, load_config, validate_config
 
@@ -24,17 +22,12 @@ def test_check_config():
     assert "valid" in cc and "providers" in cc and "router" in cc
 
 
-def test_env_expansion(tmp_path):
-    orig = os.environ.get("NEXUS_V3_BRAIN")
-    try:
-        os.environ["NEXUS_V3_BRAIN"] = "/tmp/test_brain_expansion"
-        cfg_exp = load_config()
-        assert "/tmp" in str(cfg_exp.get("brain", {}).get("path"))
-    finally:
-        if orig is None:
-            os.environ.pop("NEXUS_V3_BRAIN", None)
-        else:
-            os.environ["NEXUS_V3_BRAIN"] = orig
+def test_env_expansion(tmp_path, monkeypatch):
+    # monkeypatch: no filtrar variables al resto de la suite si el test falla.
+    target = tmp_path / "brain_exp"
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(target))
+    cfg_exp = load_config()
+    assert str(target) in str(cfg_exp.get("brain", {}).get("path"))
 
 
 def test_validate_config_invalid_missing_db_path():

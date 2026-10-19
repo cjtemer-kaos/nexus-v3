@@ -109,7 +109,8 @@ export function VoiceMic({ onTranscript }: { onTranscript: (text: string) => voi
     } catch (e) {
       if (cancelledRef.current) return
       const msg = (e as Error).message || String(e)
-      if (msg.includes('501') && getSR()) { startSR(); return }
+      // 503 = STT local no disponible (501 en versiones viejas); cae al STT del navegador.
+      if ((msg.includes('503') || msg.includes('501') || /no disponible|not available/i.test(msg)) && getSR()) { startSR(); return }
       fail(msg.slice(0, 160))
     } finally {
       streamRef.current?.getTracks().forEach((t) => t.stop())

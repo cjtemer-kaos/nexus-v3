@@ -112,7 +112,7 @@ class ErrorClassifier:
 
     # Patrones de errores retryables
     RETRYABLE_PATTERNS = [
-        "timeout", "connection refused", "connection reset",
+        "timeout", "timed out", "connection refused", "connection reset",
         "rate limit", "429", "503", "502", "504",
         "database is locked", "busy", "temporary",
         "model loading", "out of memory", "cuda out of memory",
@@ -211,7 +211,7 @@ class ErrorClassifier:
         if any(p in error_str for p in cls.RETRYABLE_PATTERNS):
             return True
         # Por defecto, errores de IO y red son retryables
-        if error_type in ("timeout", "connectionerror", "oserror", "ioerror"):
+        if error_type in ("timeout", "timeouterror", "connectionerror", "oserror", "ioerror"):
             return True
         return False
 

@@ -439,3 +439,117 @@ def test_endpoint_learn_direct(tmp_path, monkeypatch):
     bad = client.post("/api/learn/direct", json={"content": ""})
     assert bad.status_code == 400
     reset_knowledge_memory()
+
+
+# --------------------------------------------------------------------------
+# historial de revisiones (supersede-not-delete)
+# --------------------------------------------------------------------------
+
+def test_upsert_archiva_la_revision_saliente(km):
+    r1 = km.learn("version uno del nodo", topic_key="hist/nodo")
+    r2 = km.learn("version dos del nodo", topic_key="hist/nodo")
+    assert r1["node_id"] == r2["node_id"]
+    h = km.node_history(r1["node_id"])
+    assert h["current"]["revision"] == 2
+    assert h["current"]["content"] == "version dos del nodo"
+    assert h["revision_count"] == 1
+    assert h["revisions"][0]["revision"] == 1
+    assert h["revisions"][0]["content"] == "version uno del nodo"
+
+
+def test_upsert_archiva_cada_revision_en_orden(km):
+    r = km.learn("v1", topic_key="hist/cadena", persist_observation=False)
+    for i in (2, 3, 4):
+        r = km.learn(f"v{i}", topic_key="hist/cadena", persist_observation=False)
+    h = km.node_history(r["node_id"])
+    assert h["current"]["revision"] == 4
+    assert [x["revision"] for x in h["revisions"]] == [3, 2, 1]
+    assert [x["content"] for x in h["revisions"]] == ["v3", "v2", "v1"]
+    assert km.status()["archived_revisions"] == 3
+
+
+def test_restore_es_append_only_y_reversible(km):
+    km.learn("contenido A", topic_key="hist/restore", persist_observation=False)
+    b = km.learn("contenido B", topic_key="hist/restore", persist_observation=False)
+    nid = b["node_id"]
+
+    res = km.restore_revision(nid, 1)
+    assert res["ok"] and res["restored_from"] == 1 and res["new_revision"] == 3
+    h = km.node_history(nid)
+    assert h["current"]["content"] == "contenido A"  # volvio la version vieja
+    assert h["current"]["revision"] == 3
+    # B no se perdio: quedo archivada
+    assert any(x["revision"] == 2 and x["content"] == "contenido B" for x in h["revisions"])
+
+    # y el restore es reversible: puedo volver a B
+    assert km.restore_revision(nid, 2)["new_revision"] == 4
+    assert km.node_history(nid)["current"]["content"] == "contenido B"
+
+
+def test_restore_refresca_fts(km):
+    r1 = km.learn('usamos "RestoreToken" en la version vieja', topic_key="hist/fts",
+                  persist_observation=False)
+    km.learn("contenido nuevo sin la entidad", topic_key="hist/fts",
+             persist_observation=False)
+    # al pisarla, la version vieja deja de estar indexada (solo se indexa la actual)
+    assert not km.fts_search("RestoreToken")
+
+    h = km.node_history(r1["node_id"])
+    vieja = h["revisions"][-1]["revision"]
+    assert km.restore_revision(r1["node_id"], vieja)["ok"]
+
+    hits = km.fts_search("RestoreToken")
+    assert hits and hits[0]["id"] == r1["node_id"], "tras restaurar, FTS5 la vuelve a hallar"
+
+
+def test_restore_revision_inexistente(km):
+    r = km.learn("nodo sin historial", topic_key="hist/sin", persist_observation=False)
+    res = km.restore_revision(r["node_id"], 99)
+    assert not res["ok"] and "no encontrada" in res["error"]
+    assert km.restore_revision(999999, 1)["ok"] is False
+
+
+def test_restore_requiere_topic_key(km):
+    r = km.learn("nodo dedupe sin topic_key", persist_observation=False)
+    res = km.restore_revision(r["node_id"], 1)
+    assert not res["ok"] and "topic_key" in res["error"]
+
+
+def test_history_de_nodo_inexistente(km):
+    assert "error" in km.node_history(424242)
+
+
+def test_endpoint_graph_history_and_restore(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(tmp_path))
+    from src.core.hybrid_memory import HybridMemoryBackend
+    monkeypatch.setattr(HybridMemoryBackend, "_get_embedding", lambda self, text: [])
+    reset_knowledge_memory()
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from src.api.server import app
+
+    client = TestClient(app)
+    n1 = client.post("/api/learn/direct", json={
+        "content": "primera version del nodo", "topic": "api/hist",
+    }).json()
+    n2 = client.post("/api/learn/direct", json={
+        "content": "segunda version del nodo", "topic": "api/hist",
+    }).json()
+    assert n2["revision"] == 2 and n2["node_id"] == n1["node_id"]
+
+    h = client.get(f"/api/graph/node/{n1['node_id']}/history")
+    assert h.status_code == 200, h.text
+    data = h.json()
+    assert data["current"]["revision"] == 2
+    assert data["revisions"][0]["content"] == "primera version del nodo"
+
+    vacio = client.post(f"/api/graph/node/{n1['node_id']}/restore", json={})
+    assert vacio.status_code == 400
+    r = client.post(f"/api/graph/node/{n1['node_id']}/restore", json={"revision": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["new_revision"] == 3
+    assert client.get(f"/api/graph/node/{n1['node_id']}/history").json()["current"]["content"] == "primera version del nodo"
+
+    assert client.post(f"/api/graph/node/{n1['node_id']}/restore", json={"revision": 77}).status_code == 404
+    assert client.get("/api/graph/node/999999/history").status_code == 404
+    reset_knowledge_memory()

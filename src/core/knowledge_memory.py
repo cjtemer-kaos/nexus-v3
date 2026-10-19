@@ -168,6 +168,29 @@ class KnowledgeMemory:
                 )
                 con.execute("CREATE INDEX IF NOT EXISTS idx_edges_from_node ON edges(from_node)")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_edges_to_node ON edges(to_node)")
+                # Historial de revisiones (supersede-not-delete): al pisar el
+                # contenido de un nodo con topic_key, la version saliente se
+                # archiva aca en vez de perderse. Restaurarla es escribir una
+                # version nueva, asi que el historial nunca se recorta.
+                con.execute(
+                    """CREATE TABLE IF NOT EXISTS node_revisions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                        revision INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        title TEXT NOT NULL DEFAULT '',
+                        category TEXT NOT NULL DEFAULT '',
+                        source TEXT NOT NULL DEFAULT '',
+                        importance INTEGER NOT NULL DEFAULT 5,
+                        tags TEXT NOT NULL DEFAULT '[]',
+                        content_hash TEXT NOT NULL DEFAULT '',
+                        archived_at TEXT NOT NULL DEFAULT '',
+                        UNIQUE(node_id, revision)
+                    )"""
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_node_revisions_node ON node_revisions(node_id)"
+                )
                 con.execute(
                     """CREATE TABLE IF NOT EXISTS knowledge_meta (
                         key TEXT PRIMARY KEY,
@@ -392,12 +415,25 @@ class KnowledgeMemory:
                     return {"deduped": True, "node_id": int(recent["id"])}
             if topic_key:
                 row = con.execute(
-                    "SELECT id, revision_count FROM nodes WHERE topic_key=? ORDER BY id LIMIT 1",
+                    "SELECT id, revision_count, content, title, category, source,"
+                    " importance, tags, content_hash FROM nodes WHERE topic_key=? ORDER BY id LIMIT 1",
                     (topic_key,),
                 ).fetchone()
                 if row:
                     node_id = int(row["id"])
-                    revision = int(row["revision_count"] or 0) + 1
+                    prev_revision = int(row["revision_count"] or 0)
+                    revision = prev_revision + 1
+                    # supersede-not-delete: la version que sale queda archivada
+                    # (y por lo tanto restaurable) antes de pisarla.
+                    con.execute(
+                        """INSERT OR IGNORE INTO node_revisions
+                           (node_id, revision, content, title, category, source,
+                            importance, tags, content_hash, archived_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        (node_id, prev_revision, row["content"], row["title"],
+                         row["category"], row["source"], int(row["importance"] or 5),
+                         row["tags"], row["content_hash"], now),
+                    )
                     con.execute(
                         """UPDATE nodes SET content=?, title=?, category=?, tags=?,
                            content_hash=?, updated_at=?, revision_count=?,
@@ -769,6 +805,88 @@ class KnowledgeMemory:
             con.close()
 
     # ------------------------------------------------------------------
+    # historial de revisiones (supersede-not-delete)
+    # ------------------------------------------------------------------
+    def node_history(self, node_id: int, limit: int = 50) -> dict[str, Any]:
+        """Version actual del nodo + sus revisiones archivadas (nuevas primero)."""
+        con = self._connect()
+        try:
+            cur = con.execute(
+                "SELECT id, title, category, source, importance, tags, content,"
+                " content_hash, topic_key, revision_count, created_at, updated_at"
+                " FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if not cur:
+                return {"error": "node not found", "node_id": node_id}
+            rows = con.execute(
+                "SELECT revision, title, category, source, importance, tags, content,"
+                " content_hash, archived_at FROM node_revisions"
+                " WHERE node_id=? ORDER BY revision DESC LIMIT ?",
+                (node_id, max(1, min(200, int(limit)))),
+            ).fetchall()
+            total = con.execute(
+                "SELECT count(*) FROM node_revisions WHERE node_id=?", (node_id,)
+            ).fetchone()[0]
+            return {
+                "node_id": node_id,
+                "topic_key": cur["topic_key"],
+                "current": {
+                    "revision": int(cur["revision_count"] or 0),
+                    "title": cur["title"], "category": cur["category"],
+                    "source": cur["source"], "importance": cur["importance"],
+                    "tags": cur["tags"], "content": cur["content"],
+                    "content_hash": cur["content_hash"],
+                    "created_at": cur["created_at"], "updated_at": cur["updated_at"],
+                },
+                "revisions": [dict(r) for r in rows],
+                "revision_count": int(total),
+            }
+        finally:
+            con.close()
+
+    def restore_revision(self, node_id: int, revision: int) -> dict[str, Any]:
+        """Restaura una revision archivada escribiendola como version nueva.
+
+        Append-only: la version que sale tambien se archiva, asi que restaurar
+        es reversible y el historial no se pierde. Reusa la via unica de
+        escritura, de modo que FTS5, entidades y auto-aristas quedan al dia.
+        """
+        con = self._connect()
+        try:
+            node = con.execute(
+                "SELECT id, topic_key FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if not node:
+                return {"ok": False, "error": "node not found", "node_id": node_id}
+            topic_key = str(node["topic_key"] or "")
+            old = con.execute(
+                "SELECT revision, content, title, category, source, importance, tags,"
+                " content_hash FROM node_revisions WHERE node_id=? AND revision=?",
+                (node_id, int(revision)),
+            ).fetchone()
+        finally:
+            con.close()
+        if not topic_key:
+            return {"ok": False, "node_id": node_id,
+                    "error": "el nodo no tiene topic_key: no hay versionado que restaurar"}
+        if old is None:
+            return {"ok": False, "node_id": node_id,
+                    "error": f"revision {revision} no encontrada"}
+        try:
+            tags = json.loads(old["tags"] or "[]")
+        except Exception:
+            tags = []
+        if not isinstance(tags, list):
+            tags = []
+        out = self._graph_upsert(
+            content=old["content"], topic_key=topic_key,
+            category=str(old["category"] or "general"), tags=[str(t) for t in tags],
+            title=str(old["title"] or ""), source=str(old["source"] or "restore"),
+            importance=int(old["importance"] or 5),
+            chash=str(old["content_hash"] or _sha1(str(old["content"] or ""))),
+        )
+        return {"ok": True, "node_id": node_id, "topic_key": topic_key,
+                "restored_from": int(revision), "new_revision": out.get("revision")}
+
+    # ------------------------------------------------------------------
     # maintain (brain_guard-lite)
     # ------------------------------------------------------------------
     def maintain(self) -> dict[str, Any]:
@@ -924,6 +1042,7 @@ class KnowledgeMemory:
             revisions = con.execute(
                 "SELECT COALESCE(SUM(revision_count-1),0) FROM nodes WHERE revision_count>1"
             ).fetchone()[0]
+            archived = con.execute("SELECT count(*) FROM node_revisions").fetchone()[0]
             fts_ok = con.execute(
                 "SELECT count(*) FROM sqlite_master WHERE name='nodes_fts'"
             ).fetchone()[0]
@@ -936,6 +1055,7 @@ class KnowledgeMemory:
                 "db": str(self.db_path),
                 "nodes": nodes, "edges": edges, "connected_nodes": connected,
                 "topic_nodes": with_topic, "total_revisions": revisions,
+                "archived_revisions": archived,
                 "entities": entities, "fts": bool(fts_ok),
                 "max_edges": MAX_EDGES, "edges_headroom": max(0, MAX_EDGES - edges),
             }

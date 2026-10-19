@@ -12,10 +12,14 @@ function KeysTab() {
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [msgOk, setMsgOk] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    keysApi().then((r) => { setKeys(r.keys); setEnvFile(r.env_file) }).catch((e) => setMsg(String(e).slice(0, 200)))
-  }, [])
+    setLoadError(null)
+    keysApi().then((r) => { setKeys(r.keys); setEnvFile(r.env_file) }).catch((e) => setLoadError(String(e).slice(0, 200)))
+  }, [reloadKey])
 
   const save = async (env: string, valueOverride?: string) => {
     setSaving(env); setMsg(null)
@@ -24,11 +28,20 @@ function KeysTab() {
       await keyPutApi(env, val)
       setDrafts((d) => ({ ...d, [env]: '' }))
       const r = await keysApi(); setKeys(r.keys)
-      setMsg(`${env} guardada en ${envFile} — efectiva al instante`)
-    } catch (e) { setMsg(String(e).slice(0, 300)) } finally { setSaving(null) }
+      setMsgOk(true)
+      setMsg(val.trim() ? `${env} guardada en ${envFile} — efectiva al instante` : `${env} eliminada de ${envFile}`)
+    } catch (e) { setMsgOk(false); setMsg(String(e).slice(0, 300)) } finally { setSaving(null) }
   }
 
-  if (!keys) return <div className="text-xs text-[#9BA1AA]">Cargando keys…</div>
+  if (!keys) return (
+    <div className={`text-xs ${loadError ? 'text-[#FFA8A8]' : 'text-[#9BA1AA]'}`}>
+      {loadError ? (
+        <>No se pudieron leer las keys: {loadError}{' '}
+          <button onClick={() => setReloadKey((n) => n + 1)} className="underline hover:text-white">Reintentar</button>
+        </>
+      ) : 'Cargando keys…'}
+    </div>
+  )
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs text-[#9BA1AA] leading-relaxed">
@@ -65,7 +78,7 @@ function KeysTab() {
           {k.providers.length > 0 && <div className="mt-1.5 flex flex-wrap gap-1">{k.providers.map((p) => <span key={p} className="rounded bg-[#22262D] px-1.5 py-0.5 text-[10px] text-[#9BA1AA]">{p}</span>)}</div>}
         </div>
       ))}
-      {msg && <div className="text-xs text-[#3DDC84]">{msg}</div>}
+      {msg && <div className={`text-xs ${msgOk ? 'text-[#3DDC84]' : 'text-[#FFA8A8]'}`}>{msg}</div>}
     </div>
   )
 }
@@ -74,14 +87,19 @@ function PermisoTab() {
   const [perm, setPerm] = useState<string | null>(null)
   const [options, setOptions] = useState<string[]>([])
   const [msg, setMsg] = useState<string | null>(null)
+  const [msgOk, setMsgOk] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    permissionApi().then((r) => { setPerm(r.permission); setOptions(r.options) }).catch((e) => setMsg(String(e).slice(0, 200)))
-  }, [])
+    setFailed(false)
+    permissionApi().then((r) => { setPerm(r.permission); setOptions(r.options) })
+      .catch((e) => { setMsg(String(e).slice(0, 200)); setFailed(true) })
+  }, [reloadKey])
 
   const set = async (p: string) => {
     const prev = perm; setPerm(p); setMsg(null)
-    try { await permissionPutApi(p); setMsg(`permiso aplicado: ${p}`) } catch (e) { setPerm(prev); setMsg(String(e).slice(0, 200)) }
+    try { await permissionPutApi(p); setMsgOk(true); setMsg(`permiso aplicado: ${p}`) } catch (e) { setPerm(prev); setMsgOk(false); setMsg(String(e).slice(0, 200)) }
   }
 
   const desc: Record<string, string> = {
@@ -90,7 +108,15 @@ function PermisoTab() {
     full: 'Control total de la PC (raíces detectadas + red). Usar con cuidado.',
   }
 
-  if (!perm) return <div className="text-xs text-[#9BA1AA]">Cargando permisos… {msg}</div>
+  if (!perm) return (
+    <div className={`text-xs ${failed ? 'text-[#FFA8A8]' : 'text-[#9BA1AA]'}`}>
+      {failed ? (
+        <>No se pudieron cargar los permisos: {msg}{' '}
+          <button onClick={() => { setMsg(null); setReloadKey((n) => n + 1) }} className="underline hover:text-white">Reintentar</button>
+        </>
+      ) : 'Cargando permisos…'}
+    </div>
+  )
   return (
     <div className="space-y-3">
       <div className="text-xs text-[#9BA1AA]">Guardia de Alcance — ACL por defecto denegado. El permiso se guarda en config.yaml y aplica al próximo tool-call.</div>
@@ -104,7 +130,7 @@ function PermisoTab() {
           {o === 'full' && <span className="ml-auto rounded-full border border-[#FF6259]/40 bg-[#FF6259]/10 px-2 py-0.5 text-[10px] text-[#FF6259]">riesgo total</span>}
         </label>
       ))}
-      {msg && <div className="text-xs text-[#3DDC84]">{msg}</div>}
+      {msg && <div className={`text-xs ${msgOk ? 'text-[#3DDC84]' : 'text-[#FFA8A8]'}`}>{msg}</div>}
     </div>
   )
 }
@@ -121,7 +147,7 @@ function VozTab() {
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs text-[#9BA1AA] leading-relaxed">
-        STT local (faster-whisper) para el micrófono del chat · TTS local (piper) para respuestas habladas. Sin modelos en el primer arranque, el server los baja.
+        STT (faster-whisper o endpoint HTTP) para el micrófono del chat · TTS (Piper si está instalado; si no, voz nativa de Windows vía SAPI). Sin descargas obligatorias.
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className={`rounded-xl border p-3 ${chip(status.stt_available)}`}>
@@ -130,7 +156,7 @@ function VozTab() {
         </div>
         <div className={`rounded-xl border p-3 ${chip(status.tts_available)}`}>
           <div className="font-semibold">TTS (voz)</div>
-          <div className="mt-0.5 font-mono text-[11px]">{status.tts_available ? `listo · ${status.tts_model || 'piper'}` : 'modelos ausentes'}</div>
+          <div className="mt-0.5 font-mono text-[11px]">{status.tts_available ? `listo · ${status.tts_backend || status.tts_model || 'tts'}` : 'no disponible'}</div>
         </div>
       </div>
       <div className="text-[11px] text-[#9BA1AA]">Fallback del navegador: si el STT local no está, el micrófono usa SpeechRecognition (Chrome/Edge).</div>

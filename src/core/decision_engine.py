@@ -15,10 +15,19 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.core.command_protocol import Command
+try:
+    from src.core.command_protocol import Command
+except ImportError:  # modulo legacy no incluido en el bundle: el motor sigue siendo importable
+    @dataclass
+    class Command:  # type: ignore[no-redef]
+        target: str
+        action: str
+        instruction: dict = field(default_factory=dict)
+        priority: int = 0
+        deadline_tokens: int = 0
 
 logger = logging.getLogger(__name__)
 

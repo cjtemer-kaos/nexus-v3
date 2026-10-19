@@ -272,3 +272,35 @@ def test_engine_uses_stub_endpoint(monkeypatch, tmp_path, stt_stub):
     res = eng.transcribe_file(str(wav))
     assert res["text"] == "hola mundo"
     assert res["segments"][1]["text"] == "mundo"
+
+
+# ---------------------------------------------------------------------------
+# 5. TTS: fallback SAPI nativo (sin modelos Piper) cuando corre en Windows
+# ---------------------------------------------------------------------------
+
+def test_tts_fallback_backend_reported(monkeypatch):
+    monkeypatch.setattr(ve.VoiceEngine, "_init_stt", lambda self: None)
+    eng = ve.VoiceEngine()
+    st = eng.get_status()
+    assert "tts_backend" in st
+    if not eng.available:
+        pytest.skip("sin TTS local (ni piper ni SAPI) en este entorno")
+    assert st["tts_backend"] in ("piper", "sapi")
+
+
+def test_tts_sapi_synthesizes_wav(monkeypatch):
+    import os
+
+    monkeypatch.setattr(ve.VoiceEngine, "_init_stt", lambda self: None)
+    monkeypatch.setattr(ve.VoiceEngine, "_init_tts", lambda self: None)
+    monkeypatch.setattr(ve.VoiceEngine, "_init_sapi", lambda self: None)
+    eng = ve.VoiceEngine()
+    eng.tts_backend = "sapi"
+    eng.available = True
+    if os.name != "nt":
+        pytest.skip("SAPI solo existe en Windows")
+    data = eng.speak_bytes("prueba de sintesis")
+    assert data and data[:4] == b"RIFF"
+    with wave.open(io.BytesIO(data)) as w:
+        assert w.getnframes() > 0
+        assert w.getnchannels() == 1

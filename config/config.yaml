@@ -39,7 +39,7 @@ scope:
   max_read_bytes: 1048576
   allow_network: true
   allow_mutating_without_confirm: false
-  permission: workspace_write
+  permission: full
 compaction:
   layers:
   - snip

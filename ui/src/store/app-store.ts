@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { providersApi, sessionsApi, createSessionApi, deleteSessionApi, sessionMessagesApi, statusApi, type NexusStatus } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi, forkSessionApi, deleteSessionApi, sessionMessagesApi, statusApi, type NexusStatus } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
@@ -36,17 +36,21 @@ type AppState = {
   setProviderHealth: (h: Record<string, ProviderStatus>) => void
   // chat
   sessions: SessionMeta[]
+  sessionsError: string | null
   activeSession: string
   setActiveSession: (id: string) => void
   activeAgent: string
   setActiveAgent: (id: string) => void
   liveStatus: NexusStatus | null
+  statusError: string | null
   loadStatus: () => Promise<void>
   loadSessions: () => Promise<void>
   ensureSession: () => Promise<string>
   createSession: () => void
+  forkSession: (id: string) => void
   deleteSession: (id: string) => void
   messages: ChatMessage[]
+  messagesError: string | null
   addMessage: (m: ChatMessage) => void
   updateMessage: (id: string, content: string) => void
   setMessages: (m: ChatMessage[]) => void
@@ -66,6 +70,7 @@ type AppState = {
 }
 
 let _ensurePromise: Promise<string> | null = null
+let _creatingSession = false
 
 export const useAppStore = create<AppState>((set, get) => ({
   view: 'chat',
@@ -105,6 +110,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setModels: (models: ModelOption[]) => set({ models }),
   setProviderHealth: (providerHealth: Record<string, ProviderStatus>) => set({ providerHealth }),
   sessions: [] as SessionMeta[],
+  sessionsError: null as string | null,
   activeSession: '',
   activeAgent: 'default',
   // Cambiar de sesión limpia el buffer local (evita ver mensajes de otra sesión
@@ -113,8 +119,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] })),
   setActiveAgent: (activeAgent) => set({ activeAgent }),
   liveStatus: null,
+  statusError: null,
   loadStatus: async () => {
-    try { set({ liveStatus: await statusApi() }) } catch { /* best-effort */ }
+    try { set({ liveStatus: await statusApi(), statusError: null }) }
+    catch (e) { set({ liveStatus: null, statusError: (e as Error).message }) }
   },
   loadSessions: async () => {
     try {
@@ -126,9 +134,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         summary: s.summary,
         source: 'server',
       }))
-      set({ sessions, activeSession: get().activeSession || sessions[0]?.id || '' })
-    } catch {
-      // server caido — conservar sesiones locales cargadas
+      set({ sessions, sessionsError: null, activeSession: get().activeSession || sessions[0]?.id || '' })
+    } catch (e) {
+      // server caído — conservar sesiones locales cargadas, pero decirlo
+      set({ sessionsError: (e as Error).message ?? String(e) })
     }
   },
   ensureSession: async () => {
@@ -156,6 +165,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     return _ensurePromise
   },
   createSession: () => {
+    if (_creatingSession) return
+    _creatingSession = true
     void (async () => {
       try {
         const s = await createSessionApi()
@@ -164,18 +175,47 @@ export const useAppStore = create<AppState>((set, get) => ({
           activeSession: s.id,
           messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
         }))
-      } catch {
-        // fallback local sin server
+      } catch (e) {
+        // fallback local sin server (queda marcado como 'local' y con aviso de error)
         set((st) => {
           const id = `s${Date.now()}`
-          return { sessions: [...st.sessions, { id, title: `Sesión ${st.sessions.length + 1}`, source: 'local' as const }], activeSession: id }
+          return {
+            sessions: [...st.sessions, { id, title: `Sesión ${st.sessions.length + 1}`, source: 'local' as const }],
+            activeSession: id,
+            sessionsError: `sin conexión con el backend: ${(e as Error).message}`,
+          }
         })
+      } finally {
+        _creatingSession = false
+      }
+    })()
+  },
+  forkSession: (id) => {
+    if (!id || _creatingSession) return
+    _creatingSession = true
+    void (async () => {
+      try {
+        const r = await forkSessionApi(id, true)
+        await get().loadSessions()
+        set({ activeSession: r.id, messages: [], sessionsError: null })
+        await get().loadMessages(r.id)
+      } catch (e) {
+        set({ sessionsError: `no se pudo bifurcar ${id}: ${(e as Error).message}` })
+      } finally {
+        _creatingSession = false
       }
     })()
   },
   deleteSession: (id) => {
     void (async () => {
-      try { await deleteSessionApi(id) } catch { /* si falla el server, igual lo quitamos del listado */ }
+      try {
+        await deleteSessionApi(id)
+      } catch (e) {
+        // No mentir: si el server no la borró (p.ej. 409 por sesiones hijas),
+        // la sesión sigue viva; se queda en el listado y se avisa el motivo.
+        set({ sessionsError: `no se pudo borrar ${id}: ${(e as Error).message}` })
+        return
+      }
       set((st) => {
         const sessions = st.sessions.filter((x) => x.id !== id)
         const wasActive = st.activeSession === id
@@ -188,6 +228,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })()
   },
   messages: [] as ChatMessage[],
+  messagesError: null,
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   updateMessage: (id, content) => set((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, content } : m)) })),
   setMessages: (messages) => set({ messages }),
@@ -212,12 +253,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         const localOnly = s.messages.filter(
           (m) => !serverIds.has(m.id) && !m.id.startsWith(`${sessionId}-`) && !sig.has(`${m.role}\u0000${m.content}`),
         )
-        return { messages: [...mapped, ...localOnly] }
+        return { messages: [...mapped, ...localOnly], messagesError: null }
       })
-    } catch {
+    } catch (e) {
       // server caído o sesión local (fallback) → buffer vacío, nunca mensajes ajenos
       if (get().activeSession !== sessionId) return
-      set({ messages: [] })
+      const isLocal = get().sessions.find((s) => s.id === sessionId)?.source === 'local'
+      set({
+        messages: [],
+        messagesError: isLocal ? null : `no se pudo cargar el historial: ${(e as Error).message}`,
+      })
     }
   },
   tabs: [] as FileTab[],

@@ -17,7 +17,7 @@ export function TabsTrigger({ value, children, className }: { value: string; chi
   const ctx = React.useContext(TabsCtx)!
   const active = ctx.value === value
   return (
-    <button onClick={() => ctx.setValue(value)} className={cn('px-3 py-1.5 text-sm rounded-lg transition-all font-medium', active ? 'bg-white text-zinc-900 shadow' : 'text-muted-foreground hover:text-foreground', className)}>
+    <button onClick={() => ctx.setValue(value)} className={cn('px-3 py-1.5 text-sm rounded-lg transition-all font-medium', active ? 'bg-[#2C3037] text-[#EDEEF0] shadow' : 'text-[#9BA1AA] hover:text-[#EDEEF0]', className)}>
       {children}
     </button>
   )

@@ -9,17 +9,35 @@ export function SkillsPanel() {
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [reloading, setReloading] = useState(false)
   const [tab, setTab] = useState<'skills' | 'tools' | 'plugins'>('tools')
 
   const load = async () => {
-    setLoading(true)
+    setLoading(true); setError(null)
     try {
       const [s, t, p] = await Promise.all([skillsApi(), toolsApi(), pluginsApi()])
       setSkills(s.skills); setTools(t.tools); setPlugins(p.plugins)
-    } catch {
-      // best-effort
+    } catch (e) {
+      setError('No se pudieron cargar las capacidades: ' + (e as Error).message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const reloadPlugins = async () => {
+    if (reloading) return
+    setReloading(true); setError(null)
+    try {
+      const r = await pluginsReloadApi()
+      await load()
+      if (r.errors?.length) {
+        setError(`recargados ${r.loaded.length}/${r.available.length}; fallaron: ${r.errors.map(e => `${e.plugin} (${e.error})`).join(' · ')}`)
+      }
+    } catch (e) {
+      setError('no se pudieron recargar los plugins: ' + (e as Error).message)
+    } finally {
+      setReloading(false)
     }
   }
 
@@ -38,14 +56,24 @@ export function SkillsPanel() {
           <button onClick={() => setTab('plugins')} className={`rounded-md px-2 py-0.5 text-xs ${tab === 'plugins' ? 'bg-[#2C3037] text-[#EDEEF0]' : 'text-[#9BA1AA]'}`}>Plugins ({plugins.length})</button>
         </div>
         {tab === 'plugins' && (
-          <Button variant="outline" size="sm" className="ml-auto" onClick={async () => { await pluginsReloadApi(); await load() }}>Recargar plugins</Button>
+          <Button variant="outline" size="sm" className="ml-auto" disabled={reloading} onClick={() => void reloadPlugins()}>
+            {reloading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />} Recargar plugins
+          </Button>
         )}
-        <Button variant="ghost" size="icon" aria-label="Recargar" onClick={() => void load()} className="ml-auto">
+        <Button variant="ghost" size="icon" aria-label="Recargar" disabled={loading} onClick={() => void load()} className="ml-auto">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </Button>
       </div>
       <ScrollArea className="flex-1">
-        {items.length === 0 && <div className="p-4 text-xs text-[#9BA1AA]">Nada para mostrar.</div>}
+        {error && (
+          <div className="flex items-center gap-2 border-b border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-4 py-2 text-xs text-[#FFA8A8]">
+            <span className="flex-1">{error}</span>
+            <button onClick={() => void load()} className="underline hover:text-white">Reintentar</button>
+          </div>
+        )}
+        {items.length === 0 && !error && (
+          <div className="p-4 text-xs text-[#9BA1AA]">{loading ? 'Cargando…' : 'Nada para mostrar.'}</div>
+        )}
         {tab === 'tools' && tools.map((t) => (
           <div key={t.name} className="border-b border-[#2C3037] px-4 py-2">
             <div className="flex items-center gap-2">
@@ -63,7 +91,7 @@ export function SkillsPanel() {
         ))}
         {tab === 'plugins' && (
           <>
-            {plugins.length === 0 && <div className="p-4 text-xs text-[#9BA1AA]">Sin plugins. Poné un .py en ./plugins con una función <span className="font-mono text-[#8CC1FF]">register(registry)</span>.</div>}
+            {plugins.length === 0 && !error && !loading && <div className="p-4 text-xs text-[#9BA1AA]">Sin plugins. Poné un .py en ./plugins con una función <span className="font-mono text-[#8CC1FF]">register(registry)</span>.</div>}
             {plugins.map((p) => (
               <div key={p.path} className="border-b border-[#2C3037] px-4 py-2">
                 <div className="font-mono text-xs text-[#8EE6B4]">{p.name}</div>

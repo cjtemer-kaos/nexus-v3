@@ -32,6 +32,8 @@ import io
 import json
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -395,8 +397,9 @@ class VoiceEngine:
     """Motor de voz unificado. API compatible con la version anterior."""
 
     def __init__(self, voice_config: Optional[VoiceConfig] = None):
-        # TTS state (legacy Piper)
+        # TTS state (Piper legacy; fallback SAPI nativo)
         self.available = False
+        self.tts_backend: Optional[str] = None  # "piper" | "sapi"
         self.model = None
         self.voice_name = "es_MX-claude-high"
         self.model_path = None
@@ -442,10 +445,67 @@ class VoiceEngine:
                 cfg = json.load(f)
             self.sample_rate = cfg.get("audio", {}).get("sample_rate", 22050)
             self.available = True
+            self.tts_backend = "piper"
             logger.info(f"TTS ready: {self.voice_name} ({self.sample_rate}Hz)")
         except Exception as e:
             logger.warning(f"TTS init failed: {e}")
             self.available = False
+            self._init_sapi()
+
+    def _init_sapi(self):
+        """Fallback TTS nativo de Windows (System.Speech): sin modelos ni descargas."""
+        if os.name != "nt" or not shutil.which("powershell"):
+            return
+        self.tts_backend = "sapi"
+        self.available = True
+        self.voice_name = os.environ.get("NEXUS_TTS_VOICE") or "sapi:default"
+        self.sample_rate = 22050
+        logger.info(f"TTS ready: Windows SAPI ({self.voice_name})")
+
+    def _sapi_wav(self, text: str) -> Optional[bytes]:
+        """Sintetiza con System.Speech (PowerShell) y devuelve WAV en memoria.
+
+        El texto y la ruta viajan por archivos UTF-8: nada del contenido entra
+        en el script, asi que no hay interpolacion ni inyeccion de comandos.
+        """
+        tmp_dir = Path(tempfile.gettempdir())
+        stamp = f"{os.getpid()}_{int(time.time() * 1000)}"
+        txt_path = tmp_dir / f"nexus_sapi_{stamp}.txt"
+        wav_path = tmp_dir / f"nexus_sapi_{stamp}.wav"
+        voice = os.environ.get("NEXUS_TTS_VOICE", "").strip()
+        select = ""
+        if voice:
+            select = f"try {{ $s.SelectVoice('{voice.replace(chr(39), chr(39) * 2)}') }} catch {{}}"
+        script = (
+            "Add-Type -AssemblyName System.Speech; "
+            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            f"{select} "
+            f"$s.SetOutputToWaveFile('{str(wav_path).replace(chr(39), chr(39) * 2)}'); "
+            f"$t = [IO.File]::ReadAllText('{str(txt_path).replace(chr(39), chr(39) * 2)}', [Text.Encoding]::UTF8); "
+            "$s.Speak($t); $s.Dispose()"
+        )
+        try:
+            txt_path.write_text(text, encoding="utf-8")
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if proc.returncode != 0 or not wav_path.exists():
+                logger.warning(f"SAPI TTS fallo: {(proc.stderr or b'')[:300]!r}")
+                return None
+            data = wav_path.read_bytes()
+            return data if data[:4] == b"RIFF" else None
+        except Exception as e:
+            logger.warning(f"SAPI TTS error: {e}")
+            return None
+        finally:
+            for p in (txt_path, wav_path):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
     def get_voices(self):
         voices = []
@@ -490,11 +550,17 @@ class VoiceEngine:
         return chunks
 
     def speak(self, text, out_path=None):
+        if out_path is None:
+            out_path = os.path.join(tempfile.gettempdir(), f"nexus_voice_{abs(hash(text)) % 100000}.wav")
+        if self.tts_backend == "sapi":
+            data = self._sapi_wav(text)
+            if not data:
+                return None
+            Path(out_path).write_bytes(data)
+            return out_path
         chunks = self.synthesize(text)
         if not chunks:
             return None
-        if out_path is None:
-            out_path = os.path.join(tempfile.gettempdir(), f"nexus_voice_{abs(hash(text)) % 100000}.wav")
         with wave.open(str(out_path), "w") as wav:
             wav.setnchannels(chunks[0].sample_channels)
             wav.setsampwidth(chunks[0].sample_width)
@@ -504,6 +570,8 @@ class VoiceEngine:
         return out_path
 
     def speak_bytes(self, text):
+        if self.tts_backend == "sapi":
+            return self._sapi_wav(text)
         chunks = self.synthesize(text)
         if not chunks:
             return None
@@ -708,6 +776,7 @@ class VoiceEngine:
             stt_endpoint_ok = False
         return {
             "tts_available": self.available,
+            "tts_backend": self.tts_backend,
             "tts_voice": self.voice_name if self.available else None,
             "tts_sample_rate": self.sample_rate if self.available else None,
             "stt_available": self.stt_available or bool(stt_endpoint_ok),

@@ -49,6 +49,10 @@ class BoundedHistory:
 
     def __len__(self):
         with self._lock:
+            # Con TTL, len() debe contar lo VIGENTE (no los expirados que aun no se
+            # desalojaron del deque): si no, len() y get_all() se contradicen.
+            if self._ttl > 0:
+                return len(self.get_all())
             return len(self._data)
 
     def __iter__(self):

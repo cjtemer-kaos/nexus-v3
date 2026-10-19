@@ -10,11 +10,12 @@ export function UsagePanel() {
   const [scope, setScope] = useState<'session' | 'global'>('session')
   const [u, setU] = useState<Usage | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
+    setLoading(true); setError(null)
     try { setU(await usageApi(scope === 'session' ? activeSession : '')) }
-    catch { setU(null) } finally { setLoading(false) }
+    catch (e) { setU(null); setError((e as Error).message) } finally { setLoading(false) }
   }, [scope, activeSession])
 
   useEffect(() => { void load() }, [load])
@@ -30,10 +31,17 @@ export function UsagePanel() {
           <button onClick={() => setScope('session')} className={`rounded-md px-2 py-0.5 text-xs ${scope === 'session' ? 'bg-[#2C3037] text-[#EDEEF0]' : 'text-[#9BA1AA]'}`}>Sesión</button>
           <button onClick={() => setScope('global')} className={`rounded-md px-2 py-0.5 text-xs ${scope === 'global' ? 'bg-[#2C3037] text-[#EDEEF0]' : 'text-[#9BA1AA]'}`}>Global</button>
         </div>
-        <Button variant="ghost" size="icon" aria-label="Recargar" className="ml-auto" onClick={() => void load()}>
+        <Button variant="ghost" size="icon" aria-label="Recargar" className="ml-auto" disabled={loading} onClick={() => void load()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </Button>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-2 border-b border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-4 py-2 text-xs text-[#FFA8A8]">
+          <span className="flex-1">No se pudo leer el uso: {error}</span>
+          <button onClick={() => void load()} className="underline hover:text-white">Reintentar</button>
+        </div>
+      )}
 
       <ScrollArea className="flex-1">
         <div className="p-4">
@@ -54,7 +62,7 @@ export function UsagePanel() {
 
           <div className="mt-4 text-[11px] uppercase tracking-widest text-[#9BA1AA]">Por modelo</div>
           <div className="mt-2 space-y-1.5">
-            {(u?.by_model ?? []).length === 0 && <div className="text-xs text-[#9BA1AA]">Sin datos aún (los tokens se registran por turno del agente).</div>}
+            {(u?.by_model ?? []).length === 0 && !error && !loading && <div className="text-xs text-[#9BA1AA]">Sin datos aún (los tokens se registran por turno del agente).</div>}
             {(u?.by_model ?? []).map((m) => (
               <div key={m.model} className="rounded-lg border border-[#2C3037] bg-[#1E2127] px-3 py-2">
                 <div className="flex items-center gap-2 text-xs">

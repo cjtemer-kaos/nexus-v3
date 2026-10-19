@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { File, Plus, X, Save, Search, Folder, RefreshCw, ArrowUp, HardDrive } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -46,6 +46,9 @@ function Tree({ entries, childrenMap, expanded, toggle, onOpenFile, depth=0 }: {
 export function FileEditor() {
   const { tabs, activeTab, setActiveTab, updateTab, openFile, closeTab, saveTab } = useAppStore()
   const [find, setFind] = useState('')
+  const [findCount, setFindCount] = useState(0)
+  const editorRef = useRef<any>(null)
+  const findIdx = useRef(0)
   const [toast, setToast] = useState<string | null>(null)
   const [root, setRoot] = useState('.')
   const [rootEntries, setRootEntries] = useState<FsEntry[]>([])
@@ -170,6 +173,26 @@ export function FileEditor() {
     )
   }
 
+  const countMatches = (q: string) => {
+    const model = editorRef.current?.getModel()
+    setFindCount(model && q.trim() ? model.findMatches(q, false, false, false, null, false).length : 0)
+  }
+
+  const findNext = () => {
+    const ed = editorRef.current
+    const q = find.trim()
+    if (!ed || !q) return
+    const model = ed.getModel()
+    const matches = model ? model.findMatches(q, false, false, false, null, false) : []
+    setFindCount(matches.length)
+    if (!matches.length) return
+    const i = findIdx.current % matches.length
+    findIdx.current = i + 1
+    ed.setSelection(matches[i].range)
+    ed.revealRangeInCenter(matches[i].range)
+    ed.focus()
+  }
+
   return (
     <div className="flex h-full">
       {explorer}
@@ -189,7 +212,8 @@ export function FileEditor() {
           <div className="ml-auto flex items-center gap-1 px-2">
             <div className="relative hidden sm:block">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#9BA1AA]" />
-              <input value={find} onChange={e=>setFind(e.target.value)} placeholder="Buscar" className="h-7 w-28 rounded-md border border-[#2C3037] bg-[#1E2127] pl-7 pr-2 text-xs placeholder:text-zinc-600 focus:outline-none" />
+              <input value={find} onChange={e=>{ setFind(e.target.value); findIdx.current = 0; countMatches(e.target.value) }} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); findNext() } }} placeholder="Buscar (Enter)" className="h-7 w-32 rounded-md border border-[#2C3037] bg-[#1E2127] pl-7 pr-7 text-xs placeholder:text-zinc-600 focus:outline-none" />
+              {find && <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[#9BA1AA]">{findCount}</span>}
             </div>
           </div>
         </div>
@@ -201,6 +225,7 @@ export function FileEditor() {
             language={tab.language}
             value={tab.content}
             onChange={(v)=> updateTab(activeTab, v ?? '')}
+            onMount={(ed)=> { editorRef.current = ed }}
             theme="vs-dark"
             options={{
               fontFamily: 'Geist Mono, JetBrains Mono, monospace',

@@ -10,6 +10,7 @@ export function WorktreesPanel() {
   const [branch, setBranch] = useState('')
   const [path, setPath] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -24,18 +25,28 @@ export function WorktreesPanel() {
   const add = async () => {
     const b = branch.trim(); const p = path.trim()
     if (!b || !p) { setError('branch y path son requeridos'); return }
+    if (busy) return
+    setBusy('add'); setError(null)
     try {
       const r = await worktreeAddApi({ branch: b, path: p })
-      if (!r.ok) setError(r.output || 'no se pudo crear')
+      if (!r.ok) { setError(r.output || 'no se pudo crear'); return }
       setBranch(''); setPath('')
       await load()
     } catch (e) { setError((e as Error).message) }
+    finally { setBusy(null) }
   }
 
   const remove = async (wt: Worktree) => {
     if (!confirm(`¿Quitar el worktree ${wt.path}?`)) return
-    try { await worktreeRemoveApi({ path: wt.path }); await load() }
+    if (busy) return
+    setBusy(wt.path); setError(null)
+    try {
+      const r = await worktreeRemoveApi({ path: wt.path })
+      if (!r.ok) { setError(r.output || 'no se pudo quitar'); return }
+      await load()
+    }
     catch (e) { setError((e as Error).message) }
+    finally { setBusy(null) }
   }
 
   return (
@@ -54,7 +65,7 @@ export function WorktreesPanel() {
           className="w-48 rounded-lg border border-[#2C3037] bg-[#1E2127] px-3 py-1.5 text-sm focus:outline-none focus:border-[#4C9DFF]/50" />
         <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="ruta destino (ej: ./wt/feature-x)"
           className="flex-1 min-w-52 rounded-lg border border-[#2C3037] bg-[#1E2127] px-3 py-1.5 text-sm focus:outline-none focus:border-[#4C9DFF]/50" />
-        <Button variant="outline" size="sm" onClick={() => void add()}><Plus className="mr-1 h-3.5 w-3.5" /> Crear</Button>
+        <Button variant="outline" size="sm" disabled={busy === 'add'} onClick={() => void add()}>{busy === 'add' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />} Crear</Button>
       </div>
 
       {error && <div className="border-b border-[#2C3037] bg-[#FF6B6B]/10 px-4 py-2 text-xs text-[#FFA8A8]">{error}</div>}
@@ -65,9 +76,9 @@ export function WorktreesPanel() {
           <div key={wt.path} className="flex items-center gap-3 border-b border-[#2C3037] px-4 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="truncate font-mono text-xs text-[#EDEEF0]">{wt.path}</div>
-              <div className="truncate text-[10px] text-[#9BA1AA]">{wt.branch || '(detached)'}{wt.head ? ` · ${wt.head.slice(0, 8)}` : ''}</div>
+              <div className="truncate text-[10px] text-[#9BA1AA]">{wt.branch || '(sin rama)'}{wt.head ? ` · ${wt.head.slice(0, 8)}` : ''}</div>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => void remove(wt)} title="Quitar"><Trash2 className="h-3.5 w-3.5 text-[#FFA8A8]" /></Button>
+            <Button variant="ghost" size="sm" disabled={busy === wt.path} onClick={() => void remove(wt)} title="Quitar">{busy === wt.path ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 text-[#FFA8A8]" />}</Button>
           </div>
         ))}
       </ScrollArea>

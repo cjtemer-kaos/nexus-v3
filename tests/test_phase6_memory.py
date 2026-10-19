@@ -270,3 +270,65 @@ def test_multi_signal_resilient_to_failing_signals():
         assert results[0].signals == ["keyword"]
 
     asyncio.run(run())
+
+
+# --------------------------------------------------------------------------
+# Brain link contra un brain sintetico: los tests de arriba se saltean si no
+# hay cerebro.db de v2, pero el lector debe funcionar con cualquier brain.
+# --------------------------------------------------------------------------
+
+def _make_synthetic_brain(tmp_path) -> Path:
+    import sqlite3
+
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    con = sqlite3.connect(brain / "cerebro.db")
+    for i in range(12):
+        con.execute(f"CREATE TABLE t{i} (x INTEGER)")
+        con.execute(f"INSERT INTO t{i} VALUES (?)", (i,))
+    con.commit()
+    con.close()
+    con = sqlite3.connect(brain / "nexus_memory.db")
+    con.execute("CREATE TABLE observations (id INTEGER, content TEXT)")
+    con.commit()
+    con.close()
+    return brain
+
+
+def test_query_cerebro_lee_un_brain_cualquiera(tmp_path, monkeypatch):
+    from src.brain.link import query_cerebro
+
+    brain = _make_synthetic_brain(tmp_path)
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(brain))
+
+    tables = query_cerebro("SELECT count(*) FROM sqlite_master WHERE type='table'")
+    assert tables[0][0] == 12
+    rows = query_cerebro("SELECT x FROM t3")
+    assert rows[0][0] == 3
+
+
+def test_brain_info_de_un_brain_cualquiera(tmp_path, monkeypatch):
+    from src.brain.link import get_brain_info
+
+    brain = _make_synthetic_brain(tmp_path)
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(brain))
+
+    info = get_brain_info()
+    assert info["brain_path"] == str(brain)
+    assert info["exists"] is True
+    assert info["files"]["cerebro.db"]["exists"] is True
+    assert info["files"]["cerebro.db"]["bytes"] > 0
+    assert info["files"]["sessions.db"]["exists"] is False
+    assert info["total_bytes"] > 0
+
+
+def test_brain_health_de_un_brain_cualquiera(tmp_path, monkeypatch):
+    from src.brain.link import check_brain_health
+
+    brain = _make_synthetic_brain(tmp_path)
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(brain))
+
+    health = check_brain_health()
+    assert health["cerebro.db"]["readable"] is True
+    assert health["nexus_memory.db"]["readable"] is True
+    assert health["sessions.db"]["exists"] is False

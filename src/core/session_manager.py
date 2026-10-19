@@ -110,6 +110,9 @@ class SequenceScrubber:
         if not messages:
             return []
 
+        # Copia defensiva: el scrub fusiona contenidos y NO debe mutar los dicts del llamador.
+        messages = [dict(m) for m in messages]
+
         cleaned = []
 
         # 1. Eliminar assistant/tool huerfanos al inicio (solo si hay mas mensajes despues)
@@ -175,7 +178,7 @@ class SequenceScrubber:
         if not messages:
             return []
 
-        result = [messages[0]]
+        result = [dict(messages[0])]
 
         for msg in messages[1:]:
             last_role = result[-1].get("role", "")
@@ -189,9 +192,9 @@ class SequenceScrubber:
                     # Fusionar user consecutivos
                     result[-1]["content"] += "\n" + msg.get("content", "")
                 else:
-                    result.append(msg)
+                    result.append(dict(msg))
             else:
-                result.append(msg)
+                result.append(dict(msg))
 
         # Asegurar que el ultimo mensaje sea user (para que el modelo responda)
         # Solo si hay mas de 1 mensaje y termina en assistant

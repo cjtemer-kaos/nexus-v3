@@ -1,12 +1,26 @@
 """
 Web Fetch - Fetch URL content and convert HTML to Markdown.
-Based on opencode/internal/llm/tools/fetch.go pattern.
 
-Uses httpx for HTTP requests and markdownify for HTML→MD conversion.
+El punto de entrada REAL del harness es la tool `web_fetch` registrada en
+`src/api/server.py` (valida SSRF en cada salto de redirect, no sigue redirects
+automaticos y envuelve el contenido en un fence de "dato no confiable").
+
+Este modulo provee:
+  - `is_safe_url()`: chequeo SSRF (privadas/loopback/link-local/metadata).
+  - `web_fetch()`: fetch async con httpx + markdownify (si estan instalados).
+  - `HTTPFetcher`: fallback sincronico con urllib, con la MISMA validacion SSRF
+    por salto (no usar urllib con redirects automaticos: un 302 puede saltar a
+    una IP privada y saltear el chequeo).
 """
 
 import logging
+import re
+import socket
+import ipaddress
+import urllib.error
+import urllib.request
 from typing import Dict
+from urllib.parse import urljoin, urlparse
 
 try:
     import httpx
@@ -14,20 +28,18 @@ try:
 except ImportError:
     HTTPX_AVAILABLE = False
 
-import re
-
 try:
     import markdownify
     MARKDOWNIFY_AVAILABLE = True
 except ImportError:
     MARKDOWNIFY_AVAILABLE = False
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "SuperNEXUS/2.0 (AI Assistant)"
 MAX_CONTENT_LENGTH = 50000
 DEFAULT_TIMEOUT = 120
+MAX_REDIRECTS = 5
 
 # DNS Blocklist - Dominios bloqueados por seguridad
 DNS_BLOCKLIST = {
@@ -48,9 +60,15 @@ BLOCKED_DOMAIN_PATTERNS = [
 ]
 
 
-import socket
-import ipaddress
-from urllib.parse import urlparse, urljoin
+def _ip_is_blocked(ip) -> bool:
+    """Privada/loopback/link-local/reservada/multicast/unspecified (incl. IPv4-mapped)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
 
 def is_safe_url(url: str) -> bool:
     """Check if the URL hostname resolves to a safe (non-private, non-loopback) IP address."""
@@ -73,19 +91,15 @@ def is_safe_url(url: str) -> bool:
         # Check if the hostname itself is a raw IP first
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                return False
+            return not _ip_is_blocked(ip)
         except ValueError:
             # Resolve DNS to check for private IPs
-            import socket
             try:
                 addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             except socket.gaierror:
                 return False  # DNS resolution failed — block for safety
             for info in addr_info:
-                ip_str = info[4][0]
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                if _ip_is_blocked(ipaddress.ip_address(info[4][0])):
                     return False
         return True
     except Exception:
@@ -207,3 +221,88 @@ async def web_fetch(
         return {"error": f"Could not connect to {url}", "url": url}
     except Exception as e:
         return {"error": str(e), "url": url}
+
+
+def _html_to_text(html: str) -> str:
+    """HTML → texto plano legible (sin script/style y sin escapar el markup)."""
+    html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
+    html = re.sub(r"(?is)<!--.*?-->", " ", html)
+    html = re.sub(r"(?i)<br\s*/?>", "\n", html)
+    html = re.sub(r"(?i)</(p|div|li|tr|h[1-6]|section|article|header|footer|table)>", "\n", html)
+    text = re.sub(r"<[^>]+>", " ", html)
+    for entity, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'),
+                         ("&#39;", "'"), ("&apos;", "'"), ("&nbsp;", " ")):
+        text = text.replace(entity, char)
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Anula el redirect automatico de urllib: lo hacemos a mano para validar SSRF."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class HTTPFetcher:
+    """Fallback sincronico (urllib) con la misma politica SSRF que `web_fetch`.
+
+    Nunca sigue redirects automaticamente: cada `Location` se valida con
+    `is_safe_url()` antes del siguiente salto, asi un 302 hacia 127.0.0.1 no
+    puede saltearse el chequeo.
+    """
+
+    def __init__(self, url: str, timeout: int = DEFAULT_TIMEOUT, max_length: int = MAX_CONTENT_LENGTH):
+        self.url = url
+        self.timeout = timeout
+        self.max_length = max_length
+        self._opener = urllib.request.build_opener(_NoRedirectHandler)
+        self._opener.addheaders = [("User-Agent", USER_AGENT)]
+
+    def fetch(self) -> Dict:
+        """Fetch URL and return text. Nunca lanza: devuelve dict con `error`."""
+        current_url = self.url
+        if not current_url.startswith(("http://", "https://")):
+            current_url = "https://" + current_url
+        for _hop in range(MAX_REDIRECTS + 1):
+            if not is_safe_url(current_url):
+                return {"error": "Acceso a direcciones privadas/locales restringido.", "url": current_url}
+            req = urllib.request.Request(current_url, headers={"User-Agent": USER_AGENT})
+            try:
+                with self._opener.open(req, timeout=self.timeout) as response:
+                    raw = response.read(self.max_length * 8)
+                    charset = response.headers.get_content_charset() or "utf-8"
+                    text = raw.decode(charset, errors="replace")
+                    content_type = (response.headers.get("Content-Type") or "").lower()
+                    title = ""
+                    if "text/html" in content_type:
+                        title_match = re.search(r"<title[^>]*>([^<]+)</title>", text, re.IGNORECASE)
+                        title = title_match.group(1).strip() if title_match else ""
+                        content, fmt = _html_to_text(text), "text"
+                    elif "application/json" in content_type:
+                        content, fmt = text, "json"
+                    else:
+                        content, fmt = text, "text"
+                    content = content[: self.max_length]
+                    return {
+                        "success": True,
+                        "url": current_url,
+                        "title": title,
+                        "content": content,
+                        "format": fmt,
+                        "content_length": len(content),
+                        "truncated": len(text) > self.max_length,
+                    }
+            except urllib.error.HTTPError as e:
+                location = e.headers.get("Location") if e.headers else None
+                if e.code in (301, 302, 303, 307, 308) and location:
+                    current_url = urljoin(current_url, location)
+                    continue
+                return {"error": f"HTTP {e.code}", "url": current_url, "status_code": e.code}
+            except urllib.error.URLError as e:
+                return {"error": f"URL error: {e.reason}", "url": current_url}
+            except Exception as e:
+                return {"error": str(e), "url": current_url}
+        return {"error": "Too many redirects", "url": current_url}
+

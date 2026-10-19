@@ -209,8 +209,7 @@ async def _h_goal(args, ctx):
                            data={"action": "goal_help"})
     sub = args[0].lower()
     if sub in ("status", "show", "get"):
-        return SlashResult(ok=True, message="goal actual en session goals (ver GET /api/sessions/{id})",
-                           data={"action": "goal_status"})
+        return SlashResult(ok=True, message="goal de la sesion", data={"action": "goal_status"})
     if sub == "clear":
         return SlashResult(ok=True, message="goal borrado para esta sesión", data={"action": "goal_clear"})
     objective = " ".join(args)

@@ -116,6 +116,9 @@
         "keep_recent": {
           "type": "integer",
           "minimum": 1
+        },
+        "event_db_path": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -148,6 +151,36 @@
         "heartbeat_ms": {
           "type": "integer",
           "minimum": 100
+        },
+        "auto_apply": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "assisted",
+            "approve"
+          ]
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "max_iterations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_wall_ms": {
+              "type": "number",
+              "minimum": 1000
+            },
+            "max_tool_calls": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -185,6 +218,9 @@
           "type": "boolean"
         },
         "allow_mutating_without_confirm": {
+          "type": "boolean"
+        },
+        "require_confirm_mutating": {
           "type": "boolean"
         },
         "permission": {

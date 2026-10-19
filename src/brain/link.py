@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_BRAIN = Path(__file__).parents[2] / "brain"
+_CONFIG_FILE = Path(__file__).parents[2] / "config" / "config.yaml"
+
+# Cache del `brain.path` del YAML, invalidada por mtime. brain_path() se llama
+# en cada consulta al grafo; leer el YAML cada vez sería caro.
+_cfg_brain_cache: dict[str, Any] = {"mtime": None, "raw": ""}
 
 # Known brain files
 BRAIN_FILES = [
@@ -43,11 +48,37 @@ def _expand_brain_path(raw: str) -> Path:
     return Path(expanded).expanduser()
 
 
+def _config_brain_raw() -> str:
+    """`brain.path` de config/config.yaml ("" si no existe o no se puede leer).
+
+    Se cachea por mtime para que un cambio de config se refleje sin reiniciar
+    el proceso y sin pagar I/O en cada acceso.
+    """
+    try:
+        st = _CONFIG_FILE.stat()
+    except OSError:
+        return ""
+    if _cfg_brain_cache["mtime"] == st.st_mtime_ns:
+        return _cfg_brain_cache["raw"]
+    raw = ""
+    try:
+        import yaml
+
+        data = yaml.safe_load(_CONFIG_FILE.read_text(encoding="utf-8")) or {}
+        brain = data.get("brain") if isinstance(data, dict) else None
+        if isinstance(brain, dict):
+            raw = str(brain.get("path") or "")
+    except Exception:
+        raw = ""
+    _cfg_brain_cache.update(mtime=st.st_mtime_ns, raw=raw)
+    return raw
+
+
 def brain_path() -> Path:
-    # nexus-v3 usa SU PROPIO brain. Un ``NEXUS_BRAIN`` ambiental puede pertenecer
-    # a OTRO proyecto de la misma PC (p.ej. supernexus-v2) y enlazar cerebros por
-    # accidente. Solo se honra un override v3-scoped (``NEXUS_V3_BRAIN``).
-    raw = os.environ.get("NEXUS_V3_BRAIN") or str(DEFAULT_BRAIN)
+    # Precedencia: NEXUS_V3_BRAIN > config.yaml brain.path > ./brain.
+    # Un ``NEXUS_BRAIN`` ambiental puede pertenecer a OTRO proyecto de la misma
+    # PC (p.ej. supernexus-v2) y enlazar cerebros por accidente: no se honra.
+    raw = os.environ.get("NEXUS_V3_BRAIN") or _config_brain_raw() or str(DEFAULT_BRAIN)
     p = _expand_brain_path(raw)
     # If relative, resolve against project root (parents[2])
     if not p.is_absolute():

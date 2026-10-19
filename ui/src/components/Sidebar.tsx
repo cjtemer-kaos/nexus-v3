@@ -43,7 +43,7 @@ function NavButton({ item, active, onClick, indented }: { item: NavItem; active:
 }
 
 export function Sidebar() {
-  const { view, setView, sessions, activeSession, setActiveSession, createSession, deleteSession } = useAppStore()
+  const { view, setView, sessions, sessionsError, activeSession, setActiveSession, createSession, forkSession, deleteSession } = useAppStore()
   const [ajustesOpen, setAjustesOpen] = useState(false)
   const inMore = more.some(i => i.id === view)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -96,7 +96,11 @@ export function Sidebar() {
             <span className="ml-auto text-[10px] text-[#6B7280]">{sessions.length}</span>
           </div>
           <div className="space-y-1">
-            {sessions.length === 0 && <div className="px-2 py-1 text-xs text-[#6B7280]">Sin sesiones todavía.</div>}
+            {sessions.length === 0 && (
+              <div className={`px-2 py-1 text-xs ${sessionsError ? 'text-[#FFA8A8]' : 'text-[#6B7280]'}`}>
+                {sessionsError ? `No se pudieron cargar las sesiones: ${sessionsError}` : 'Sin sesiones todavía.'}
+              </div>
+            )}
             {sessions.map(s => (
               <div key={s.id} className="group relative">
                 <button
@@ -118,7 +122,10 @@ export function Sidebar() {
               </div>
             ))}
           </div>
-          <button onClick={() => createSession()} className="mt-3 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">+ Nueva sesión (bifurcar)</button>
+          <button onClick={() => createSession()} className="mt-3 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">+ Nueva sesión</button>
+          {activeSession && (
+            <button onClick={() => forkSession(activeSession)} className="mt-1.5 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">Bifurcar la sesión activa (copia el historial)</button>
+          )}
         </div>
       </div>
 
@@ -126,7 +133,7 @@ export function Sidebar() {
       <div className="shrink-0 border-t border-[#2C3037] p-2.5 space-y-2">
         <div className="rounded-xl bg-[#1E2127] border border-[#4C9DFF]/20 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold"><Sparkles className="h-3.5 w-3.5 text-[#4C9DFF]" /> Cerebro local</div>
-          <div className="mt-1 text-[11px] leading-relaxed text-[#9BA1AA]">Enlazado vía <span className="font-mono text-[#EDEEF0]">NEXUS_BRAIN</span> → <span className="font-mono text-[#EDEEF0]">./brain</span></div>
+          <div className="mt-1 text-[11px] leading-relaxed text-[#9BA1AA]">Enlazado vía <span className="font-mono text-[#EDEEF0]">NEXUS_V3_BRAIN</span> → <span className="font-mono text-[#EDEEF0]">./brain</span></div>
           <div className="mt-2 flex gap-1.5">
             <span className="rounded-full bg-[#2C3037] px-2 py-0.5 text-[10px] flex items-center gap-1"><Database className="h-3 w-3" /> FTS5</span>
             <span className="rounded-full bg-[#2C3037] px-2 py-0.5 text-[10px] flex items-center gap-1"><Cpu className="h-3 w-3" /> RAG 768d</span>

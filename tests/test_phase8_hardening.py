@@ -404,10 +404,13 @@ def test_chat_stream_sse_uses_standard_loop(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None, agent_id=None):
+    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None,
+                       on_reasoning=None, agent_id=None):
         captured.update(message=message, session_id=session_id, model=model)
         if on_delta is not None:
             await on_delta("respuesta ")
+        if on_reasoning is not None:
+            await on_reasoning("pienso…")
         return SimpleNamespace(final_output="respuesta sse", success=True)
 
     class FakeSlog:

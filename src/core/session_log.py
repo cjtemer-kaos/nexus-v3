@@ -353,6 +353,28 @@ class SessionLog:
                 ).fetchall()
         return [Message(*r) for r in rows]
 
+    def search_hits(self, query: str, limit: int = 20) -> list[dict]:
+        """FTS5 global con id y session_id (para que la UI pueda abrir el resultado)."""
+        if not query or not query.strip():
+            return []
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    "SELECT m.id, m.session_id, m.role, m.content, m.created_at"
+                    " FROM session_fts JOIN messages m ON m.id=session_fts.rowid"
+                    " WHERE session_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                _like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                rows = self._conn.execute(
+                    "SELECT id, session_id, role, content, created_at FROM messages"
+                    " WHERE content LIKE ? ESCAPE '\\' LIMIT ?",
+                    (_like, limit),
+                ).fetchall()
+        return [{"id": r[0], "session_id": r[1], "role": r[2], "content": r[3],
+                 "created_at": str(r[4] or "")} for r in rows]
+
     def search_session(self, session_id: str, query: str, limit: int = 20) -> list[Message]:
         """FTS search filtered to a single session."""
         if not query or not query.strip():

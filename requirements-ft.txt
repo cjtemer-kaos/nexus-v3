@@ -22,5 +22,7 @@ mcp>=1.10,<1.27
 pydantic>=2.13,<2.14
 aiohttp>=3.9
 aiosqlite>=0.19
+# scheduler cron (src/core/scheduler.py): sin esto la rama cron cae a now+3600
+croniter>=2.0
 pytest>=8.0
 ruamel.yaml>=0.18

@@ -36,10 +36,10 @@ const viewLabels: Record<string, string> = {
   skills: 'Capacidades',
 }
 
-type SearchResult = { role: string; content: string }
+type SearchResult = { role: string; content: string; session_id?: string }
 
 export default function App() {
-  const { view, setView, activeSession, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus } = useAppStore()
+  const { view, setView, activeSession, setActiveSession, loadMessages, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus } = useAppStore()
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -134,7 +134,15 @@ export default function App() {
                           <button
                             key={i}
                             onMouseDown={e=>e.preventDefault()}
-                            onClick={()=>{ closeSearch(); setView('chat') }}
+                            onClick={() => {
+                              closeSearch()
+                              setView('chat')
+                              // Abrir la sesión del hit (antes solo cerraba el buscador).
+                              if (r.session_id && r.session_id !== activeSession) {
+                                setActiveSession(r.session_id)
+                                void loadMessages(r.session_id)
+                              }
+                            }}
                             className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-[#2C3037]"
                           >
                             <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${r.role==='user' ? 'bg-[#0B62D6]/20 text-[#8CC1FF]' : r.role==='tool' ? 'bg-[#FFB86B]/15 text-[#FFB86B]' : 'bg-[#3DDC84]/15 text-[#3DDC84]'}`}>{r.role}</span>
@@ -159,8 +167,19 @@ export default function App() {
                   <div className="fixed inset-0 z-[60]" onClick={()=>setShowNotifications(false)} />
                   <div className="absolute right-0 top-full z-[70] mt-2 w-72 rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 shadow-2xl">
                     <div className="text-sm font-semibold">Notificaciones</div>
-                    <div className="mt-1 text-xs text-[#9BA1AA]">Sin notificaciones nuevas. El arnés está listo.</div>
-                    <div className="mt-3 rounded-lg bg-[#1E2127] p-2 text-xs text-[#9BA1AA]">WAL+FTS activo · sesión {activeSession}</div>
+                    <div className="mt-1 text-xs text-[#9BA1AA]">
+                      {!liveStatus
+                        ? 'Sin conexión con el backend: no se pudo leer /api/status.'
+                        : (liveStatus.counts.running > 0 || liveStatus.counts.sessions_with_subagents > 0)
+                          ? [
+                              liveStatus.counts.running > 0 ? `${liveStatus.counts.running} turno(s) en curso` : '',
+                              liveStatus.counts.sessions_with_subagents > 0 ? `${liveStatus.counts.sessions_with_subagents} sesión(es) con sub-agentes` : '',
+                            ].filter(Boolean).join(' · ')
+                          : 'Sin notificaciones nuevas. El arnés está listo.'}
+                    </div>
+                    <div className={`mt-3 rounded-lg p-2 text-xs ${liveStatus ? 'bg-[#1E2127] text-[#9BA1AA]' : 'bg-[#FF6B6B]/10 text-[#FFA8A8]'}`}>
+                      {liveStatus ? `WAL+FTS activo · sesión ${activeSession}` : 'Revisá data/backend.log'}
+                    </div>
                   </div>
                 </>
               )}
@@ -188,7 +207,12 @@ export default function App() {
 
         {/* estado inferior */}
         <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-[#2C3037] bg-[#1E2127] px-3 text-xs text-[#9BA1AA]">
-          <span className="flex items-center gap-1.5"><span className={`h-2 w-2 rounded-full animate-pulse ${live?.running ? 'bg-[#4C9DFF]' : 'bg-[#3DDC84]'}`} /> {live?.running ? `${live.running} run activo` : 'arnés listo'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}</span>
+          <span className="flex items-center gap-1.5">
+            <span className={`h-2 w-2 rounded-full ${live ? (live.running ? 'bg-[#4C9DFF] animate-pulse' : 'bg-[#3DDC84]') : 'bg-[#FF6B6B]'}`} />{' '}
+            <span className={live ? '' : 'text-[#FFA8A8]'}>
+              {live ? (live.running ? `${live.running} run activo` : 'arnés listo') : 'sin conexión'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}
+            </span>
+          </span>
           <span className="hidden md:inline">·</span>
           <span className="hidden md:inline">config.yaml · nada hardcodeado · distribuible</span>
             <span className="ml-auto hidden md:inline">Alcance: según Ajustes → Permisos (full = toda la PC) · secretos bloqueados</span>

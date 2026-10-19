@@ -11,6 +11,7 @@ websockets>=12
 mcp>=1.0
 aiohttp>=3.9
 aiosqlite>=0.19
+croniter>=2.0
 
 # --- dev ---
 pytest>=8.0
@@ -21,6 +22,11 @@ pytest>=8.0
 # RAG lancedb: lancedb, aiosqlite
 # entrenamiento: torch, transformers, peft, trl, datasets
 # upscale/vision: basicsr, gfpgan, realesrgan
+# grafo de codigo (codegraph): networkx
+# galeria de imagenes: Pillow
+# NexusHive pub/sub: redis
+# nodos remotos por SSH: paramiko
+# web_fetch con HTTPFetcher: markdownify
 ruamel.yaml>=0.18
 
 # --- LSP (diagnosticos semanticos; opcional, degrada si falta) ---

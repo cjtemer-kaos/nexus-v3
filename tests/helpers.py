@@ -1,7 +1,44 @@
 """Providers mock compartidos (traducidos de run_tests.py secciones 3 y 4)."""
 from __future__ import annotations
 
+import time
+from pathlib import Path
+
 from src.core.provider_base import BaseProvider, LLMMessage, LLMResponse, ToolCall
+
+
+def remove_path(path, tries: int = 30, delay: float = 0.04) -> bool:
+    """Borra `path` tolerando locks transitorios del SO (en Windows: WinError 32).
+
+    Un archivo recien creado puede quedar bloqueado unos milisegundos por el
+    escaner/indexador del sistema, asi que el `unlink` inmediato falla aunque
+    nadie lo tenga abierto de forma sostenida. Se reintenta con backoff.
+    Devuelve True si el archivo ya no esta; False si siguio bloqueado.
+    """
+    p = Path(path)
+    for i in range(tries):
+        try:
+            p.unlink(missing_ok=True)
+            return True
+        except OSError:
+            time.sleep(delay * (1 + i // 5))
+    return not p.exists()
+
+
+def write_fresh(path, text: str, encoding: str = "utf-8", tries: int = 30, delay: float = 0.04) -> None:
+    """Escribe `path` desde cero, tolerando que un residuo previo este bloqueado."""
+    p = Path(path)
+    last: OSError | None = None
+    for i in range(tries):
+        try:
+            remove_path(p)
+            p.write_text(text, encoding=encoding)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(delay * (1 + i // 5))
+    if last is not None:
+        raise last
 
 
 class MockProvider(BaseProvider):

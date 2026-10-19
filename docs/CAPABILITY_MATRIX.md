@@ -1,7 +1,7 @@
 # Matriz de capacidades — Nexus v3 vs asistentes/IDE de IA
 
-Fecha: 2026-10-12. Fuentes: documentación de Cursor, Claude Code, Copilot, Windsurf, Codeg, MonkeysCode,
-agent-code, AgentBridge (JetBrains) + inventario propio del código de nexus-v3.
+Fecha: 2026-10-19. Fuentes: documentación de Cursor, Claude Code, Copilot, Windsurf, Codeg, MonkeysCode,
+agent-code, AgentBridge (JetBrains) + inventario verificado del código de nexus-v3 (suite + E2E).
 
 Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no existe.
 
@@ -20,8 +20,8 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Iterar sobre errores (self-correct) | ✅ | `agent_loop` (replan, doom-loop guard) |
 | Test runner + parseo de fallos | ⚠️ | Vía tool `exec` (sin runner/parse dedicado) |
 | Git (status/diff/commit/branch/PR) | ⚠️ | Vía `exec` (sin tools git dedicadas) |
-| Diff review (UI) | ❌ | No hay vista de diff |
-| Checkpoints / rollback de FS | ⚠️ | `session_log.fork/branch`, `event_store` (sin snapshot de archivos) |
+| Diff review (UI) | ✅ | `ReviewPanel` (Cambios) + `/api/checkpoints/{id}/diff` |
+| Checkpoints / rollback de FS | ✅ | `checkpoints.snapshot` antes de cada `write_file`/`edit` + `/api/checkpoints/restore` |
 
 ## 2. Multi-agente / orquestación
 
@@ -32,9 +32,10 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Hooks (automatización determinista) | ✅ | `hooks_engine` (10 fases, 3 gates) |
 | Skills reutilizables | ✅ | `skill_gateway`/`skill_install`/`skill_opt` + catálogo |
 | MCP (tools externas) | ✅ | `mcp_client`/`mcp_connection_manager`, tools `mcp_list`/`mcp_call` |
-| Instrucciones de proyecto (AGENTS.md) | ⚠️ | Referencias parciales; sin carga explícita estilo CLAUDE.md |
+| Instrucciones de proyecto (AGENTS.md) | ✅ | `agent_loop` inyecta jerárquico (raíz → subcarpeta) en `messages[0]`; `test_agents_md_hierarchical` |
 | Sesiones: save/resume/fork/branch/compact | ✅ | `session_log` (`tree`/`fork`/`branch`), `/api/sessions/*` |
-| Rewind de conversación | ❌ | No implementado |
+| Rewind de conversación | ✅ | `POST /api/sessions/{id}/rewind` + `GET .../tree` |
+| Board de tareas con claims | ✅ | `board.py` claim-once (`UPDATE` + `rowcount`) + lease con vencimiento/heartbeat; `/api/board/*` |
 
 ## 3. Modelos / infraestructura
 
@@ -48,7 +49,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Streaming (SSE + WS) | ✅ | `/api/chat/stream`, `/ws/chat` |
 | Búsqueda web | ✅ | Tool `web_search` (open source: **SearXNG** vía `SEARXNG_URL`, fallback **Wikipedia**); `web_fetch` para URL directa |
 | Automatización de navegador | ✅ | `cdp_browser`, MCP playwright/chrome-devtools |
-| Voz (STT/TTS) | ✅ | `voice_engine`, `/api/voice/*` |
+| Voz (STT/TTS) | ⚠️ | TTS: Piper (`voice_models/piper`) o fallback **Windows SAPI** (sin descargas), con botón **Escuchar** en el chat. STT: endpoint HTTP `:8789` o `faster-whisper` local. `/api/voice/*` |
 | Generación de imagen (ComfyUI) | ✅ | `comfyui_gateway`, `gallery` |
 | Editor de archivos (Monaco) + explorar PC | ✅ | `FileEditor` (barra de ruta, unidades, árbol) |
 | Terminal integrada | ✅ | `TerminalPanel` + tool `exec` |
@@ -59,6 +60,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 |---|---|---|
 | **Aprendizaje en tiempo real** | ✅ | `learning_service` (judge + Thompson), `self_learning_loop`, `skill_opt` (held-out), `dream_distill`, `/api/learning/*` |
 | **Memoria grafo (larga duración)** | ✅ | `knowledge_memory` (grafo ~8.6k nodos), `hybrid_memory`, `hierarchical_memory` (3 tiers + forgetting), `/api/graph/*`, `rag_engine` |
+| **Historial y restore del grafo** | ✅ | `node_revisions` (append-only); cada upsert archiva la versión saliente; `GET /api/graph/node/{id}/history` + `POST .../restore` (restore re-indexa FTS5 y entidades) |
 | **Local + cloud combinados** | ✅ | `provider_router` (tier/Thompson/VRAM), fallback cross-provider, BYOK catalog |
 | **Colmena (usar cualquier programa como ayudante)** | ✅ | `nexus_hive`, `message_board`, `agent_registry`, peers (claude-code, antigravity, openclaw, zero-code, aider, hermes), `sub_agent_spawner` |
 
@@ -68,9 +70,9 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 2. ~~**Búsqueda web**~~ — **CERRADO**: tool `web_search` (SearXNG open source vía `SEARXNG_URL` + fallback Wikipedia).
 3. **Tools git** (status/diff/commit/branch) dedicadas — hoy solo vía `exec`.
 4. **Test runner** con parseo de fallos — hoy solo `exec`.
-5. **Diff review en la UI** — no hay vista de diff.
-6. **Instrucciones de proyecto** (carga de AGENTS.md por sesión).
-7. **Rewind** de conversación.
+5. ~~**Diff review en la UI**~~ — **CERRADO**: `ReviewPanel` (Cambios) con `/api/checkpoints/{id}/diff`.
+6. ~~**Instrucciones de proyecto** (AGENTS.md)~~ — **CERRADO**: inyección jerárquica en `agent_loop`.
+7. ~~**Rewind** de conversación~~ — **CERRADO**: `POST /api/sessions/{id}/rewind`.
 
 > Bug sistémico corregido: `_infer_schema` mapeaba toda anotación string (`from __future__ import annotations`)
 > a `"string"` → los params `int` (exec.timeout, recall.limit…) se declaraban string. Ahora se resuelven con
@@ -79,6 +81,54 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 ## 6. Conclusión
 
 Nexus cubre **el núcleo agéntico** (chat, multi-archivo, tools, RAG, plan, subagentes, MCP, sesiones,
-multi-modelo local/cloud, multimodal, voz, navegador, editor, terminal) y **gana en los 4 diferenciadores**
-(aprendizaje en vivo, memoria grafo, híbrido local+cloud, colmena). Los gaps son de **conveniencia**
-(edit quirúrgico, web search, git/test dedicados, diff UI), no de arquitectura.
+multi-modelo local/cloud, multimodal, voz, navegador, editor, terminal, checkpoints con diff y rewind)
+y **gana en los 4 diferenciadores** (aprendizaje en vivo, memoria grafo con historial/restore,
+híbrido local+cloud, colmena). Los gaps que quedan son de **conveniencia** (tools git y test runner
+dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
+
+## 7. Verificación (2026-10-19)
+
+| Prueba | Resultado |
+|---|---|
+| Suite completa (`pytest`) | **552 passed, 3 skipped, exit 0** (153 s) |
+| Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
+| Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
+| Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
+| TTS | Piper o **Windows SAPI**; verificado: WAV 22050 Hz mono de 4.83 s vía `POST /api/voice/tts` |
+| Board | claim-once con `UPDATE`+`rowcount`; carrera de 6 agentes → gana exactamente 1; lease con heartbeat |
+| Grafo | `node_revisions` append-only; history/restore verificado (v2 → restore → v3, con FTS5 al día) |
+| Portabilidad del brain | precedencia `NEXUS_V3_BRAIN` > `config.brain.path` > `./brain`; `NEXUS_BRAIN` (v2) se ignora; `/api/health` → `linked_to_v2:false` |
+| Validación de entrada | board (title/priority/status/lease) y `/api/chat/stream` (message) → **400** verificado en vivo; antes caían a 200 |
+| Worktree | solo se acepta la **raíz** de un repo; una subcarpeta → `ok:false` con la raíz correcta (evita crear worktrees en un repo ancestro) |
+| Config | `config.yaml` valida contra el schema; declaradas las claves que el server ya leía (`event_db_path`, `require_confirm_mutating`, `auto_apply`, `budget`) |
+| UI | busy/errores en Board, Approvals, Worktrees y restore del grafo; buscar en el editor; TTS “Escuchar”; sin respuestas canned al fallar el backend |
+| Comandos slash | el menú del chat se alimenta de `GET /api/slash` (18 comandos del server, incluye `/herramientas`); lista local solo como fallback |
+| Estados honestos | footer “sin conexión” (rojo) si `/api/status` falla; error visible en sesiones, uso, capacidades, keys y permisos en vez de “sin datos” |
+| Checkpoints | `POST /api/checkpoints/restore` → 400 sin `checkpoint_id`, 404 si no existe (antes 200 con `ok:false`) |
+| OpenAI compat | `/v1/chat/completions` → 400 sin `messages`/sin mensaje de usuario y 500 si el turno falla (antes 200 con “Error: …”); stream documentado como buffered |
+| Tests nuevos (2ª pasada) | **65** en 7 archivos: `schema_sanitizer`, `prompt_security`, `think_scrubber`, `todo_store`, `worktree`, `brain_link`, `config_schema` |
+| Tests nuevos (3ª pasada) | **13** más: `goal_store` (8 unit) + 5 E2E (`/api/goals`, `/goal` persistente, códigos de error de fork/rewind/tree, `/api/plugins/reload`) → total **78** en 8 archivos |
+| Tests nuevos (4ª pasada) | **43** más: `mcp_client` (7: scrub de credenciales para subprocesos + manifiesto), `error_envelope` (10: clasificación/decisión/backoff/retry), `task_queue` (8: DAG, ciclos, niveles), `session_scrubber` (6: alternancia y no-mutación), `bounded_history` (5: tope/TTL/coherencia), `decision_engine` (3) + 4 E2E (búsqueda global con `session_id`, approvals 404, worktree no-repo 400, embed 400) |
+| `/goal` | **persiste de verdad** (antes decía “goal registrado” sin guardar nada): `GoalStore` en `session.db`, `GET/POST /api/goals`, y `/goal status` devuelve el objetivo real |
+| Ramas de sesión | `GET tree` → 404 si no existe; `POST fork` → 404 si la sesión no existe; `POST rewind` → 400 sin `message_id` / no entero; errores → 500 (antes todo 200 con `ok:false`) |
+| Plugins | `POST /api/plugins/reload` informa `available/loaded/errors/failed` y devuelve `ok:false` si un plugin rompe (antes `ok:true` siempre); la UI muestra el fallo |
+| Voz | `POST /api/voice/stt` y `/tts` → **503** (no 501) cuando el servicio no está disponible; `VoiceMic` cae al STT del navegador con 503/501 |
+| Streaming | SSE y WS informan `success:false` + `error` (antes el WS devolvía el texto “Error: …” como si fuera respuesta del modelo); el chat prefija ⚠️ cuando el modelo no respondió o hubo `echo_fallback` |
+| Slash en el chat | `/export` descarga el ZIP de la sesión, `/todo` lista las tareas reales, `/agent` cambia de ayudante y `/session` crea sesión (antes solo se mostraba texto) |
+| Errores honestos (3ª auditoría) | `GET /api/events` y `GET /api/sessions` devolvían **200 con lista vacía + error** (indistinguible de “no hay nada”): ahora 500 con `detail`. `POST /api/approvals/{id}` → 404/409/500 según el caso (antes 200 `ok:false`). `POST /api/worktree` → 400 (no es repo) / 409 (git falló). `POST /api/embed` → 400 con input inválido (antes 502, culpando al servicio) |
+| Búsqueda global | `/api/sessions/global/search` devuelve `session_id` (nuevo `SessionLog.search_hits`): al hacer clic en un resultado la UI **abre esa sesión** (antes solo cerraba el buscador) |
+| Sesiones en la UI | “+ Nueva sesión” ya no dice “bifurcar” mintiendo: hay botón aparte **Bifurcar la sesión activa** (`POST /api/sessions/{id}/fork` con `copy_messages`). Borrar una sesión con hijas (409) ya no la quita del listado en falso: se muestra el motivo |
+| Estados de error en la UI | Chat muestra banner con **Reintentar** si falla el historial (antes chat vacío); Sub-agentes distingue “sin conexión” de “no hay sub-agentes”; el detalle del grafo informa el fallo; la recarga de plugins muestra qué plugin rompió |
+| Política de errores | `TimeoutError` ahora es reintentable (faltaba `timeouterror` en la lista y `"timed out"` en los patrones: un timeout real se abortaba sin reintentar) |
+| Integridad de datos | `SequenceScrubber` ya **no muta** los dicts del llamador; `BoundedHistory.__len__` cuenta solo lo vigente (antes contaba expirados y contradecía a `get_all()`) |
+| Módulos legacy | `src/core/decision_engine.py` importaba `src/core/command_protocol` (inexistente): el módulo era **in-importable**. Ahora degrada a un `Command` local; verificado con `decompose()` |
+| `web_fetch` (revisión + cableado) | `HTTPFetcher` no validaba la **URL inicial** (SSRF directo a `127.0.0.1`/metadata), su `redirect_request` devolvía un string (contrato roto) y **escapaba** el HTML (`<`→`&lt;`) en vez de convertirlo. Ahora: SSRF en cada salto (incluye IPv4-mapped, multicast y unspecified), redirects manuales validados, HTML→texto legible, y **la tool `web_fetch` del registry usa esta clase** en vez del loop duplicado inline (con `max_length=15000` y el fence de contenido no confiable) |
+
+### Código legacy absorbido (no es el camino del harness)
+
+`src/bridges/*`, `src/tools/codegraph_tool.py`, `src/tools/vision_gem_v2.py`, `src/core/gallery.py`,
+`src/core/nexus_hive.py`, `src/core/llm_provider.py` y `src/core/dag_coordinator.py` vienen de
+proyectos anteriores (v2/autopsia). Sus dependencias opcionales (`networkx`, `Pillow`, `redis`,
+`paramiko`, `mss`, `cv2`, `pytesseract`, `gfpgan`…) están **guardadas con try/except** o son lazy,
+así que su ausencia no rompe nada y el harness no las necesita para funcionar. Se dejan como
+referencia (regla: no borrar); si se cablean, declarar los extras en `pyproject.toml`.

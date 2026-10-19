@@ -17,9 +17,28 @@ def _run(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str]:
         return 1, str(e)
 
 
+def repo_root(repo: str) -> str:
+    """Raíz del repositorio que contiene `repo` ("" si no hay repo)."""
+    rc, out = _run(["rev-parse", "--show-toplevel"], repo, timeout=15)
+    if rc != 0 or not out:
+        return ""
+    return out.strip().replace("\\", "/").rstrip("/")
+
+
+def _same_path(a: str, b: str) -> bool:
+    norm = lambda p: os.path.normcase(os.path.realpath(os.path.abspath(p))).replace("\\", "/").rstrip("/")
+    return norm(a) == norm(b)
+
+
 def is_repo(repo: str) -> bool:
-    rc, _ = _run(["rev-parse", "--is-inside-work-tree"], repo, timeout=15)
-    return rc == 0
+    """True solo si `repo` ES la raíz de su repositorio.
+
+    `rev-parse --is-inside-work-tree` devuelve True para cualquier subcarpeta de
+    un repo ancestro (p. ej. C:/ en esta máquina). Aceptar eso haría que se
+    creen worktrees en un repo ajeno, así que exigimos coincidencia con la raíz.
+    """
+    root = repo_root(repo)
+    return bool(root) and _same_path(root, repo)
 
 
 def list_worktrees(repo: str) -> list[dict]:
@@ -45,7 +64,9 @@ def list_worktrees(repo: str) -> list[dict]:
 
 def add_worktree(repo: str, path: str, branch: str, base: str = "HEAD") -> dict:
     if not is_repo(repo):
-        return {"ok": False, "error": f"no es repo git: {repo}"}
+        parent = repo_root(repo)
+        hint = f"; la raíz del repo que lo contiene es {parent}" if parent else ""
+        return {"ok": False, "error": f"no es repo git: {repo}{hint}"}
     path = os.path.abspath(path)
     rc, out = _run(["worktree", "add", "-b", branch, path, base], repo, timeout=120)
     return {"ok": rc == 0, "path": path, "branch": branch, "output": out}

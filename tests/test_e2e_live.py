@@ -47,18 +47,19 @@ def test_tools_registry_complete():
 
 def test_edit_tool_str_replace():
     import asyncio, pathlib
+    from helpers import remove_path, write_fresh
     from src.api.server import _build_registry, _build_scope, _load_config_safe
     cfg = _load_config_safe()
     scope = _build_scope(cfg)
     reg = _build_registry(scope, "t-edit", cfg)
     f = "./workspace/_edit_pytest.txt"
-    pathlib.Path(f).write_text("uno\ndos\ntres\n", encoding="utf-8")
+    write_fresh(f, "uno\ndos\ntres\n")
     try:
         r = asyncio.run(reg.dispatch("edit", {"path": f, "old": "dos", "new": "DOS"}, scope=scope))
         assert "editado" in str(r)
         assert "DOS" in pathlib.Path(f).read_text(encoding="utf-8")
     finally:
-        pathlib.Path(f).unlink(missing_ok=True)
+        remove_path(f)
 
 
 def test_fs_lists_drives_root():
@@ -81,30 +82,32 @@ def test_sessions_delete_roundtrip():
 
 def test_diagnostics_in_the_loop():
     import pathlib
+    from helpers import remove_path, write_fresh
     from src.core.diagnostics import diagnostics_for
     p = "./workspace/_diag_pytest.py"
-    pathlib.Path(p).write_text("def f(:\n pass\n", encoding="utf-8")
+    write_fresh(p, "def f(:\n pass\n")
     try:
         assert "file_diagnostics" in diagnostics_for(p)
     finally:
-        pathlib.Path(p).unlink(missing_ok=True)
+        remove_path(p)
     # archivo valido -> sin diagnostico
-    pathlib.Path(p).write_text("x = 1\n", encoding="utf-8")
+    write_fresh(p, "x = 1\n")
     try:
         assert diagnostics_for(p) == ""
     finally:
-        pathlib.Path(p).unlink(missing_ok=True)
+        remove_path(p)
 
 
 def test_checkpoints_snapshot_and_restore():
     import asyncio, pathlib
+    from helpers import remove_path, write_fresh
     from src.api.server import _build_registry, _build_scope, _load_config_safe
     from src.core.checkpoints import list_checkpoints, restore
     cfg = _load_config_safe()
     scope = _build_scope(cfg)
     reg = _build_registry(scope, "ck-pytest", cfg)
     f = "./workspace/_ck_pytest.txt"
-    pathlib.Path(f).write_text("a\nb\n", encoding="utf-8")
+    write_fresh(f, "a\nb\n")
     try:
         asyncio.run(reg.dispatch("edit", {"path": f, "old": "b", "new": "B"}, scope=scope))
         cks = list_checkpoints("ck-pytest")
@@ -112,7 +115,7 @@ def test_checkpoints_snapshot_and_restore():
         assert restore("ck-pytest", cks[-1]["id"])["ok"]
         assert "b" in pathlib.Path(f).read_text(encoding="utf-8")
     finally:
-        pathlib.Path(f).unlink(missing_ok=True)
+        remove_path(f)
 
 
 def test_checkpoints_endpoint():
@@ -190,6 +193,7 @@ def test_agents_md_hierarchical():
 
 def test_approvals_flow():
     import asyncio, pathlib
+    from helpers import remove_path
     from src.api.server import _build_registry, _build_scope, _load_config_safe
     from src.core.approvals import get_approvals
     cfg = _load_config_safe()
@@ -197,15 +201,17 @@ def test_approvals_flow():
     scope = _build_scope(cfg)
     reg = _build_registry(scope, "appr-pytest", cfg)
     f = "./workspace/_appr_pytest.txt"
-    pathlib.Path(f).unlink(missing_ok=True)
-    out = asyncio.run(reg.dispatch("write_file", {"path": f, "content": "x"}, scope=scope))
-    assert "pendiente de aprobacion" in out
-    assert not pathlib.Path(f).exists()  # NO se aplicó
-    items = get_approvals().list("appr-pytest")
-    assert items and items[0]["tool"] == "write_file"
-    res = get_approvals().resolve(items[0]["id"], True)
-    assert res["ok"] and pathlib.Path(f).read_text(encoding="utf-8") == "x"
-    pathlib.Path(f).unlink(missing_ok=True)
+    remove_path(f)
+    try:
+        out = asyncio.run(reg.dispatch("write_file", {"path": f, "content": "x"}, scope=scope))
+        assert "pendiente de aprobacion" in out
+        assert not pathlib.Path(f).exists()  # NO se aplicó
+        items = get_approvals().list("appr-pytest")
+        assert items and items[0]["tool"] == "write_file"
+        res = get_approvals().resolve(items[0]["id"], True)
+        assert res["ok"] and pathlib.Path(f).read_text(encoding="utf-8") == "x"
+    finally:
+        remove_path(f)
 
 
 def test_approvals_and_plan_endpoints():
@@ -278,23 +284,26 @@ def test_new_endpoints_backend():
 
 def test_board_endpoints():
     t = client.post("/api/board/tasks", json={"title": "pytest-task"}).json()["task"]
-    assert client.post(f"/api/board/{t['id']}/claim", json={"agent": "pytest"}).json()["ok"]
+    c = client.post(f"/api/board/{t['id']}/claim", json={"agent": "pytest"}).json()
+    assert c["ok"] and c["task"]["lease_expires_at"] > 0
+    r = client.post(f"/api/board/{t['id']}/claim", json={"agent": "otro"}).json()
+    assert not r["ok"] and "ya reclamada" in r["error"]
     assert client.post(f"/api/board/{t['id']}/update", json={"status": "done"}).json()["task"]["status"] == "done"
 
 
 def test_diagnostics_lsp_semantic():
     import importlib.util
-    import pathlib
+    from helpers import remove_path, write_fresh
     if not importlib.util.find_spec("pylsp"):
         return  # sin servidor LSP: se omite (best-effort)
     from src.core.diagnostics import diagnostics_for
     p = "./workspace/_lsp_pytest.py"
-    pathlib.Path(p).write_text("x = undefined_name\n", encoding="utf-8")
+    write_fresh(p, "x = undefined_name\n")
     try:
         d = diagnostics_for(p)
         assert "file_diagnostics" in d and "undefined name" in d
     finally:
-        pathlib.Path(p).unlink(missing_ok=True)
+        remove_path(p)
 
 
 def test_sub_agent_tools_registered():
@@ -323,3 +332,122 @@ def test_acp_server_handle():
     assert r["result"]["agentInfo"]["name"] == "nexus-v3"
     n = asyncio.run(a.handle({"jsonrpc": "2.0", "id": 2, "method": "session/new"}))
     assert n["result"]["sessionId"]
+
+
+def test_board_and_stream_input_validation():
+    assert client.post("/api/board/tasks", json={}).status_code == 400
+    assert client.post("/api/board/tasks", json={"title": "x", "priority": "alta"}).status_code == 400
+    assert client.post("/api/board/no-existe/update", json={"status": "inventado"}).status_code == 400
+    assert client.post("/api/board/no-existe/claim", json={"lease_s": "mucho"}).status_code == 400
+    assert client.post("/api/checkpoints/restore", json={}).status_code == 400
+    assert client.post("/api/checkpoints/restore", json={"checkpoint_id": "no-existe"}).status_code == 404
+    assert client.post("/v1/chat/completions", json={}).status_code == 400
+    assert client.post("/v1/chat/completions", json={"messages": []}).status_code == 400
+    assert client.post("/v1/chat/completions", json={"messages": [{"role": "system", "content": "x"}]}).status_code == 400
+    assert client.post("/api/chat/stream", json={}).status_code == 400
+    assert client.get("/api/chat/stream", params={"message": ""}).status_code == 400
+    assert client.post("/api/sessions/x/messages").status_code == 400
+
+
+def test_goals_endpoint_roundtrip():
+    import uuid
+    sid = f"pytest-goals-{uuid.uuid4().hex[:8]}"
+    assert client.get("/api/goals").status_code == 400
+    assert client.post("/api/goals", json={}).status_code == 400
+    r = client.get("/api/goals", params={"session_id": sid})
+    assert r.status_code == 200 and r.json()["exists"] is False
+    r = client.post("/api/goals", json={"session_id": sid, "objective": "terminar el harness"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["goal"]["objective"] == "terminar el harness"
+    r = client.get("/api/goals", params={"session_id": sid})
+    assert r.json()["objective"] == "terminar el harness" and r.json()["status"] == "active"
+    assert client.post("/api/goals", json={"session_id": sid, "objective": "  "}).status_code == 400
+    r = client.post("/api/goals", json={"session_id": sid, "clear": True})
+    assert r.json()["cleared"] is True
+    assert client.get("/api/goals", params={"session_id": sid}).json()["exists"] is False
+
+
+def test_slash_goal_persists_in_session():
+    import uuid
+    sid = f"pytest-goal-{uuid.uuid4().hex[:8]}"
+    body = client.post("/api/slash", json={"command": "/goal terminar el harness profesional",
+                                           "ctx": {"session_id": sid}}).json()
+    assert body["ok"] is True and "goal guardado" in body["message"]
+    assert client.get("/api/goals", params={"session_id": sid}).json()["objective"] == "terminar el harness profesional"
+    st = client.post("/api/slash", json={"command": "/goal status", "ctx": {"session_id": sid}}).json()
+    assert "terminar el harness profesional" in st["message"]
+    cl = client.post("/api/slash", json={"command": "/goal clear", "ctx": {"session_id": sid}}).json()
+    assert "goal borrado" in cl["message"]
+    assert client.get("/api/goals", params={"session_id": sid}).json()["exists"] is False
+
+
+def test_slash_goal_without_session_is_not_persisted():
+    body = client.post("/api/slash", json={"command": "/goal objetivo sin sesion", "ctx": {}}).json()
+    assert "no persistido" in body["message"]
+
+
+def test_session_branching_error_codes():
+    assert client.get("/api/sessions/no-existe-xyz/tree").status_code == 404
+    assert client.post("/api/sessions/no-existe-xyz/fork", json={}).status_code == 404
+    assert client.post("/api/sessions/no-existe-xyz/rewind", json={}).status_code == 400
+    sid = client.post("/api/sessions", json={"project": "pytest"}).json()["id"]
+    try:
+        assert client.post(f"/api/sessions/{sid}/rewind", json={}).status_code == 400
+        assert client.post(f"/api/sessions/{sid}/rewind", json={"message_id": "x"}).status_code == 400
+        r = client.post(f"/api/sessions/{sid}/rewind", json={"message_id": 999999})
+        assert r.status_code == 200 and r.json()["deleted"] == 0
+        t = client.get(f"/api/sessions/{sid}/tree")
+        assert t.status_code == 200 and t.json()["exists"] is True
+    finally:
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_plugins_reload_reports_what_loaded():
+    r = client.post("/api/plugins/reload")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    for k in ("dir", "available", "loaded", "errors", "failed"):
+        assert k in body
+    assert "hello_plugin" in body["available"]
+    assert "hello_plugin" in body["loaded"]
+    assert body["errors"] == [] and body["failed"] == []
+
+
+def test_approvals_unknown_id_is_404():
+    assert client.post("/api/approvals/no-existe/approve").status_code == 404
+    assert client.post("/api/approvals/no-existe/reject").status_code == 404
+
+
+def test_worktree_endpoint_rejects_non_repo():
+    import shutil, tempfile
+    d = tempfile.mkdtemp(prefix="n3-wt-")
+    try:
+        r = client.post("/api/worktree", json={"repo": d, "path": d + "/wt", "branch": "x"})
+        assert r.status_code == 400
+        assert "no es repo" in r.json()["detail"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_embed_input_validation():
+    assert client.post("/api/embed", json={"texts": [1, 2]}).status_code == 400
+    assert client.post("/api/embed", json={"texts": "  "}).status_code == 400
+    assert client.post("/api/embed", content=b"[]",
+                       headers={"Content-Type": "application/json"}).status_code == 400
+
+
+def test_global_search_includes_session_id():
+    sid = client.post("/api/sessions", json={"project": "pytest-search"}).json()["id"]
+    try:
+        client.post(f"/api/sessions/{sid}/messages",
+                    json={"role": "user", "content": "aguja unica 7731 en el pajar"})
+        r = client.get("/api/sessions/global/search", params={"q": "aguja 7731"})
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert results, "la busqueda global no devolvio el mensaje recien escrito"
+        assert results[0]["session_id"] == sid
+        assert results[0]["role"] == "user"
+    finally:
+        client.delete(f"/api/sessions/{sid}")

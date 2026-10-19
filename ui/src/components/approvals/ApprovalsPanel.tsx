@@ -12,15 +12,18 @@ export function ApprovalsPanel() {
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState<Approval | null>(null)
   const [busy, setBusy] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
+    setLoading(true); setError(null)
     try {
       const r = await approvalsApi(activeSession)
       setItems(r.approvals.filter((a) => a.status === 'pending'))
       setMode(r.mode)
-    } catch { /* best-effort */ } finally {
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
       setLoading(false)
     }
   }, [activeSession])
@@ -30,8 +33,8 @@ export function ApprovalsPanel() {
   const act = async (id: string, approve: boolean) => {
     setBusy(true); setError(null)
     try {
-      if (approve) await approvalApproveApi(id)
-      else await approvalRejectApi(id)
+      const r = approve ? await approvalApproveApi(id) : await approvalRejectApi(id)
+      if (!r.ok) { setError(r.error || 'la acción no se aplicó'); return }
       setSel(null)
       await load()
     } catch (e) {
@@ -42,8 +45,15 @@ export function ApprovalsPanel() {
   }
 
   const clear = async () => {
-    try { await approvalClearApi(); setSel(null); await load() }
+    if (clearing) return
+    setClearing(true); setError(null)
+    try {
+      const r = await approvalClearApi()
+      if (!r.ok) { setError('no se pudieron limpiar las resueltas'); return }
+      setSel(null); await load()
+    }
     catch (e) { setError((e as Error).message) }
+    finally { setClearing(false) }
   }
 
   const renderPreview = (text: string) =>
@@ -61,14 +71,14 @@ export function ApprovalsPanel() {
           <ShieldCheck className="h-4 w-4 text-[#4C9DFF]" />
           <span className="text-sm font-medium">Aprobaciones</span>
           <span className="ml-auto text-xs text-[#9BA1AA]">{items.length}</span>
-          <Button variant="ghost" size="icon" aria-label="Recargar" onClick={() => void load()}>
+          <Button variant="ghost" size="icon" aria-label="Recargar" disabled={loading} onClick={() => void load()}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </Button>
         </div>
         <div className="border-b border-[#2C3037] px-3 py-1.5 text-[10px] text-[#9BA1AA]">modo auto_apply: <span className="text-[#8CC1FF]">{mode || '—'}</span></div>
         {error && <div className="border-b border-[#2C3037] bg-[#FF6B6B]/10 px-3 py-1.5 text-[10px] text-[#FFA8A8]">{error}</div>}
         <ScrollArea className="flex-1">
-          {items.length === 0 && (
+          {items.length === 0 && !loading && !error && (
             <div className="p-4 text-xs text-[#9BA1AA]">
               Sin pendientes. {mode === 'approve' ? 'El agente encola write/edit acá para que los apruebes.' : 'Cambiá agent_loop.auto_apply a "approve" para revisar antes de aplicar.'}
             </div>
@@ -85,8 +95,8 @@ export function ApprovalsPanel() {
           ))}
         </ScrollArea>
         <div className="border-t border-[#2C3037] p-2">
-          <Button variant="ghost" size="sm" className="w-full" onClick={() => void clear()}>
-            <Trash2 className="mr-1 h-3.5 w-3.5" /> Limpiar resueltas
+          <Button variant="ghost" size="sm" className="w-full" disabled={clearing} onClick={() => void clear()}>
+            {clearing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />} Limpiar resueltas
           </Button>
         </div>
       </div>
