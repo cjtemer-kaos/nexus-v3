@@ -9,6 +9,7 @@ CONTINUE | STOP | COMPACT | INJECT semantics (Cordis).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
@@ -95,7 +96,7 @@ class HooksEngine:
         last = HookResult(action=HookAction.CONTINUE)
         for h in handlers:
             try:
-                if asyncio.iscoroutinefunction(h):
+                if inspect.iscoroutinefunction(h):
                     res = await h(phase, payload)
                 else:
                     res = h(phase, payload)  # type: ignore
@@ -129,7 +130,7 @@ class HooksEngine:
         # Already in loop — caller should await; fallback to sync iteration without await
         last = HookResult(action=HookAction.CONTINUE)
         for h in self._handlers.get(phase, []):
-            if asyncio.iscoroutinefunction(h):
+            if inspect.iscoroutinefunction(h):
                 continue  # skip async handlers in sync context
             try:
                 res = h(phase, payload)  # type: ignore

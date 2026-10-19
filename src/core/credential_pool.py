@@ -225,12 +225,17 @@ class CredentialPool:
             return bool(self._credentials.get(provider))
 
     def mark_error(self, provider: str, error_msg: str = ""):
-        """Marca la ultima credencial usada con error (para failover)"""
+        """Marca la ultima credencial usada con error (para failover).
+
+        No llamar a `record_failure` con el lock tomado: tambien lo toma y
+        `threading.Lock` no es reentrante (se colgaba el failover entero).
+        """
         with self._lock:
-            creds = self._credentials.get(provider, [])
-            if creds:
-                last_used = max(creds, key=lambda c: c.usage_count)
-                self.record_failure(last_used, "error", error_msg)
+            creds = list(self._credentials.get(provider, []))
+        if not creds:
+            return
+        last_used = max(creds, key=lambda c: c.usage_count)
+        self.record_failure(last_used, "error", error_msg)
 
     def mark_cooldown(self, cred: Credential, error_code: int):
         """Aplica cooldown a una credencial especifica"""

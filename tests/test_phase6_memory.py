@@ -157,7 +157,7 @@ def _ollama_up() -> bool:
     from src.core.environment import ollama_base_url
 
     try:
-        r = httpx.get(f"{ollama_base_url()}/api/tags", timeout=3.0)
+        r = httpx.get(f"{ollama_base_url()}/api/tags", timeout=1.5)
         return r.status_code == 200 and any(
             "embed" in m.get("name", "") or "nomic" in m.get("name", "")
             for m in r.json().get("models", [])
@@ -166,8 +166,60 @@ def _ollama_up() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _ollama_up(), reason="Ollama + modelo de embeddings no disponible")
-def test_rag_engine_index_and_search(tmp_path):
+@pytest.fixture(scope="module")
+def ollama_embeddings():
+    """Probe en tiempo de test (no al importar el modulo)."""
+    if not _ollama_up():
+        pytest.skip("Ollama + modelo de embeddings no disponible")
+
+
+def test_rag_indexa_y_busca_sin_ollama(tmp_path):
+    """El indice y la busqueda coseno se prueban sin red (embedder falso).
+
+    Antes, si Ollama no estaba, TODO el RAG quedaba sin cobertura efectiva.
+    """
+    from src.core.rag_engine import RAGEngine
+
+    vocab = ["rag", "ollama", "python", "gato"]
+
+    async def run():
+        engine = RAGEngine(db_path=str(tmp_path / "rag_offline.db"))
+        await engine.initialize()
+
+        async def fake_embed(text: str):
+            low = text.lower()
+            return [1.0 if w in low else 0.0 for w in vocab]
+
+        engine._embed = fake_embed
+        doc = tmp_path / "doc.md"
+        doc.write_text(
+            "El motor RAG indexa documentos y calcula embeddings.\n\n"
+            "Python es un lenguaje de programacion usado en el backend.\n",
+            encoding="utf-8",
+        )
+        try:
+            res = await engine.index_file(str(doc), chunk_size=70, overlap=0)
+            assert res["status"] == "indexed"
+            assert res["chunks"] >= 2
+            assert res["errors"] == 0
+
+            hits = await engine.search("python backend", top_k=3, min_score=0.5)
+            assert hits
+            assert "python" in hits[0]["content"].lower()
+
+            otra = await engine.index_file(str(doc))
+            assert otra["status"] == "already_indexed"
+
+            st = await engine.stats()
+            assert st["chunks"] >= 2
+            assert st["sources"] == 1
+        finally:
+            await engine.close()
+
+    asyncio.run(run())
+
+
+def test_rag_engine_index_and_search(tmp_path, ollama_embeddings):
     from src.core.rag_engine import RAGEngine
 
     async def run():

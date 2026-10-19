@@ -90,7 +90,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 | Prueba | Resultado |
 |---|---|
-| Suite completa (`pytest`) | **552 passed, 3 skipped, exit 0** (153 s) |
+| Suite completa (`pytest`) | **591 passed, 3 skipped, exit 0** (142 s) |
 | Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
 | Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
 | Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
@@ -123,12 +123,18 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Integridad de datos | `SequenceScrubber` ya **no muta** los dicts del llamador; `BoundedHistory.__len__` cuenta solo lo vigente (antes contaba expirados y contradecía a `get_all()`) |
 | Módulos legacy | `src/core/decision_engine.py` importaba `src/core/command_protocol` (inexistente): el módulo era **in-importable**. Ahora degrada a un `Command` local; verificado con `decompose()` |
 | `web_fetch` (revisión + cableado) | `HTTPFetcher` no validaba la **URL inicial** (SSRF directo a `127.0.0.1`/metadata), su `redirect_request` devolvía un string (contrato roto) y **escapaba** el HTML (`<`→`&lt;`) en vez de convertirlo. Ahora: SSRF en cada salto (incluye IPv4-mapped, multicast y unspecified), redirects manuales validados, HTML→texto legible, y **la tool `web_fetch` del registry usa esta clase** en vez del loop duplicado inline (con `max_length=15000` y el fence de contenido no confiable) |
+| Tests nuevos (5ª pasada) | **39** en 5 archivos: `credential_pool` (4), `llm_provider` (9: costos, cadena de failover, barrera de tool-state), `mcp_pool` (10: refcount, evicción, health, reconexión, singleton), `dag_coordinator` (10: patrones, dependencias, niveles) y `lsp_client` (5: framing JSON-RPC real por stdio contra un servidor falso + `format_diagnostics`) |
+| Fallos reales de la 5ª pasada | `CredentialPool.mark_error` tomaba el lock y llamaba a `record_failure` (el mismo `threading.Lock`, no reentrante) → **deadlock del failover** con una API key configurada. `envelope.classify()` no existe (es `ErrorClassifier.classify`) → la excepción dejaba la tarea `PENDING` y el DAG informaba **`completed`** con todo fallado; además un nodo fallido **no bloqueaba a sus hijos** (ahora `SKIPPED`). El pool MCP no detenía el servidor evacuado (proceso huérfano) y hacía `await` con el lock tomado en `reconnect`; los `reconnects` se perdían al recrear la conexión. `format_diagnostics` lanzaba `IndexError` si un diagnóstico no traía `message` |
+| Cobertura sin red | RAG se prueba sin Ollama con un embedder falso (`test_rag_indexa_y_busca_sin_ollama`); el probe de Ollama ya no corre al importar el módulo. Los E2E resuelven la raíz con `Path(__file__).parents[1]` en vez de `os.getcwd()`. `asyncio.iscoroutinefunction` (deprecado, removible en 3.16) → `inspect.iscoroutinefunction` en hooks y sub-agentes |
 
 ### Código legacy absorbido (no es el camino del harness)
 
 `src/bridges/*`, `src/tools/codegraph_tool.py`, `src/tools/vision_gem_v2.py`, `src/core/gallery.py`,
 `src/core/nexus_hive.py`, `src/core/llm_provider.py` y `src/core/dag_coordinator.py` vienen de
-proyectos anteriores (v2/autopsia). Sus dependencias opcionales (`networkx`, `Pillow`, `redis`,
-`paramiko`, `mss`, `cv2`, `pytesseract`, `gfpgan`…) están **guardadas con try/except** o son lazy,
-así que su ausencia no rompe nada y el harness no las necesita para funcionar. Se dejan como
-referencia (regla: no borrar); si se cablean, declarar los extras en `pyproject.toml`.
+proyectos anteriores (v2/autopsia). Los dos últimos ya tienen suite propia y sus bugs corregidos
+(deadlock de credenciales, DAG que no bloqueaba dependencias), pero el loop TDAO no los usa:
+el camino del harness es `provider_router` + `agent_loop`. Sus dependencias opcionales
+(`networkx`, `Pillow`, `redis`, `paramiko`, `mss`, `cv2`, `pytesseract`, `gfpgan`…) están
+**guardadas con try/except** o son lazy, así que su ausencia no rompe nada y el harness no las
+necesita para funcionar. Se dejan como referencia (regla: no borrar); si se cablean, declarar
+los extras en `pyproject.toml`.

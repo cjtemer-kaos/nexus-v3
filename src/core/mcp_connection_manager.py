@@ -48,6 +48,7 @@ class MCPConnectionPool:
         self._max_connections = max_connections
         self._health_check_interval = health_check_interval
         self._pool: Dict[str, PooledConnection] = {}
+        self._reconnect_counts: Dict[str, int] = {}
         self._lock = threading.Lock()
         self._health_task: Optional[asyncio.Task] = None
 
@@ -60,8 +61,18 @@ class MCPConnectionPool:
                 existing.stats.last_used = time.time()
                 return existing.client
 
-            if len(self._pool) >= self._max_connections:
+            evicted = (
                 self._evict_oldest()
+                if len(self._pool) >= self._max_connections
+                else None
+            )
+
+        if evicted and self._bridge:
+            # Cerrar el proceso del servidor evacuado: si no, queda huerfano.
+            try:
+                await self._bridge.stop_server(evicted)
+            except Exception:
+                logger.warning(f"No se pudo detener el MCP evacuado: {evicted}")
 
         if not self._bridge:
             return None
@@ -75,6 +86,8 @@ class MCPConnectionPool:
 
         if client:
             conn = PooledConnection(server_name=server_name, client=client)
+            # los reconnects son del servidor, no de esta conexion concreta
+            conn.stats.reconnects = self._reconnect_counts.get(server_name, 0)
             with self._lock:
                 self._pool[server_name] = conn
             conn.stats.acquired += 1
@@ -118,12 +131,16 @@ class MCPConnectionPool:
 
     async def reconnect(self, server_name: str) -> bool:
         with self._lock:
-            conn = self._pool.get(server_name)
-            if conn and conn.client:
-                if self._bridge:
-                    await self._bridge.stop_server(server_name)
-            self._pool.pop(server_name, None)
-            conn.stats.reconnects += 1 if conn else 0
+            conn = self._pool.pop(server_name, None)
+            if conn:
+                self._reconnect_counts[server_name] = self._reconnect_counts.get(server_name, 0) + 1
+
+        # stop_server puede bloquear: nunca con el lock tomado.
+        if conn and conn.client and self._bridge:
+            try:
+                await self._bridge.stop_server(server_name)
+            except Exception:
+                logger.warning(f"No se pudo detener {server_name} antes de reconectar")
 
         client = await self.acquire(server_name, auto_start=True)
         return client is not None
@@ -162,8 +179,10 @@ class MCPConnectionPool:
                 },
             }
 
-    def _evict_oldest(self):
+    def _evict_oldest(self) -> Optional[str]:
+        """Saca la conexion menos usada del pool y devuelve su nombre."""
         if not self._pool:
-            return
+            return None
         oldest = min(self._pool.items(), key=lambda x: x[1].stats.last_used)
         self._pool.pop(oldest[0], None)
+        return oldest[0]

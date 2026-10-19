@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 
 from src.core.task_queue import TaskQueue, TaskPriority
-from src.core.error_envelope import ErrorEnvelope, ErrorCategory, ErrorSeverity, ErrorDecision
+from src.core.error_envelope import ErrorClassifier, ErrorDecision
 
 logger = logging.getLogger("nexus-dag")
 
@@ -307,17 +307,10 @@ Reglas:
                     logger.warning(f"Task {node.id} attempt {attempt + 1} timeout")
                     await asyncio.sleep(1 * (attempt + 1))
                 except Exception as e:
-                    # ErrorEnvelope: Clasificar error para decision inteligente
-                    envelope = ErrorEnvelope(
-                        error=e,
-                        category=ErrorCategory.UNKNOWN,
-                        severity=ErrorSeverity.MEDIUM,
-                        decision=ErrorDecision.RETRY,
-                        max_retries=node.max_retries,
-                        retry_count=attempt,
-                        message=str(e),
-                    )
-                    envelope.classify()
+                    # Clasificar el error para decidir reintento/abort (antes se
+                    # llamaba a `envelope.classify()`, metodo inexistente: la
+                    # excepcion dejaba la tarea PENDING y el DAG "completed").
+                    envelope = ErrorClassifier.classify(e)
                     node.error = envelope.message
                     node.retries = attempt + 1
                     
@@ -336,13 +329,27 @@ Reglas:
                     await asyncio.sleep(1 * (attempt + 1))
             return {"content": "", "error": "Max retries exceeded"}
 
-        # Ejecutar por niveles de paralelismo
+        # Ejecutar por niveles de paralelismo (un fallo bloquea a sus dependientes)
         levels = task_queue.get_parallel_groups()
+        blocked: set[str] = set()
         for level in levels:
             nodes_in_level = [n for n in dag.nodes if n.id in level]
-            coros = [run_node(n.id, n) for n in nodes_in_level if n.status == TaskStatus.PENDING]
+            coros = []
+            for node in nodes_in_level:
+                if node.status != TaskStatus.PENDING:
+                    continue
+                if any(dep in blocked for dep in node.depends_on):
+                    node.status = TaskStatus.SKIPPED
+                    node.error = "dependencia fallida"
+                    blocked.add(node.id)
+                    continue
+                coros.append(run_node(node.id, node))
             if coros:
                 await asyncio.gather(*coros, return_exceptions=True)
+            blocked |= {
+                n.id for n in dag.nodes
+                if n.status in (TaskStatus.FAILED, TaskStatus.SKIPPED)
+            }
 
         dag.completed_at = datetime.now().isoformat()
         dag.status = "completed" if not dag.get_failed_tasks() else "partial"
@@ -356,17 +363,8 @@ Reglas:
                 result = await executor_func(task.description, task.assignee)
                 return result
             except Exception as e:
-                # ErrorEnvelope: Clasificar error
-                envelope = ErrorEnvelope(
-                    error=e,
-                    category=ErrorCategory.UNKNOWN,
-                    severity=ErrorSeverity.MEDIUM,
-                    decision=ErrorDecision.RETRY,
-                    max_retries=task.max_retries,
-                    retry_count=attempt,
-                    message=str(e),
-                )
-                envelope.classify()
+                # Clasificar error (ver nota en run_node: classify() era inexistente)
+                envelope = ErrorClassifier.classify(e)
                 task.retries = attempt + 1
                 
                 if envelope.decision == ErrorDecision.ABORT:
@@ -398,6 +396,7 @@ Reglas:
             "total_tasks": len(dag.nodes),
             "completed": sum(1 for n in dag.nodes if n.status == TaskStatus.COMPLETED),
             "failed": sum(1 for n in dag.nodes if n.status == TaskStatus.FAILED),
+            "skipped": sum(1 for n in dag.nodes if n.status == TaskStatus.SKIPPED),
             "results": results,
         }
 

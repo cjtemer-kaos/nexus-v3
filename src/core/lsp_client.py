@@ -148,6 +148,7 @@ def format_diagnostics(diags: list[dict]) -> str:
         line = int(r.get("line", 0)) + 1
         col = int(r.get("character", 0)) + 1
         lvl = sev.get(d.get("severity", 1), "error")
-        msg = (d.get("message") or "").splitlines()[0]
+        msg_lines = (d.get("message") or "").splitlines()
+        msg = msg_lines[0] if msg_lines else ""
         lines.append(f"{line}:{col} {lvl}: {msg}")
     return "\n".join(lines)

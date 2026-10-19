@@ -2,10 +2,15 @@
 (slash commands, routing sin embeddings, tools, FS unidades, providers)."""
 from fastapi.testclient import TestClient
 
+from pathlib import Path
+
 from src.api.server import app
 from src.core.provider_router import is_chat_model_id
 
 client = TestClient(app)
+
+# Raiz del repo por ubicacion del archivo (no depende del cwd de pytest)
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_slash_commands_present():
@@ -130,11 +135,9 @@ def test_global_search_and_catalog_endpoints():
 
 
 def test_permission_gate_mutating_confirm():
-    import os
-    from pathlib import Path
     from src.core.scope import Scope, ScopeConfig, ScopeDenied
     sc = Scope(ScopeConfig(permission="workspace_write", require_confirm_mutating=True),
-               project_root=Path(os.getcwd()))
+               project_root=_ROOT)
     try:
         sc.check_tool("write_file", {"path": "./workspace/x.txt", "content": "a"})
         assert False, "deberia bloquear sin confirm"
@@ -152,11 +155,9 @@ def test_sandbox_run_argv_policy():
 
 
 def test_plugins_loader():
-    import os
-    from pathlib import Path
     from src.core.plugins import list_plugins, load_plugins
     from src.core.tool_registry import ToolRegistry
-    root = Path(os.getcwd())
+    root = _ROOT
     assert any(p["name"] == "hello_plugin" for p in list_plugins(root))
     reg = ToolRegistry()
     assert "hello_plugin" in load_plugins(reg, root)
@@ -181,10 +182,8 @@ def test_usage_plugins_worktree_endpoints():
 
 
 def test_agents_md_hierarchical():
-    import os
-    from pathlib import Path
     from src.core.agents_md import find_agents_md, system_block
-    root = Path(os.getcwd())
+    root = _ROOT
     assert "AGENTS.md" in [r for r, _ in find_agents_md([], root)]
     rels = [r for r, _ in find_agents_md([str(root / "src" / "core" / "x.py")], root)]
     assert "AGENTS.md" in rels and "src/core/AGENTS.md" in rels

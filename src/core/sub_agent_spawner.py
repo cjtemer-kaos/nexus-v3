@@ -15,6 +15,7 @@ Caracteristicas:
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import time
 import uuid
@@ -391,7 +392,7 @@ class SubAgentSpawner:
 
             try:
                 # Ejecutar con timeout
-                if asyncio.iscoroutinefunction(self.executor):
+                if inspect.iscoroutinefunction(self.executor):
                     task_result = await asyncio.wait_for(
                         self.executor(spec.task, gem=spec.gem, context=spec.context),
                         timeout=spec.timeout_seconds,
