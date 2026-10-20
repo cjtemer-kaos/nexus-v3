@@ -90,7 +90,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 | Prueba | Resultado |
 |---|---|
-| Suite completa (`pytest`) | **591 passed, 3 skipped, exit 0** (142 s) |
+| Suite completa (`pytest`) | **601 passed, 3 skipped, exit 0** (244 s) |
 | Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
 | Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
 | Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
@@ -126,6 +126,15 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Tests nuevos (5ª pasada) | **39** en 5 archivos: `credential_pool` (4), `llm_provider` (9: costos, cadena de failover, barrera de tool-state), `mcp_pool` (10: refcount, evicción, health, reconexión, singleton), `dag_coordinator` (10: patrones, dependencias, niveles) y `lsp_client` (5: framing JSON-RPC real por stdio contra un servidor falso + `format_diagnostics`) |
 | Fallos reales de la 5ª pasada | `CredentialPool.mark_error` tomaba el lock y llamaba a `record_failure` (el mismo `threading.Lock`, no reentrante) → **deadlock del failover** con una API key configurada. `envelope.classify()` no existe (es `ErrorClassifier.classify`) → la excepción dejaba la tarea `PENDING` y el DAG informaba **`completed`** con todo fallado; además un nodo fallido **no bloqueaba a sus hijos** (ahora `SKIPPED`). El pool MCP no detenía el servidor evacuado (proceso huérfano) y hacía `await` con el lock tomado en `reconnect`; los `reconnects` se perdían al recrear la conexión. `format_diagnostics` lanzaba `IndexError` si un diagnóstico no traía `message` |
 | Cobertura sin red | RAG se prueba sin Ollama con un embedder falso (`test_rag_indexa_y_busca_sin_ollama`); el probe de Ollama ya no corre al importar el módulo. Los E2E resuelven la raíz con `Path(__file__).parents[1]` en vez de `os.getcwd()`. `asyncio.iscoroutinefunction` (deprecado, removible en 3.16) → `inspect.iscoroutinefunction` en hooks y sub-agentes |
+| Config que ahora SÍ manda (6ª pasada) | `agent_loop.error_policy` nunca se aplicaba (`set_error_policy` no se llamaba); `heartbeat_ms`/`max_iterations` se ignoraban en 2 de 4 call sites; la compactación usaba `32000`/`0.75` fijos en vez de `session.max_tokens`/`compact_threshold`; `scope.max_read_bytes` no tenía efecto porque `effective_max_bytes()` devolvía el default de `max_file_read_bytes`. Todo cableado con `_new_agent_loop()` y `ScopeConfig.effective_max_bytes()` |
+| Portabilidad de datos | `checkpoints` y `provider_models` guardaban en `./data/...` **relativo al CWD**: si el backend arrancaba desde otra carpeta, los snapshots/caché quedaban fuera del proyecto. Ahora cuelgan de la raíz del proyecto (`data_home()`) salvo env explícito |
+| Embeddings / RAG | `embeddings.embed_url()` hacía `re.search` sobre el YAML crudo: ignoraba `OLLAMA_HOST`, los `${ENV}` y el parser de config. Ahora usa `environment.ollama_base_url()` (OLLAMA_HOST > `providers.ollama.embed_url` > `base_url` > default) |
+| `POST /api/sessions/{id}/branch` | acepta `copy_messages` por **query y por body JSON** (antes el body se ignoraba en silencio: rama vacía sin error) |
+| `WS /ws/chat` | contrato **JSON simétrico** en éxito y error: `{success, reply, session_id}` / `{success:false, error, reply:""}` (antes éxito = texto crudo) |
+| `/v1/chat/completions` (stream) | el chunk de error incluye `error: {message, type}` además del texto, así un cliente OpenAI puede detectarlo; `stream` sigue siendo **buffered** (documentado en el docstring) |
+| Steer en la UI | con un run en curso, Enter ya no queda bloqueado: envía la instrucción a `POST /api/sessions/{id}/steer` y muestra si quedó encolada. Antes el endpoint era inalcanzable desde la UI |
+| Endpoints programáticos (sin UI) | cubiertos por E2E (`test_get_endpoints_programaticos_sin_ui`): `/api/cloud/free-models`, `/api/rag/index-status`, `/api/rag/stats`, `/api/learning/stats`, `/api/learning/recommend`, `/api/skill-opt/stats`, `/api/skill-opt/heldout`, `/api/runtime`, `/api/graph/status`. Los mutantes (`rag/index-graph`, `graph/maintain`, `learning/record`, `skill-opt/{propose,validate}`, `dream/run`) son **API programática**, no hay pantalla que los invoque |
+| Dependencias | `pyproject.toml` declara `ruamel.yaml` (lo usa `save_config` para preservar comentarios; sin él, cada guardado de config los perdía) |
 
 ### Código legacy absorbido (no es el camino del harness)
 

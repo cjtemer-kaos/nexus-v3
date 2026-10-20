@@ -3,7 +3,7 @@ import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Ey
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 
 type Pending = { key: string; file: File; preview?: string }
@@ -157,6 +157,30 @@ export function ChatPanel() {
   /* ── envío ────────────────────────────────────────────────── */
 
   const send = async () => {
+    // Si hay un run en curso, el mensaje se inyecta como STEER (el loop lo lee
+    // entre iteraciones). Antes el input quedaba bloqueado y /steer era inalcanzable.
+    if (isStreaming && !busyRef.current && input.trim()) {
+      const text = input.trim()
+      const sidNow = useAppStore.getState().activeSession
+      if (!sidNow) { toast('No hay sesión activa para dirigir el run'); return }
+      setInput(''); setSlashOpen(false)
+      try {
+        const r = await steerSessionApi(sidNow, text)
+        addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
+        addMessage({
+          id: uid(),
+          role: 'tool',
+          content: r.queued
+            ? 'steer encolado: el run lo aplicará en la próxima iteración'
+            : 'steer no aplicado: no hay run en curso para esta sesión',
+          toolName: 'steer',
+          timestamp: now(),
+        })
+      } catch (e) {
+        toast('No se pudo dirigir el run: ' + (e as Error).message.slice(0, 140))
+      }
+      return
+    }
     if ((!input.trim() && pending.length === 0) || isStreaming || busyRef.current) return
     busyRef.current = true
     const text = input.trim()
@@ -533,7 +557,7 @@ export function ChatPanel() {
             value={input}
             onChange={(e)=>{ const v=e.target.value; setInput(v); if(v.startsWith('/')){ setSlashOpen(true); setSlashQuery(v.slice(1).split(' ')[0]) } else setSlashOpen(false) }}
             onKeyDown={(e)=>{ if(e.key==='Escape' && slashOpen){ e.preventDefault(); setSlashOpen(false); return } if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing){ e.preventDefault(); send() }}}
-            placeholder="Mensaje a Nexus…  / comandos · Ctrl+V adjunta · Shift+Enter salto"
+            placeholder={isStreaming ? "Dirigir el run en curso… (Enter encola la instrucción)" : "Mensaje a Nexus…  / comandos · Ctrl+V adjunta · Shift+Enter salto"}
             rows={1}
             aria-label="Mensaje a Nexus"
             className="max-h-32 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2.5 text-sm placeholder:text-[#9BA1AA] focus:outline-none text-[#EDEEF0]"
@@ -541,8 +565,8 @@ export function ChatPanel() {
           <div className="relative flex shrink-0 items-center">
             <VoiceMic onTranscript={onTranscript} />
           </div>
-          <Button onClick={send} disabled={(!input.trim() && pending.length===0) || isStreaming} aria-label="Enviar mensaje" className="shrink-0 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] text-white">
-            <Send className="h-4 w-4" /> <span className="hidden sm:inline">Enviar</span>
+          <Button onClick={send} disabled={!input.trim() && pending.length===0} aria-label={isStreaming ? "Dirigir el run en curso" : "Enviar mensaje"} className="shrink-0 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] text-white">
+            <Send className="h-4 w-4" /> <span className="hidden sm:inline">{isStreaming ? 'Dirigir' : 'Enviar'}</span>
           </Button>
         </div>
         <div className="mt-2 flex items-center justify-between text-xs text-[#9BA1AA]">

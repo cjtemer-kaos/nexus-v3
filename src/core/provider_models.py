@@ -27,8 +27,16 @@ _NOISE = (
 
 
 def _cache_path() -> Path:
-    p = os.environ.get("NEXUS_PROVIDER_MODELS_CACHE") or "./data/provider_models.json"
-    return Path(p)
+    raw = os.environ.get("NEXUS_PROVIDER_MODELS_CACHE")
+    if raw:
+        p = Path(raw).expanduser()
+        if p.is_absolute():
+            return p
+        from src.core.environment import workspace_root
+        return workspace_root() / p
+    # Absoluto al proyecto: "./data" dependía del CWD del proceso.
+    from src.core.environment import data_home
+    return data_home() / "provider_models.json"
 
 
 def is_chat_model(mid: str) -> bool:

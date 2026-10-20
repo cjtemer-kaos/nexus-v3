@@ -3082,6 +3082,10 @@ def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: st
     roots = tuple(roots)
     allow_net = bool(scope_cfg.get("allow_network", False))
     deny = tuple(scope_cfg.get("deny_patterns", ["**/.env", "**/*.key"]))
+    # Antes SOLO se pasaba max_read_bytes: `effective_max_bytes()` devolvía el
+    # default de max_file_read_bytes (1 MB) y subir el límite en config no servía.
+    _max_bytes = int(scope_cfg.get("max_file_read_bytes",
+                                   scope_cfg.get("max_read_bytes", 1_048_576)))
     if permission == "full":
         roots = roots + tuple(r for r in _full_access_roots() if r not in roots)
         allow_net = True
@@ -3094,7 +3098,8 @@ def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: st
     return Scope(ScopeConfig(
         allowed_roots=roots,
         deny_patterns=deny,
-        max_read_bytes=int(scope_cfg.get("max_read_bytes", 1_048_576)),
+        max_read_bytes=_max_bytes,
+        max_file_read_bytes=_max_bytes,
         allow_network=allow_net,
         allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)) or permission == "full",
         require_confirm_mutating=bool(scope_cfg.get("require_confirm_mutating", False)) and permission != "full",
@@ -3111,7 +3116,6 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
     """
     import json as _j
     import uuid as _uuid
-    from src.core.agent_loop import AgentLoop
     from src.core.model_assign import assign_model
     try:
         from src.core.gema_profiles import system_prompt_for_gema, hint_for_gema
@@ -3141,11 +3145,10 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
         pass
     scope = _build_scope(cfg, agent_id)
     sub_reg = _build_registry(scope, sid, cfg, router=router, helpers=False)
-    loop = AgentLoop(
-        provider_router=router, tool_registry=sub_reg, scope=scope, session_log=slog,
+    loop = _new_agent_loop(
+        cfg, provider_router=router, tool_registry=sub_reg, scope=scope, session_log=slog,
         event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
         distill_hook=_build_distill_hook(cfg),
-        budget=_build_budget(cfg),
     )
     res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None, images=images or None)
     return _j.dumps({
@@ -3187,13 +3190,12 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
         from src.core.sub_agent_spawner import SubAgentSpawner
 
         async def _exec(task: str, gem: str = "auto", context: str = ""):
-            from src.core.agent_loop import AgentLoop
             child_sid = f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}"
             reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False)
-            loop = AgentLoop(provider_router=router, tool_registry=reg, scope=scope,
-                             session_log=_session_log(), event_store=_event_store(),
-                             compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
-                             distill_hook=_build_distill_hook(cfg))
+            loop = _new_agent_loop(cfg or {}, provider_router=router, tool_registry=reg, scope=scope,
+                                   session_log=_session_log(), event_store=_event_store(),
+                                   compaction=_build_compaction(cfg or {}), hooks=_build_hooks(cfg or {}),
+                                   distill_hook=_build_distill_hook(cfg or {}))
             _sub_sys = ("Eres un sub-agente de nexus-v3. Tenés tools de archivos (read_file/write_file/edit/"
                         "list_dir/exec/code_search), web (web_search/web_fetch), memoria (recall/learn) y todo_write. "
                         "NO tenés delegación: hacé la tarea VOS MISMO. Devolvé un resultado conciso y verificable.")
@@ -3792,6 +3794,34 @@ def _build_budget(cfg: dict | None = None):
     )
 
 
+def _new_agent_loop(cfg: dict | None = None, **kwargs):
+    """Construye un AgentLoop aplicando TODA la config del loop.
+
+    Antes varias claves eran "control aparente": error_policy nunca se aplicaba,
+    heartbeat_ms/max_iterations se ignoraban en la mitad de los call sites y la
+    compactación usaba 32000/0.75 fijos en vez de session.max_tokens/compact_threshold.
+    """
+    from src.core.agent_loop import AgentLoop
+
+    cfg = cfg or {}
+    al = cfg.get("agent_loop") or {}
+    se = cfg.get("session") or {}
+    kwargs.setdefault("budget", _build_budget(cfg))
+    loop = AgentLoop(
+        max_iterations=int(al.get("max_iterations", 25)),
+        heartbeat_ms=int(al.get("heartbeat_ms", 2000)),
+        context_max_tokens=int(se.get("max_tokens", 32000)),
+        compact_threshold=float(se.get("compact_threshold", 0.75)),
+        **kwargs,
+    )
+    ep = al.get("error_policy") or {}
+    try:
+        loop.set_error_policy(retry=int(ep.get("retry", 3)), replan=int(ep.get("replan", 2)))
+    except Exception as e:
+        logger.debug("error_policy inválida, se usan defaults: %s", e)
+    return loop
+
+
 async def _knowledge_block(query: str, limit: int = 3) -> str:
     """RAG automático: recupera conocimiento relevante del grafo (FTS5) e inyecta al prompt.
 
@@ -3866,7 +3896,6 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                           agent_id: str | None = None, on_delta=None, on_reasoning=None):
     """Un run de AgentLoop con la construccion estandar (config segura)."""
     from src.core.config import load_config
-    from src.core.agent_loop import AgentLoop
     cfg = _load_config_safe()
     router = _get_router(cfg)
     # Plan mode: el turno corre con alcance read_only (sin mutaciones).
@@ -3885,9 +3914,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                 hint = hint_for_gema(_gema) or hint
         except Exception:
             pass
-    loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
-                     event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg),
-                     budget=_build_budget(cfg))
+    loop = _new_agent_loop(cfg, provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
+                           event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
     _extra = _delegation_block() if (not agent_id or agent_id == "default") else ""
     try:
         _kb = await _knowledge_block(message)
@@ -3961,7 +3989,6 @@ async def chat(request: Request):
     # Try to run AgentLoop if providers are configured
     try:
         from src.core.config import load_config
-        from src.core.agent_loop import AgentLoop
 
         cfg = load_config()
         router = _get_router(cfg)
@@ -3999,8 +4026,8 @@ async def chat(request: Request):
             except Exception:
                 pass
 
-        loop = AgentLoop(provider_router=router, tool_registry=registry, scope=scope, session_log=slog,
-                         event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
+        loop = _new_agent_loop(cfg, provider_router=router, tool_registry=registry, scope=scope, session_log=slog,
+                               event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
                                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
@@ -4138,8 +4165,19 @@ async def end_session_endpoint(session_id: str):
 
 
 @app.post("/api/sessions/{session_id}/branch")
-async def branch_session_endpoint(session_id: str, copy_messages: bool = False):
-    """Rama con (opcional) copia de mensajes — sesiones en arbol (pi-style)."""
+async def branch_session_endpoint(session_id: str, request: Request, copy_messages: bool = False):
+    """Rama con (opcional) copia de mensajes — sesiones en arbol (pi-style).
+
+    Acepta `copy_messages` por query Y por body JSON: antes solo se leía el query,
+    así que un cliente que mandaba {"copy_messages": true} obtenía una rama vacía
+    sin ningún error.
+    """
+    body = await _json_body(request, required=False)
+    if not isinstance(body, dict):
+        body = {}
+    if "copy_messages" in body:
+        raw = body.get("copy_messages")
+        copy_messages = raw if isinstance(raw, bool) else str(raw).strip().lower() in ("1", "true", "yes", "on")
     if _session_log().get_session(session_id) is None:
         raise HTTPException(status_code=404, detail="sesión no encontrada")
     child = _session_log().branch(session_id, copy_messages=copy_messages)
@@ -4190,6 +4228,9 @@ if _UI_DIST.exists():
 # OPENAI
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(req: Request):
+    """Compat OpenAI. `stream=true` es BUFFERED: el loop TDAO no expone tokens
+    incrementales por esta vía, así que se emite la respuesta completa en un chunk
+    y luego `[DONE]`. En error, el chunk trae `error` (detectable) además del texto."""
     try:
         body = await req.json()
     except Exception:
@@ -4248,6 +4289,8 @@ async def openai_chat_completions(req: Request):
         import json as _js
         text = f"[error] {error_msg}" if error_msg else reply
         chunk = {"id":"chatcmpl-nexus","object":"chat.completion.chunk","created":0,"model":model_id,"choices":[{"index":0,"delta":{"content": text},"finish_reason": None}]}
+        if error_msg:
+            chunk["error"] = {"message": error_msg, "type": "nexus_error"}
         yield f"data: {_js.dumps(chunk, ensure_ascii=False)}\n\n"
         done = {"id":"chatcmpl-nexus","object":"chat.completion.chunk","created":0,"model":model_id,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
         yield f"data: {_js.dumps(done)}\n\n"
@@ -4310,7 +4353,9 @@ async def ws_chat(ws: WebSocket):
                 import json as _jsw
                 await ws.send_text(_jsw.dumps({"success": False, "error": f"{type(e).__name__}: {e}", "reply": ""}))
                 continue
-            await ws.send_text(reply)
+            # Mismo contrato JSON en éxito y en error (antes éxito = texto crudo).
+            import json as _jsw
+            await ws.send_text(_jsw.dumps({"success": True, "reply": reply, "session_id": ws_session_id}, ensure_ascii=False))
     except WebSocketDisconnect:
         pass
     except Exception:

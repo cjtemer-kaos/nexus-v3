@@ -479,6 +479,27 @@ export async function statusApi(): Promise<NexusStatus> {
   return res.json()
 }
 
+// Steer: inyecta una instrucción en un run EN CURSO (el loop la lee entre iteraciones).
+export async function steerSessionApi(sessionId: string, message: string): Promise<{ ok: boolean; queued: boolean }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+export async function setSessionModeApi(sessionId: string, mode: "act" | "plan"): Promise<{ ok: boolean; mode: string }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
 export type Approval = { id: string; session_id: string; tool: string; args: Record<string, unknown>; preview: string; status: string; created_at: number }
 
 export async function approvalsApi(sessionId = ""): Promise<{ approvals: Approval[]; mode: string }> {

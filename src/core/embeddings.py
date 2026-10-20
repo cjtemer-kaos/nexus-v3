@@ -7,21 +7,26 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from pathlib import Path
 
 
 def _cfg_embed_url() -> str:
+    """URL de embeddings: OLLAMA_HOST > providers.ollama.embed_url > base_url > default.
+
+    Antes se hacía `re.search(r"embed_url: ...")` sobre el YAML crudo, así que
+    ignoraba OLLAMA_HOST, los `${ENV}` sin expandir y el parser de config: en una
+    PC con Ollama en otra dirección, RAG/embeddings fallaban sin explicación.
+    """
+    from src.core.environment import ollama_base_url
+
+    cfg_base = None
     try:
-        import os
-        root = Path(os.environ.get("NEXUS_ROOT", "")) if os.environ.get("NEXUS_ROOT") else Path(__file__).parents[2]
-        import re
-        txt = (root / "config" / "config.yaml").read_text(encoding="utf-8")
-        m = re.search(r"embed_url:\s*(\S+)", txt)
-        if m:
-            return m.group(1).strip()
+        from src.core.config import load_config
+
+        oc = (load_config().get("providers", {}) or {}).get("ollama", {}) or {}
+        cfg_base = oc.get("embed_url") or oc.get("base_url")
     except Exception:
         pass
-    return "http://localhost:11434"
+    return ollama_base_url(cfg_base)
 
 
 def embed_url() -> str:

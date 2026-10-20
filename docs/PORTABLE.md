@@ -10,7 +10,7 @@ Objetivo: copiar la carpeta a otra PC Windows y quedar operativo
 | Toda la carpeta del proyecto | `D:\ias\proyectos\nexus-v3` (o donde quieras) | Sin rutas absolutas en el código (test `test_portability.py` lo vigila) |
 | `data/mcp_bundle/manifest.json` | (incluido) | Catálogo portable de MCPs: comando exacto + env requerida, **sin valores** |
 | `data/mcp_bundle/.env.example` | copiar a `.env` y completar | Solo **nombres** de vars; jamás lleva keys reales |
-| `brain/` | (se crea solo) | Opcional: enlaza uno externo con `NEXUS_BRAIN=<ruta>` (solo lectura externa, opt-in) |
+| `brain/` | (se crea solo) | Opcional: enlaza uno externo con `NEXUS_V3_BRAIN=<ruta>` (solo lectura externa, opt-in) |
 
 NO copiar: `node_modules/`, `.venv/`, `*.log`, `data/logs/`, `data/spill/`.
 

@@ -307,6 +307,10 @@
             "keep_alive": {
               "type": "string"
             },
+            "embed_url": {
+              "type": "string",
+              "description": "URL de Ollama para embeddings (RAG). Default: OLLAMA_HOST o base_url."
+            },
             "options": {
               "type": "object",
               "additionalProperties": true

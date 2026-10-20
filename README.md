@@ -6,7 +6,7 @@
 
 ## Estructura
 - `src/core/` — harness (session, agent-loop, tools, scope, compaction, hooks, event-store, mcp-client)
-- `src/brain/` — cerebro local (`./brain/knowledge_graph.db` + `rag_index.db`) — portable, configurable via `NEXUS_BRAIN`
+- `src/brain/` — cerebro local (`./brain/knowledge_graph.db` + `rag_index.db`) — portable, configurable via `NEXUS_V3_BRAIN`
 - `src/bridges/mcp_bridge_server.py` — MCP bridge (expone tools del harness por MCP); `src/core/mcp_client.py` — cliente MCP (consume servidores del bundle)
 - `src/api/server.py` — FastAPI harness backend (sirve `ui/dist` + `/api/*`)
 - `electron/` — Electron main + preload (TypeScript, contextIsolation, sandbox, single-instance, tray)

@@ -102,6 +102,8 @@ NETWORK_TOOLS = frozenset({
     "fetch", "webfetch", "brave_search", "websearch",
 })
 
+_MAX_BYTES_DEFAULT = 1_048_576
+
 
 @dataclass(frozen=True, slots=True)
 class ScopeConfig:
@@ -118,8 +120,11 @@ class ScopeConfig:
     permission: str = "workspace_write"  # read_only | workspace_write | full
 
     def effective_max_bytes(self) -> int:
-        # prefer max_file_read_bytes if set differently
-        return self.max_file_read_bytes or self.max_read_bytes
+        # `max_file_read_bytes` es el nombre explícito; si no se tocó, manda
+        # `max_read_bytes` (el nombre histórico de config.yaml).
+        if self.max_file_read_bytes != _MAX_BYTES_DEFAULT:
+            return self.max_file_read_bytes
+        return self.max_read_bytes or self.max_file_read_bytes
 
 
 @dataclass

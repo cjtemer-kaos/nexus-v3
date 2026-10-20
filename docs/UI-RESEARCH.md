@@ -24,7 +24,7 @@ Capturas reales del UI corriendo sobre backend vivo `:8765` (2026-09-30):
 1. **Fuga de internales a la UI** — el usuario ve arquitectura, no producto:
    - Pill verde en el topbar: `WAL activado · FTS5 · sesión e2e-chat`.
    - Sidebar: `SESIONES · WAL+FTS`, sesión `PONG / default · e2e-chat · FTS`, hashes tipo `759ea82f84d6`.
-   - Card inferior: `Cerebro local / Enlazado via NEXUS_BRAIN → ./brain` + pills `FTS5` / `RAG 768d`.
+   - Card inferior: `Cerebro local / Enlazado via NEXUS_V3_BRAIN → ./brain` + pills `FTS5` / `RAG 768d`.
    - Footer: `Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas` + línea de estado
      `config.yaml · nada hardcodeado · distribuible` + `Alcance: raíces permitidas ./workspace, ./data · denegado **/env` + `nexus-v3 3.0.0-alpha`.
    - Nav items con meta cruda: `Chat [Bucle Agente TDAO]`, `Grafo [Conocimiento]`, `Editor [Alcance FS]`, `Terminal [Protegido]`.

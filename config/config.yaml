@@ -3,6 +3,8 @@ brain:
   # Brain PROPIO de nexus-v3. NO usar NEXUS_BRAIN (pertenece a supernexus-v2):
   # son proyectos separados y no deben cruzarse.
   path: ${NEXUS_V3_BRAIN:-./brain}
+  # Reservado: capacidades TTL por tier (working/episodic/semantic). El harness
+  # usa knowledge_graph + RAG; las tiers las consume el bridge legacy.
   hierarchical_tiers:
     working:
       capacity: 100
@@ -15,6 +17,8 @@ brain:
       ttl_h: 8760
 session:
   db_path: ./data/session.db
+  # Base de eventos (event store). Relativa a la raiz del proyecto.
+  event_db_path: ./data/event_store.db
   wal: true
   fts: true
   max_tokens: 32000
@@ -22,11 +26,19 @@ session:
   keep_recent: 4
 agent_loop:
   max_iterations: 25
-  max_tokens_per_turn: 8192
+  max_tokens_per_turn: 8192   # reservado: cap por turno (el cap real es agent_loop.budget)
   error_policy:
     retry: 3
     replan: 2
   heartbeat_ms: 2000
+  # assisted = las tools mutantes piden aprobacion; auto = se aplican solas.
+  auto_apply: assisted
+  # Presupuesto del run (IterationBudget). Si falta, se usan estos mismos valores.
+  budget:
+    max_iterations: 25
+    max_tokens: 32000
+    max_wall_ms: 900000
+    max_tool_calls: 60
 scope:
   allowed_roots:
   - .
@@ -39,6 +51,8 @@ scope:
   max_read_bytes: 1048576
   allow_network: true
   allow_mutating_without_confirm: false
+  # Opt-in: las tools mutantes exigen confirm=true en los args.
+  require_confirm_mutating: false
   permission: full
 compaction:
   layers:
@@ -116,6 +130,8 @@ skills:
 memory:
   agent_write_enabled: true
   learn_min_chars: 12
+  # Reservado: persistencia automatica de insights (el ciclo actual registra
+  # telemetria en learning; la destilacion es explicita via /api/dream/run).
   auto_insight_persist: true
 assignment:
   overrides: {}

@@ -76,3 +76,6 @@ data/uploads/
 # Codigo muerto de v2 movido a _attic/ (reversible, no se trackea).
 _attic/
 pytest_out.txt
+
+# Salidas de Playwright MCP (capturas de verificacion)
+.playwright-mcp/

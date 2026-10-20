@@ -12,7 +12,20 @@ import shutil
 import time
 from pathlib import Path
 
-_ROOT = Path(os.environ.get("NEXUS_CHECKPOINTS_DIR") or "./data/checkpoints")
+from src.core.environment import data_home, workspace_root
+
+# Datos SIEMPRE dentro del proyecto (o NEXUS_CHECKPOINTS_DIR explícito).
+# Antes era "./data/checkpoints" relativo al CWD: si el backend arrancaba desde
+# otra carpeta, los snapshots quedaban fuera del proyecto y no se encontraban.
+def _checkpoints_root() -> Path:
+    raw = os.environ.get("NEXUS_CHECKPOINTS_DIR")
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else (workspace_root() / p)
+    return data_home() / "checkpoints"
+
+
+_ROOT = _checkpoints_root()
 
 
 def _session_dir(session_id: str) -> Path:

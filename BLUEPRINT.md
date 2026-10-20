@@ -1,7 +1,7 @@
 # Nexus v3 Harness — Blueprint Profesional
 
 > **Version:** 0.1.0-draft | **Date:** 2026-09-03 | **Status:** Blueprint (no implementation)
-> **Cerebro:** local `./brain` (`knowledge_graph.db` + `rag_index.db`), opcionalmente externo via `NEXUS_BRAIN` si el usuario lo configura
+> **Cerebro:** local `./brain` (`knowledge_graph.db` + `rag_index.db`), opcionalmente externo via `NEXUS_V3_BRAIN` si el usuario lo configura
 > **Harnesses autopsiados:** DeepSeek Harness Cordis (50+ packages), Hermes Agent (`agent/conversation_loop.py` 3900 LOC), OpenCode (TUI+SQLite sessions), Aider/Continue/OpenHands/Engram/mem0/Lethe
 
 ---
@@ -94,7 +94,7 @@ nexus-v3/
 │   │   ├── event_store.py       ← Event sourcing (append-only)
 │   │   └── trajectory.py        ← Trajectory = Session + Tool timeline
 │   ├── brain/
-│   │   ├── link.py              ← Enlace a brain externo si se configura (NEXUS_BRAIN), fallback `./brain` local
+│   │   ├── link.py              ← Enlace a brain externo si se configura (NEXUS_V3_BRAIN), fallback `./brain` local
 │   │   ├── hierarchical_memory.py ← 3-tier (working/episodic/semantic)
 │   │   ├── rag_engine.py        ← nomic-embed-text 768d
 │   │   └── multi_signal.py      ← vector + BM25 + entities
@@ -115,7 +115,7 @@ nexus-v3/
     └── test_scope.py
 ```
 
-> **Nota:** `src/brain/` NO duplica `brain/*.db`; abre el brain configurado via `NEXUS_BRAIN` (mismo patron que `src/bridges/mcp_bridge_server.py:17` en implementaciones de referencia). Ver §11.
+> **Nota:** `src/brain/` NO duplica `brain/*.db`; abre el brain configurado via `NEXUS_V3_BRAIN` (mismo patron que `src/bridges/mcp_bridge_server.py:17` en implementaciones de referencia). Ver §11.
 
 ---
 
@@ -127,7 +127,7 @@ Nada harcodeado. Unico punto de configuracion.
 # config.yaml — Nexus v3
 project: nexus-v3
 brain:
-  path: ${NEXUS_BRAIN:-./brain}   # local ./brain; configurable a ruta externa via env
+  path: ${NEXUS_V3_BRAIN:-./brain}   # local ./brain; configurable a ruta externa via env
   hierarchical_tiers:
     working:   { capacity: 100, ttl_h: 1 }
     episodic:  { capacity: 500, ttl_h: 72 }
@@ -721,22 +721,25 @@ class LlamaCppProvider(BaseProvider):
 
 ## 11. Integracion con Brain (portable, configurable)
 
-### 11.1 No duplicar — Enlazar via NEXUS_BRAIN
+### 11.1 No duplicar - Brain propio (NEXUS_V3_BRAIN)
 
 ```python
 # src/brain/link.py
-import os
 from pathlib import Path
 
 def brain_path() -> Path:
-    return Path(os.environ.get("NEXUS_BRAIN", Path(__file__).parents[2] / "brain"))
+    # precedencia: NEXUS_V3_BRAIN > config.yaml brain.path > ./brain
+    ...
 
 # Uso:
-#   cerebro.db      → brain_path() / "cerebro.db"        (brain_remember/recall)
-#   nexus_memory.db → brain_path() / "nexus_memory.db"   (FTS5 observations)
-#   knowledge_graph.db → brain_path() / "knowledge_graph.db"
-# Si NEXUS_BRAIN apunta a otro directorio (ej. /ruta/a/otro/brain), Nexus v3
-# lee/escribe el MISMO brain. Sin sync, sin duplicacion.
+#   cerebro.db         -> brain_path() / "cerebro.db"        (brain_remember/recall)
+#   nexus_memory.db    -> brain_path() / "nexus_memory.db"   (FTS5 observations)
+#   knowledge_graph.db -> brain_path() / "knowledge_graph.db"
+# Si NEXUS_V3_BRAIN apunta a otro directorio, Nexus v3 lee/escribe el MISMO
+# brain. Sin sync, sin duplicacion.
+#
+# NEXUS_BRAIN (supernexus-v2) se IGNORA a proposito: son proyectos separados y
+# un env var ambiental no debe enlazar sus cerebros por accidente.
 ```
 
 ### 11.2 Capas de memoria (BRAIN_ARCHITECTURE.md)
@@ -748,7 +751,7 @@ HierarchicalMemory (3 tiers, forgetting curves, auto-promocion)
       → SelfLearningLoop (cada 120s, judge + AdaptiveRouter)
 ```
 
-Nexus v3 las consume via `src/brain/*.py` wrappers que delegan a `src/core/*` si `NEXUS_BRAIN` apunta a un brain externo, o usan implementacion local si es instalacion limpia.
+Nexus v3 las consume via `src/brain/*.py` wrappers que delegan a `src/core/*` si `NEXUS_V3_BRAIN` apunta a un brain externo, o usan implementacion local si es instalacion limpia.
 
 ---
 

@@ -450,3 +450,84 @@ def test_global_search_includes_session_id():
         assert results[0]["role"] == "user"
     finally:
         client.delete(f"/api/sessions/{sid}")
+
+
+def test_session_branch_accepts_copy_messages_in_body():
+    """El body JSON debe funcionar igual que el query (antes se ignoraba en silencio)."""
+    from src.api.server import _session_log
+
+    sid = client.post("/api/sessions", json={"project": "pytest-branch"}).json()["id"]
+    child = None
+    try:
+        client.post(f"/api/sessions/{sid}/messages",
+                    json={"role": "user", "content": "mensaje heredado 5521"})
+        r = client.post(f"/api/sessions/{sid}/branch", json={"copy_messages": True})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        child = r.json()["session"]["id"]
+        contents = [m.content for m in _session_log().get_messages(child)]
+        assert any("5521" in (c or "") for c in contents), contents
+        # el query sigue funcionando
+        r2 = client.post(f"/api/sessions/{sid}/branch?copy_messages=true")
+        assert r2.status_code == 200
+        client.delete(f"/api/sessions/{r2.json()['session']['id']}")
+    finally:
+        if child:
+            client.delete(f"/api/sessions/{child}")
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_ws_chat_mismo_contrato_json_en_exito_y_error(monkeypatch):
+    """Éxito y error devuelven JSON (antes: texto crudo vs JSON, imposible de distinguir)."""
+    import types
+
+    from src.api import server as srv
+
+    before = {s.id for s in srv._session_log().list_sessions(project="ws", limit=1000)}
+
+    async def _fake_run(message, session_id=None, **kw):
+        return types.SimpleNamespace(final_output=f"eco:{message}", success=True)
+
+    monkeypatch.setattr(srv, "_run_agent_once", _fake_run)
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_text('{"message": "hola"}')
+        ok = ws.receive_json()
+        assert ok["success"] is True
+        assert ok["reply"] == "eco:hola"
+        assert ok["session_id"]
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("proveedor caído")
+
+    monkeypatch.setattr(srv, "_run_agent_once", _boom)
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_text("hola")
+        bad = ws.receive_json()
+        assert bad["success"] is False
+        assert "RuntimeError" in bad["error"]
+        assert bad["reply"] == ""
+    # No dejar sesiones de prueba en la base real del usuario.
+    for s in srv._session_log().list_sessions(project="ws", limit=1000):
+        if s.id not in before:
+            client.delete(f"/api/sessions/{s.id}")
+
+
+def test_get_endpoints_programaticos_sin_ui():
+    """Endpoints solo-API (RAG/learning/skill-opt/runtime/grafo): deben responder 200.
+
+    No tienen UI; si se rompen, nadie se entera. Este test los mantiene vivos
+    y documenta que son API programática (ver docs/CAPABILITY_MATRIX.md).
+    """
+    for path in [
+        "/api/cloud/free-models",
+        "/api/rag/index-status",
+        "/api/rag/stats",
+        "/api/learning/stats",
+        "/api/learning/recommend",
+        "/api/skill-opt/stats",
+        "/api/skill-opt/heldout",
+        "/api/runtime",
+        "/api/graph/status",
+    ]:
+        r = client.get(path)
+        assert r.status_code == 200, f"{path} -> {r.status_code}: {r.text[:200]}"
+        assert isinstance(r.json(), dict), path

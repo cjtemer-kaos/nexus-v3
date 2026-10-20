@@ -135,6 +135,8 @@ class AgentLoop:
         distill_hook=None,
         max_iterations: int = 25,
         heartbeat_ms: int = 2000,
+        context_max_tokens: int = 32000,
+        compact_threshold: float = 0.75,
     ):
         self.router = provider_router
         self.tools = tool_registry
@@ -146,6 +148,10 @@ class AgentLoop:
         self.compaction = compaction
         self.distill_hook = distill_hook
         self.heartbeat_ms = heartbeat_ms
+        # Presupuesto de contexto y umbral de compactación (config.session.*).
+        # Antes estaban fijos en 32000/0.75 y la config no tenía efecto.
+        self.context_max_tokens = int(context_max_tokens or 32000)
+        self.compact_threshold = float(compact_threshold or 0.75)
 
         # Per-task retry/replan counters
         self._retry_counts: dict[str, int] = {}
@@ -608,10 +614,11 @@ class AgentLoop:
             try:
                 dict_msgs = self._to_dicts(messages)
                 # Use router to decide if we need compaction via token estimate
-                max_tokens = 32000
+                max_tokens = self.context_max_tokens
                 if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
                     await self._distill(session_id)
-                    dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, int(max_tokens * 0.75))
+                    dict_msgs, cmetrics = await self.compaction.compact(
+                        dict_msgs, int(max_tokens * self.compact_threshold))
                     messages = self._rebuild_messages(dict_msgs)
             except Exception as e:
                 logger.debug(f"compaction pre-check falló: {e}")
@@ -1017,11 +1024,12 @@ class AgentLoop:
             if self.compaction is not None and len(messages) > 10:
                 try:
                     dict_msgs = self._to_dicts(messages)
-                    max_tokens = 32000
+                    max_tokens = self.context_max_tokens
                     if self.compaction.maybe_compact(dict_msgs, max_tokens):
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
-                        dict_msgs, _ = await self.compaction.compact(dict_msgs, int(max_tokens * 0.75))
+                        dict_msgs, _ = await self.compaction.compact(
+                            dict_msgs, int(max_tokens * self.compact_threshold))
                         messages = self._rebuild_messages(dict_msgs)
                         steps.append(LoopStep(iteration=iteration, phase="observe", content=f"contexto compactado ({len(dict_msgs)} mensajes)"))
                 except Exception as e:
