@@ -134,7 +134,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | `/v1/chat/completions` (stream) | el chunk de error incluye `error: {message, type}` además del texto, así un cliente OpenAI puede detectarlo; `stream` sigue siendo **buffered** (documentado en el docstring) |
 | Steer en la UI | con un run en curso, Enter ya no queda bloqueado: envía la instrucción a `POST /api/sessions/{id}/steer` y muestra si quedó encolada. Antes el endpoint era inalcanzable desde la UI |
 | Endpoints programáticos (sin UI) | cubiertos por E2E (`test_get_endpoints_programaticos_sin_ui`): `/api/cloud/free-models`, `/api/rag/index-status`, `/api/rag/stats`, `/api/learning/stats`, `/api/learning/recommend`, `/api/skill-opt/stats`, `/api/skill-opt/heldout`, `/api/runtime`, `/api/graph/status`. Los mutantes (`rag/index-graph`, `graph/maintain`, `learning/record`, `skill-opt/{propose,validate}`, `dream/run`) son **API programática**, no hay pantalla que los invoque |
-| Dependencias | `pyproject.toml` declara `ruamel.yaml` (lo usa `save_config` para preservar comentarios; sin él, cada guardado de config los perdía) |
+| Dependencias | `pyproject.toml` declara `ruamel.yaml` (lo usa `save_config` para preservar comentarios; sin él, cada guardado de config los perdía) y el extra `lsp` (`python-lsp-server`). Sin pylsp el diagnóstico post-edit sigue con `py_compile`; el semántico degrada, no rompe |
 
 ### Código legacy absorbido (no es el camino del harness)
 

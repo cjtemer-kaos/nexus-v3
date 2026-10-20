@@ -34,6 +34,9 @@ rag = ["lancedb", "aiosqlite"]
 train = ["torch", "transformers", "peft", "trl", "datasets"]
 codegraph = ["networkx>=3.2"]
 gallery = ["Pillow>=10.0"]
+# Servidor LSP para diagnosticos semanticos post-edit. Sin esto, el diagnostico
+# sigue funcionando con py_compile (degrada, no rompe).
+lsp = ["python-lsp-server>=1.11"]
 hive = ["redis>=5.0"]
 remote = ["paramiko>=3.0"]
 web = ["markdownify>=0.12"]
