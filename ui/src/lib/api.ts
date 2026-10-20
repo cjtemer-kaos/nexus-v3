@@ -47,7 +47,7 @@ export async function chatApi(
   model?: string,
   attachments?: { id: string; url?: string; name?: string; mime?: string; is_image?: boolean }[],
   agentId?: string,
-): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string; images?: string[] }> {
+): Promise<{ reply: string; session_id: string; success: boolean; mode?: string; error?: string }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
@@ -472,7 +472,7 @@ export async function toolsApi(): Promise<{ tools: ToolInfo[] }> {
   return res.json()
 }
 
-export type NexusStatus = { running: { session_id: string; steer_pending: number }[]; sub_agents: Record<string, unknown[]>; modes: Record<string, string>; counts: { running: number; sessions_with_subagents: number } }
+export type NexusStatus = { running: { session_id: string; steer_pending: number }[]; sub_agents: Record<string, unknown[]>; modes: Record<string, string>; approvals_pending?: number; counts: { running: number; sessions_with_subagents: number } }
 export async function statusApi(): Promise<NexusStatus> {
   const res = await apiFetch("/api/status")
   if (!res.ok) throw new Error(`status ${res.status}`)
@@ -485,16 +485,6 @@ export async function steerSessionApi(sessionId: string, message: string): Promi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
-  })
-  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
-  return res.json()
-}
-
-export async function setSessionModeApi(sessionId: string, mode: "act" | "plan"): Promise<{ ok: boolean; mode: string }> {
-  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/mode`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
   })
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()

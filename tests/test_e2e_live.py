@@ -531,3 +531,12 @@ def test_get_endpoints_programaticos_sin_ui():
         r = client.get(path)
         assert r.status_code == 200, f"{path} -> {r.status_code}: {r.text[:200]}"
         assert isinstance(r.json(), dict), path
+
+
+def test_status_reporta_aprobaciones_pendientes():
+    """/api/status alimenta la campana de la UI: debe incluir el conteo de aprobaciones."""
+    r = client.get("/api/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert "approvals_pending" in body
+    assert isinstance(body["approvals_pending"], int) and body["approvals_pending"] >= 0

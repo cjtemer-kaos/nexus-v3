@@ -90,7 +90,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 | Prueba | Resultado |
 |---|---|
-| Suite completa (`pytest`) | **606 passed, 3 skipped, exit 0** (120 s) |
+| Suite completa (`pytest`) | **607 passed, 3 skipped, exit 0** (171 s) |
 | Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
 | Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
 | Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
@@ -136,6 +136,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Endpoints programáticos (sin UI) | cubiertos por E2E (`test_get_endpoints_programaticos_sin_ui`): `/api/cloud/free-models`, `/api/rag/index-status`, `/api/rag/stats`, `/api/learning/stats`, `/api/learning/recommend`, `/api/skill-opt/stats`, `/api/skill-opt/heldout`, `/api/runtime`, `/api/graph/status`. Los mutantes (`rag/index-graph`, `graph/maintain`, `learning/record`, `skill-opt/{propose,validate}`, `dream/run`) son **API programática**, no hay pantalla que los invoque |
 | Dependencias | `pyproject.toml` declara `ruamel.yaml` (lo usa `save_config` para preservar comentarios; sin él, cada guardado de config los perdía) y el extra `lsp` (`python-lsp-server`). Sin pylsp el diagnóstico post-edit sigue con `py_compile`; el semántico degrada, no rompe |
 | Re-auditoría de tests v2 | los 10 "sin cobertura" ya estaban cubiertos salvo `self_learning_loop` (**5 tests nuevos**: learn/cycle, judge, router, persistencia SQLite, patrones, stats). `test_config` ya usa `monkeypatch`+`tmp_path` (el claim de `/tmp` hardcodeado era del informe v1); `test_e2e_live` ya no usa `os.getcwd()`. Los `sleep` fijos de `test_subagent_sprint` (5 s), `test_audit_fixes` y `test_phase9_learning` se cambiaron por polling acotado (sin carreras de 40-120 ms) |
+| Re-auditoría UI v2 | 10 de 12 hallazgos ya estaban corregidos en el árbol (errores de historial/borrado/búsqueda/grafo visibles, `parent_id` real vía `forkSessionApi`, `SLASH_FALLBACK` en español con `/herramientas`, `sessionMessagesApi` limit 10000, `tabs.tsx` oscuro, dobles submits con `busy`). Se cerró lo que faltaba: `/api/status` expone `approvals_pending` y la campana lo muestra con badge (antes ignoraba aprobaciones); enums de sub-agentes en español; se quitó el tipo muerto `images` de `chatApi` y el `sessionModeApi` duplicado |
 
 ### Código legacy absorbido (no es el camino del harness)
 

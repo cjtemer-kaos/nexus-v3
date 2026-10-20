@@ -2322,7 +2322,15 @@ async def status_endpoint():
         if kids:
             subs[sid] = kids
     modes = dict(_SESSION_MODES)
+    # Aprobaciones pendientes: la campana de la UI las muestra sin tener que
+    # abrir la vista de Aprobaciones (antes solo contaba turnos y sub-agentes).
+    try:
+        from src.core.approvals import get_approvals
+        approvals_pending = sum(1 for a in get_approvals().list("") if a.get("status") == "pending")
+    except Exception:
+        approvals_pending = 0
     return {"running": running, "sub_agents": subs, "modes": modes,
+            "approvals_pending": approvals_pending,
             "counts": {"running": len(running), "sessions_with_subagents": len(subs)}}
 
 

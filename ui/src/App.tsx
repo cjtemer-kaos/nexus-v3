@@ -161,7 +161,14 @@ export default function App() {
             <AgentSelector />
             <ModelSelector />
             <div className="relative hidden sm:flex">
-              <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}><Bell className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}>
+                <Bell className="h-4 w-4" />
+                {(liveStatus?.approvals_pending ?? 0) > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#FF6259] px-1 text-[9px] font-semibold text-white">
+                    {liveStatus!.approvals_pending}
+                  </span>
+                )}
+              </Button>
               {showNotifications && (
                 <>
                   <div className="fixed inset-0 z-[60]" onClick={()=>setShowNotifications(false)} />
@@ -170,10 +177,11 @@ export default function App() {
                     <div className="mt-1 text-xs text-[#9BA1AA]">
                       {!liveStatus
                         ? 'Sin conexión con el backend: no se pudo leer /api/status.'
-                        : (liveStatus.counts.running > 0 || liveStatus.counts.sessions_with_subagents > 0)
+                        : (liveStatus.counts.running > 0 || liveStatus.counts.sessions_with_subagents > 0 || (liveStatus.approvals_pending ?? 0) > 0)
                           ? [
                               liveStatus.counts.running > 0 ? `${liveStatus.counts.running} turno(s) en curso` : '',
                               liveStatus.counts.sessions_with_subagents > 0 ? `${liveStatus.counts.sessions_with_subagents} sesión(es) con sub-agentes` : '',
+                              (liveStatus.approvals_pending ?? 0) > 0 ? `${liveStatus.approvals_pending} aprobación(es) pendiente(s)` : '',
                             ].filter(Boolean).join(' · ')
                           : 'Sin notificaciones nuevas. El arnés está listo.'}
                     </div>

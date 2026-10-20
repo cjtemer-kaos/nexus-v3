@@ -18,6 +18,17 @@ const STATUS: Record<string, string> = {
   timeout: 'bg-[#FFB86B]/15 text-[#FFB86B]',
 }
 
+// El server devuelve enums estables en ingles; la UI los muestra en espanol.
+const STATUS_LABEL: Record<string, string> = {
+  begin: 'iniciando',
+  active: 'activo',
+  running: 'corriendo',
+  completed: 'completado',
+  failed: 'fallido',
+  cancelled: 'cancelado',
+  timeout: 'sin tiempo',
+}
+
 export function SubAgentsPanel() {
   const { liveStatus, statusError, loadStatus } = useAppStore()
   const subs = (liveStatus?.sub_agents ?? {}) as Record<string, Child[]>
@@ -57,7 +68,7 @@ export function SubAgentsPanel() {
             {kids.map((c) => (
               <div key={c.child_id} className="border-b border-[#2C3037] px-4 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${STATUS[c.status] || STATUS.cancelled}`}>{c.status}</span>
+                  <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${STATUS[c.status] || STATUS.cancelled}`}>{STATUS_LABEL[c.status] || c.status}</span>
                   <span className="font-mono text-[11px] text-[#8CC1FF]">{c.child_id}</span>
                   <span className="rounded bg-[#2C3037] px-1.5 py-0.5 text-[10px] text-[#9BA1AA]">{c.provider}·{c.mode}</span>
                   {c.depth > 1 && <span className="flex items-center gap-0.5 text-[10px] text-[#9BA1AA]"><GitBranch className="h-3 w-3" />nivel {c.depth}</span>}
