@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from src.core.iteration_budget import IterationBudget
 from src.core.session_log import SessionLog
@@ -50,15 +51,22 @@ def test_stable_child_id():
 
 def test_send_interrupt_list_children():
     async def run():
+        release = asyncio.Event()
+
         async def slow(task: str, gem: str = "auto", context: str = ""):
-            await asyncio.sleep(5)
+            # Nunca se libera: el test solo necesita que el hijo siga VIVO.
+            await release.wait()
             return {"ok": True}
 
         sp = SubAgentSpawner(executor=slow)
         assert sp.send_message("inexistente", "hola") is False
         assert sp.interrupt("inexistente") is False
         task = asyncio.ensure_future(sp.spawn_child(SubAgentSpec(task="lento", mode="continuable")))
-        await asyncio.sleep(0.1)
+        # Esperar el registro sin dormir un valor fijo (antes sleep(5)+sleep(0.1)).
+        for _ in range(200):
+            if sp.list_children():
+                break
+            await asyncio.sleep(0.01)
         kids = sp.list_children()
         assert len(kids) == 1 and kids[0]["mode"] == "continuable"
         cid = kids[0]["child_id"]
@@ -66,11 +74,10 @@ def test_send_interrupt_list_children():
         assert sp.get_child(cid) is not None
         assert sp.interrupt(cid) is True
         assert sp.list_children()[0]["status"] == SubAgentStatus.CANCELLED.value
+        release.set()
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
-        except (asyncio.CancelledError, Exception):
-            pass
     asyncio.run(run())
 
 

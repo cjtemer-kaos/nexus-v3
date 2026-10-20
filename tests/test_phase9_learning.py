@@ -158,7 +158,11 @@ def test_graph_maintenance_scheduler(isolated, monkeypatch):
 
     async def go():
         await svc.start(enable_dream=False, graph_maintenance_interval_s=0.01)
-        await asyncio.sleep(0.04)
+        # Poll hasta que corra (antes sleep fijo de 40 ms: flaky bajo carga).
+        for _ in range(200):
+            if calls:
+                break
+            await asyncio.sleep(0.01)
         await svc.stop()
 
     _run(go())

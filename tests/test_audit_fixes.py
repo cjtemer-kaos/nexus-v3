@@ -61,9 +61,13 @@ def test_spawn_bg_retains_reference():
     async def run():
         srv._BG_TASKS.clear()
         async def _slow():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
         srv._spawn_bg(_slow())
         assert len(srv._BG_TASKS) == 1
-        await asyncio.sleep(0.12)
+        # Poll en vez de sleep fijo: el done_callback corre cuando el loop cede.
+        for _ in range(200):
+            if not srv._BG_TASKS:
+                break
+            await asyncio.sleep(0.01)
         assert len(srv._BG_TASKS) == 0  # done_callback la libera
     asyncio.run(run())
