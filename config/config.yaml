@@ -63,6 +63,8 @@ compaction:
   snip:
     keep_recent: 4
   micro:
+    # Resultados de tools que NUNCA se colapsan (contexto vivo del turno).
+    keep_recent: 3
     placeholder: '[tool_result collapsed — see ./data/spill/]'
   budget:
     max_tool_result_chars: 2000

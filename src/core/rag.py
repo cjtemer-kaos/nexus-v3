@@ -244,6 +244,31 @@ def index_status() -> dict:
     return d
 
 
+def _mmr_rerank(scored: list[tuple], limit: int, lam: float = 0.7) -> list[tuple]:
+    """Diversifica el top-k (MMR con Jaccard de tokens, sin embeddings).
+
+    Sin esto, 5 chunks casi iguales del mismo archivo saturan el contexto.
+    """
+    import re as _re
+
+    def toks(text: str) -> set[str]:
+        return set(_re.findall(r"\w+", (text or "").lower()))
+
+    pool = [(s, src, content, toks(content)) for s, src, content in scored[: max(limit * 4, limit)]]
+    chosen: list[tuple] = []
+    while pool and len(chosen) < limit:
+        best_i, best_val = -1, float("-inf")
+        for i, (s, _src, _content, tk) in enumerate(pool):
+            overlap = max((len(tk & c[3]) / max(1, len(tk | c[3])) for c in chosen), default=0.0)
+            val = lam * float(s) - (1.0 - lam) * overlap
+            if val > best_val:
+                best_val, best_i = val, i
+        if best_i < 0:
+            break
+        chosen.append(pool.pop(best_i))
+    return [(s, src, content) for s, src, content, _ in chosen]
+
+
 def search(query: str, limit: int = 5, min_score: float = 0.25) -> list[dict]:
     """Búsqueda semántica sobre el índice RAG. Descarta scores < min_score (fix: ruido ~0.05 pasaba)."""
     qvecs = embed(query)
@@ -261,6 +286,8 @@ def search(query: str, limit: int = 5, min_score: float = 0.25) -> list[dict]:
         if s >= min_score:
             scored.append((s, src, content))
     scored.sort(key=lambda x: -x[0])
+    if len(scored) > limit:
+        scored = _mmr_rerank(scored, limit)
     return [{"score": round(s, 4), "source": src, "content": content[:600]} for s, src, content in scored[:limit]]
 
 

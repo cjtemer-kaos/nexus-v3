@@ -49,7 +49,8 @@ ui/node_modules/
 
 # --- Fase 0 baseline hygiene (2026-09-28) ---
 # Binarios pesados (llama.cpp bundlado) â€” 556MB
-vendor/
+vendor/*
+!vendor/README.md
 # Runtime logs/caches
 data/logs/
 data/cloud_free_cache.json

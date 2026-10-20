@@ -3,7 +3,7 @@ import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Ey
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, steerSessionApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 
 type Pending = { key: string; file: File; preview?: string }
@@ -40,7 +40,7 @@ const SLASH_FALLBACK: SlashCommand[] = [
 ]
 
 export function ChatPanel() {
-  const { messages, messagesError, addMessage, activeSession, loadMessages } = useAppStore()
+  const { messages, messagesError, addMessage, activeSession, loadMessages, liveStatus, loadStatus } = useAppStore()
   const [input, setInput] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -347,6 +347,30 @@ export function ChatPanel() {
     }
   }
 
+  // Modo plan/act: el endpoint existía y statusApi.modes llegaba, pero no había control.
+  const sessionMode = ((liveStatus?.modes ?? {})[activeSession] as 'act' | 'plan' | undefined) ?? 'act'
+  const [modeBusy, setModeBusy] = useState(false)
+  const toggleSessionMode = useCallback(async () => {
+    if (!activeSession || modeBusy) return
+    const next = sessionMode === 'plan' ? 'act' : 'plan'
+    setModeBusy(true)
+    try {
+      const r = await sessionModeApi(activeSession, next)
+      await loadStatus()
+      addMessage({
+        id: uid(), role: 'tool', toolName: 'plan_mode', timestamp: now(),
+        content: r.mode === 'plan'
+          ? 'modo plan: solo lectura — las tools mutantes quedan bloqueadas hasta volver a act'
+          : 'modo act: escritura y ejecución permitidas',
+      })
+    } catch (e) {
+      addMessage({ id: uid(), role: 'tool', toolName: 'plan_mode', timestamp: now(),
+        content: `no se pudo cambiar el modo: ${(e as Error).message.slice(0, 160)}` })
+    } finally {
+      setModeBusy(false)
+    }
+  }, [activeSession, sessionMode, modeBusy, loadStatus, addMessage])
+
   const distillNow = useCallback(async () => {
     const { activeSession } = useAppStore.getState()
     if (!activeSession) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
@@ -573,6 +597,7 @@ export function ChatPanel() {
           <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3 text-[#4C9DFF]" /> Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas</span>
           <span className="flex items-center gap-2">
             <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · Ctrl+V adjuntos</span>
+            <button onClick={toggleSessionMode} disabled={modeBusy || !activeSession} title={sessionMode === 'plan' ? 'Modo plan activo: solo lectura. Clic para volver a act' : 'Activar modo plan (solo lectura)'} aria-pressed={sessionMode === 'plan'} className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs disabled:opacity-50 ${sessionMode === 'plan' ? 'border-[#FFB86B]/50 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#2C3037] bg-[#22262D] text-[#9BA1AA] hover:text-[#EDEEF0]'}`}><Eye className="h-3 w-3" /> {modeBusy ? '…' : sessionMode === 'plan' ? 'Plan' : 'Act'}</button>
             <button onClick={speakLast} disabled={speaking} title="Leer la última respuesta en voz alta" aria-label="Leer última respuesta" className="flex items-center gap-1.5 rounded-lg border border-[#2C3037] bg-[#22262D] px-2 py-1 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] disabled:opacity-50"><Volume2 className="h-3 w-3" /> {speaking ? 'Leyendo…' : 'Escuchar'}</button>
             <button onClick={distillNow} disabled={distilling} title="Destilar esta sesión al grafo de conocimiento" aria-label="Destilar sesión al grafo" className="flex items-center gap-1.5 rounded-lg border border-[#2C3037] bg-[#22262D] px-2 py-1 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] disabled:opacity-50"><Database className="h-3 w-3" /> {distilling ? 'Destilando…' : 'Destilar'}</button>
           </span>

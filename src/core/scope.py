@@ -91,9 +91,9 @@ IDEMPOTENT_TOOLS = frozenset({
 })
 
 MUTATING_TOOLS = frozenset({
-    "write", "edit", "write_file", "patch", "terminal", "bash", "execute_code",
+    "write", "edit", "write_file", "patch", "apply_patch", "terminal", "bash", "execute_code",
     "browser_click", "browser_type", "browser_press", "browser_navigate",
-    "send_message", "delegate_task", "execute", "exec",
+    "send_message", "delegate_task", "execute", "exec", "job_start", "job_kill",
     "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run",
 })
 
@@ -101,6 +101,18 @@ NETWORK_TOOLS = frozenset({
     "web_fetch", "web_search", "browser_navigate", "browser_open",
     "fetch", "webfetch", "brave_search", "websearch",
 })
+
+# Secretos que NINGÚN preset (ni siquiera `permission: full`) puede leer.
+# Se UNEN a `deny_patterns` en vez de reemplazarse: si config.yaml define su
+# propia lista, antes dejaba fuera .ssh/.aws/*.pem y el agente podía leer claves.
+HARD_DENY_PATTERNS = (
+    "**/.env", "**/.env.*",
+    "**/.ssh/**", "**/.aws/**", "**/.gnupg/**", "**/.kube/**",
+    "**/.docker/config.json", "**/.git-credentials", "**/.netrc",
+    "**/.npmrc", "**/.pypirc",
+    "**/*.pem", "**/*.key", "**/*.pfx", "**/*.p12",
+    "**/id_rsa*", "**/id_ed25519*", "**/credentials*",
+)
 
 _MAX_BYTES_DEFAULT = 1_048_576
 
@@ -187,8 +199,9 @@ class Scope:
         except ValueError:
             rel_posix = rp.as_posix()
         name = rp.name
-        # Check each deny pattern against rel_posix and posix full path and name
-        for pat in self.cfg.deny_patterns:
+        # Check each deny pattern against rel_posix and posix full path and name.
+        # Unión con HARD_DENY_PATTERNS: la config puede AÑADIR patrones, nunca quitar secretos.
+        for pat in (*self.cfg.deny_patterns, *HARD_DENY_PATTERNS):
             pat_posix = pat.replace("\\", "/")
             if _glob_match(rel_posix, pat_posix):
                 return True

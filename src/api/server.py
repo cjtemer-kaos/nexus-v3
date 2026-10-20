@@ -2292,7 +2292,11 @@ async def session_mode_set(session_id: str, request: Request):
     mode = str(body.get("mode", "act"))
     if mode not in ("act", "plan"):
         raise HTTPException(status_code=400, detail="mode debe ser act|plan")
-    _SESSION_MODES[session_id] = mode
+    if mode == "plan":
+        _SESSION_MODES[session_id] = "plan"
+    else:
+        _SESSION_MODES.pop(session_id, None)
+    _save_session_modes()
     return {"ok": True, "mode": mode}
 
 
@@ -3170,7 +3174,38 @@ _SUB_SPAWNERS: dict = {}
 
 # Runs activos por sesión (para steer/queue y status real).
 _RUNNING: dict = {}
-_SESSION_MODES: dict = {}  # session_id -> "act" | "plan"
+
+# El modo plan es una decisión del usuario, no estado efímero: sobrevive al reinicio.
+# Solo se persisten las sesiones en "plan" (act es el default y no ocupa lugar).
+_MODE_FILE = _PROJECT_ROOT / "data" / "session_modes.json"
+
+
+def _load_session_modes() -> dict:
+    try:
+        import json as _json
+        if _MODE_FILE.exists():
+            data = _json.loads(_MODE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): "plan" for k, v in data.items() if v == "plan"}
+    except Exception as e:
+        logger.warning("session_modes ilegible (%s), arranco sin modos persistidos", e)
+    return {}
+
+
+def _save_session_modes() -> None:
+    try:
+        import json as _json
+        import os
+        _MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _MODE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(_json.dumps({k: v for k, v in _SESSION_MODES.items() if v == "plan"},
+                                   ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, _MODE_FILE)
+    except Exception as e:
+        logger.warning("no se pudo persistir el modo de sesión: %s", e)
+
+
+_SESSION_MODES: dict = _load_session_modes()  # session_id -> "act" | "plan"
 
 
 def _steer_drain(session_id: str) -> list:
@@ -3216,6 +3251,59 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
     return sp
 
 
+def _parse_apply_patch(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Parsea formato `*** Begin Patch` (subconjunto de `*** Update File:`).
+
+    Devuelve [(path, [(old, new), ...]), ...]. No toca disco.
+    """
+    if "*** Begin Patch" in text:
+        body = text.split("*** Begin Patch", 1)[1].split("*** End Patch", 1)[0]
+    else:
+        body = text
+    blocks: list[tuple[str, list[tuple[str, str]]]] = []
+    cur_path: str | None = None
+    hunks: list[tuple[str, str]] = []
+    old: list[str] = []
+    new: list[str] = []
+
+    def flush_hunk() -> None:
+        nonlocal old, new
+        if old or new:
+            hunks.append(("\n".join(old), "\n".join(new)))
+        old, new = [], []
+
+    for raw in body.splitlines():
+        if raw.startswith("*** Update File:"):
+            flush_hunk()
+            if cur_path is not None:
+                blocks.append((cur_path, hunks))
+            cur_path = raw.split(":", 1)[1].strip()
+            hunks = []
+        elif raw.startswith("*** Move to:") or raw.startswith("*** Delete File:") or raw.startswith("*** Add File:"):
+            raise ValueError(
+                "apply_patch solo aplica '*** Update File:' en archivos existentes; "
+                "para crear/borrar usá write_file/exec con confirmación.")
+        elif raw.startswith("@@"):
+            flush_hunk()
+        elif cur_path is not None:
+            if raw.startswith("+"):
+                new.append(raw[1:])
+            elif raw.startswith("-"):
+                old.append(raw[1:])
+            elif raw.startswith(" "):
+                old.append(raw[1:])
+                new.append(raw[1:])
+            elif raw.strip() == "":
+                continue  # separador, no contexto
+            else:
+                old.append(raw)
+                new.append(raw)
+    flush_hunk()
+    if cur_path is not None:
+        blocks.append((cur_path, hunks))
+    return [(p, h) for p, h in blocks if p and h]
+
+
 def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True, include_subagents: bool = True):
     """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
     from src.core.tool_registry import ToolRegistry
@@ -3237,16 +3325,30 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {"text": {"type": "string"}},
                     "required": ["text"], "additionalProperties": False})
 
-    def read_file_tool(path: str) -> str:
-        """Lee un archivo dentro de allowed_roots (./workspace, ./data)."""
-        import pathlib
+    def read_file_tool(path: str, offset: int = 0, limit: int = 0) -> str:
+        """Lee un archivo dentro de allowed_roots (paginado por líneas).
+
+        offset: línea inicial (0-based). limit: cantidad de líneas (0 = hasta el final).
+        """
         p = scope.check_path(path)
         if not p.is_file():
             raise FileNotFoundError(f"no existe o no es archivo: {path}")
         size = p.stat().st_size
         if size > scope.cfg.effective_max_bytes():
             raise ValueError(f"archivo excede limite {scope.cfg.effective_max_bytes()} bytes (tiene {size})")
-        return p.read_text(encoding="utf-8", errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
+        start = max(0, int(offset or 0))
+        n = max(0, int(limit or 0))
+        if start == 0 and n == 0:
+            return text
+        lines = text.splitlines(keepends=True)
+        chunk = lines[start:start + n] if n > 0 else lines[start:]
+        end = start + len(chunk)
+        header = f"[{path}: líneas {start + 1}-{end} de {len(lines)}"
+        if start + len(chunk) < len(lines):
+            header += f"; seguí con offset={end}"
+        header += "]\n"
+        return header + "".join(chunk)
 
     def write_file_tool(path: str, content: str) -> str:
         """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
@@ -3280,9 +3382,16 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if not p.is_file():
             raise FileNotFoundError(f"no existe o no es archivo: {path}")
         text = p.read_text(encoding="utf-8", errors="replace")
-        n = text.count(old)
+        # Tolerar CRLF vs LF sin cambiar el estilo de fin de línea del archivo.
+        crlf = "\r\n" in text
+        text_c = text.replace("\r\n", "\n")
+        old_c = old.replace("\r\n", "\n")
+        new_c = new.replace("\r\n", "\n")
+        n = text_c.count(old_c)
         if n == 0:
-            raise ValueError(f"texto a reemplazar no encontrado en {path}")
+            raise ValueError(
+                f"texto a reemplazar no encontrado en {path}. Leé el archivo con read_file y "
+                f"copiá el fragmento exacto (incluí contexto suficiente para que sea único).")
         if n > 1 and not replace_all:
             raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
 
@@ -3292,7 +3401,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 snapshot(session_id, p)
             except Exception:
                 pass
-            new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+            new_text = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
+            if crlf:
+                new_text = new_text.replace("\n", "\r\n")
             p.write_text(new_text, encoding="utf-8")
             return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
 
@@ -3307,8 +3418,11 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     f"el usuario debe aprobar en la UI (Aprobaciones).")
         return _do()
 
-    def list_dir_tool(path: str = "./workspace") -> str:
-        """Lista un directorio dentro de allowed_roots. Devuelve JSON."""
+    def list_dir_tool(path: str = "./workspace", recursive: bool = False, limit: int = 400) -> str:
+        """Lista un directorio dentro de allowed_roots. Devuelve JSON.
+
+        recursive=true recorre subdirectorios (cap `limit` entradas).
+        """
         import json as _json
         p = scope.check_path(path or "./workspace")
         if not p.exists():
@@ -3316,26 +3430,40 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if p.is_file():
             return _json.dumps({"path": path, "type": "file", "size": p.stat().st_size}, ensure_ascii=False)
         entries = []
-        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+        cap = max(1, min(2000, int(limit or 400)))
+        if recursive:
+            candidates = sorted((q for q in p.rglob("*")), key=lambda x: x.as_posix().lower())
+        else:
+            candidates = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        for child in candidates:
             try:
                 scope.check_path(str(child))
             except Exception:
                 continue
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
-        return _json.dumps({"path": path, "entries": entries}, ensure_ascii=False, indent=2)
+            if len(entries) >= cap:
+                break
+        return _json.dumps({"path": path, "entries": entries, "truncated": len(entries) >= cap},
+                           ensure_ascii=False, indent=2)
 
-    async def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
-        """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
-        import subprocess as _sp
-        cmd = (command or "").strip()
-        if not cmd:
-            raise ValueError("command requerido")
-        _blk = _blocked_command(cmd)
-        if _blk is not None:
-            raise PermissionError(f"comando bloqueado por politica ({_blk})")
-        scope.check_tool("exec", {"command": cmd})
-        # cwd por defecto: la RAÍZ del proyecto (consistente con write_file: "workspace/x").
-        # Si la raíz no está permitida por el scope, cae a ./workspace.
+    def glob_tool(pattern: str, path: str = ".") -> str:
+        """Busca archivos por patrón glob (ej: '**/*.py') dentro del scope."""
+        import json as _json
+        base = scope.check_path(path or ".")
+        found = []
+        for f in sorted(base.glob(pattern or "*")):
+            try:
+                scope.check_path(str(f))
+            except Exception:
+                continue
+            found.append(_rel(f))
+            if len(found) >= 500:
+                break
+        return _json.dumps({"pattern": pattern, "path": path, "matches": found,
+                            "truncated": len(found) >= 500}, ensure_ascii=False, indent=2)
+
+    def _resolve_exec_cwd(cwd: str):
+        """cwd por defecto: la RAÍZ del proyecto (consistente con write_file)."""
         if not cwd:
             try:
                 scope.check_path(str(_PROJECT_ROOT))
@@ -3347,6 +3475,23 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             cwd_p.mkdir(parents=True, exist_ok=True)
         if not cwd_p.is_dir():
             raise NotADirectoryError("cwd debe ser directorio dentro de allowed_roots")
+        return cwd_p
+
+    def _validate_command(command: str) -> str:
+        cmd = (command or "").strip()
+        if not cmd:
+            raise ValueError("command requerido")
+        _blk = _blocked_command(cmd)
+        if _blk is not None:
+            raise PermissionError(f"comando bloqueado por politica ({_blk})")
+        scope.check_tool("exec", {"command": cmd})
+        return cmd
+
+    async def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
+        """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
+        import subprocess as _sp
+        cmd = _validate_command(command)
+        cwd_p = _resolve_exec_cwd(cwd)
         _jail = _exec_jail(cmd, cwd_p, scope)
         if _jail is not None:
             raise PermissionError(_jail)
@@ -3360,10 +3505,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return out or f"[exit {proc.returncode} sin salida]"
 
     registry.register_function(read_file_tool, name="read_file",
-        description="Lee un archivo de texto y devuelve su contenido.",
+        description="Lee un archivo de texto y devuelve su contenido. Para archivos grandes usá offset/limit (paginado por líneas).",
         category="local",
         parameters={"type": "object", "properties": {
-            "path": {"type": "string", "description": "Ruta del archivo (ej: workspace/nota.md, src/api/server.py)"}},
+            "path": {"type": "string", "description": "Ruta del archivo (ej: workspace/nota.md, src/api/server.py)"},
+            "offset": {"type": "integer", "description": "Línea inicial, 0-based (default 0)"},
+            "limit": {"type": "integer", "description": "Cantidad de líneas (default 0 = hasta el final)"}},
             "required": ["path"], "additionalProperties": False})
     registry.register_function(write_file_tool, name="write_file",
         description="Crea o sobrescribe un archivo con el contenido dado (crea los directorios intermedios).",
@@ -3382,6 +3529,74 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "replace_all": {"type": "boolean", "description": "Reemplazar TODAS las ocurrencias (default false)"}},
             "required": ["path", "old", "new"], "additionalProperties": False})
 
+    def apply_patch_tool(patch: str, dry_run: bool = False, confirm: bool = False) -> str:
+        """Aplica un parche multi-archivo de forma ATÓMICA.
+
+        Formato: `*** Begin Patch` + uno o más `*** Update File: <ruta>` con hunks que
+        empiezan en `@@` y líneas ` `/`-`/`+`. Valida TODOS los hunks antes de escribir;
+        si uno falla no toca nada. dry_run=true solo valida.
+        """
+        import json as _json
+        scope.check_tool("apply_patch", {"patch": patch, "confirm": confirm})
+        blocks = _parse_apply_patch(patch or "")
+        if not blocks:
+            raise ValueError("parche vacío o sin bloques '*** Update File:'")
+
+        # Fase 1: validar todo en memoria (sin escribir).
+        staged: dict[str, tuple] = {}
+        for path, hunks in blocks:
+            p = scope.check_path(path)
+            if not p.is_file():
+                raise FileNotFoundError(f"no existe o no es archivo: {path}")
+            text = p.read_text(encoding="utf-8", errors="replace")
+            crlf = "\r\n" in text
+            cur = text.replace("\r\n", "\n")
+            for i, (old, new) in enumerate(hunks, 1):
+                old_c = old.replace("\r\n", "\n")
+                new_c = new.replace("\r\n", "\n")
+                cnt = cur.count(old_c)
+                if cnt != 1:
+                    raise ValueError(
+                        f"{path} hunk #{i}: el bloque OLD coincide {cnt} veces (se requiere 1). "
+                        f"Leé el archivo y agregá contexto; no se escribió nada.")
+                cur = cur.replace(old_c, new_c, 1)
+            staged[path] = (p, cur.replace("\n", "\r\n") if crlf else cur)
+
+        if dry_run:
+            return _json.dumps({"ok": True, "dry_run": True, "files": list(staged),
+                                "hunks": sum(len(h) for _, h in blocks)}, ensure_ascii=False)
+
+        # Fase 2: checkpoint + escritura; rollback completo si algo falla.
+        from src.core.checkpoints import snapshot, restore
+        done: list[tuple] = []
+        try:
+            for path, (p, new_text) in staged.items():
+                cid = snapshot(session_id, p)
+                done.append((p, cid))
+                p.write_text(new_text, encoding="utf-8")
+        except Exception as e:
+            for p, cid in reversed(done):
+                if cid:
+                    try:
+                        restore(session_id, cid)
+                    except Exception:
+                        pass
+            raise RuntimeError(f"apply_patch falló y se revirtió todo: {e}") from e
+        return _json.dumps({"ok": True, "files": list(staged),
+                            "hunks": sum(len(h) for _, h in blocks)}, ensure_ascii=False)
+
+    registry.register_function(apply_patch_tool, name="apply_patch",
+        description=("Aplica un parche multi-archivo atómico (formato '*** Begin Patch' / "
+                     "'*** Update File: ruta' / hunks '@@' con líneas ' ', '-' y '+'). "
+                     "Valida todos los hunks antes de escribir; si uno falla, no cambia nada. "
+                     "dry_run=true solo valida."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "patch": {"type": "string", "description": "Parche completo en formato *** Begin Patch"},
+            "dry_run": {"type": "boolean", "description": "Solo validar, sin escribir (default false)"},
+            "confirm": {"type": "boolean", "description": "Confirmación explícita si el scope la exige"}},
+            "required": ["patch"], "additionalProperties": False})
+
     async def code_search_tool(query: str, path: str = ".", include: str = "", limit: int = 20) -> str:
         """Busca código (ripgrep/grep) en un directorio; devuelve coincidencias archivo:línea."""
         import json as _j
@@ -3399,11 +3614,20 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "limit": {"type": "integer", "description": "Máximo de resultados (1-50, default 20)"}},
                                    "required": ["query"], "additionalProperties": False})
     registry.register_function(list_dir_tool, name="list_dir",
-                               description="Lista los archivos y carpetas de un directorio.",
+                               description="Lista los archivos y carpetas de un directorio; recursive=true recorre subcarpetas.",
                                category="local",
                                parameters={"type": "object", "properties": {
-                                   "path": {"type": "string", "description": "Ruta del directorio (default '.')"}},
+                                   "path": {"type": "string", "description": "Ruta del directorio (default '.')"},
+                                   "recursive": {"type": "boolean", "description": "Recorrer subdirectorios (default false)"},
+                                   "limit": {"type": "integer", "description": "Máximo de entradas (default 400)"}},
                                    "additionalProperties": False})
+    registry.register_function(glob_tool, name="glob",
+                               description="Busca archivos por patrón glob (ej: '**/*.py', 'src/**/*.ts') dentro del proyecto.",
+                               category="local",
+                               parameters={"type": "object", "properties": {
+                                   "pattern": {"type": "string", "description": "Patrón glob relativo a `path`"},
+                                   "path": {"type": "string", "description": "Directorio base (default '.')"}},
+                                   "required": ["pattern"], "additionalProperties": False})
     registry.register_function(exec_tool, name="exec",
                                description="Ejecuta un comando shell (cwd=raíz del proyecto; archivos en ./workspace, ej: 'type workspace/x.md', 'python workspace/x.py'). Bloquea comandos destructivos.",
                                category="local",
@@ -3412,6 +3636,75 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "cwd": {"type": "string", "description": "Directorio de trabajo (opcional; default raíz del proyecto)"},
                                    "timeout": {"type": "integer", "description": "Segundos (2-60, default 15)"}},
                                    "required": ["command"], "additionalProperties": False})
+
+    def _jobs():
+        from src.core.jobs import get_jobs
+        return get_jobs()
+
+    def job_start_tool(command: str, cwd: str = "", label: str = "") -> str:
+        """Lanza un comando en background y devuelve su id (para builds/tests/servidores)."""
+        import json as _json
+        cmd = _validate_command(command)
+        cwd_p = _resolve_exec_cwd(cwd)
+        _jail = _exec_jail(cmd, cwd_p, scope)
+        if _jail is not None:
+            raise PermissionError(_jail)
+        return _json.dumps(_jobs().start(cmd, cwd_p, label=label), ensure_ascii=False)
+
+    def job_read_tool(job_id: str, cursor: int = 0, max_chars: int = 20000) -> str:
+        """Lee la salida acumulada de un job (delta desde cursor) y su estado."""
+        import json as _json
+        return _json.dumps(_jobs().read(job_id, cursor=cursor, max_chars=max_chars),
+                           ensure_ascii=False)
+
+    def job_wait_tool(job_id: str, timeout: int = 30) -> str:
+        """Espera que un job termine (máx 300 s) y devuelve su salida completa y exit code."""
+        import json as _json
+        return _json.dumps(_jobs().wait(job_id, timeout_s=timeout), ensure_ascii=False)
+
+    def job_kill_tool(job_id: str) -> str:
+        """Termina un job y todos sus hijos (taskkill /T /F en Windows)."""
+        import json as _json
+        return _json.dumps(_jobs().kill(job_id), ensure_ascii=False)
+
+    def job_list_tool() -> str:
+        """Lista los jobs de esta sesión del backend con estado y tiempo transcurrido."""
+        import json as _json
+        return _json.dumps({"jobs": _jobs().list()}, ensure_ascii=False)
+
+    registry.register_function(job_start_tool, name="job_start",
+        description=("Lanza un comando en background (builds, tests, dev servers). Devuelve un job_id; "
+                     "consultá con job_read/job_wait y cortá con job_kill. Misma política de seguridad que exec."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "command": {"type": "string", "description": "Comando a ejecutar en background"},
+            "cwd": {"type": "string", "description": "Directorio de trabajo (default raíz del proyecto)"},
+            "label": {"type": "string", "description": "Etiqueta legible (ej: 'pytest')"}},
+            "required": ["command"], "additionalProperties": False})
+    registry.register_function(job_read_tool, name="job_read",
+        description="Lee la salida nueva de un job desde un cursor (streaming) y su estado/exit code.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "job_id": {"type": "string"},
+            "cursor": {"type": "integer", "description": "Byte desde donde leer (default 0)"},
+            "max_chars": {"type": "integer", "description": "Máximo de caracteres a devolver (default 20000)"}},
+            "required": ["job_id"], "additionalProperties": False})
+    registry.register_function(job_wait_tool, name="job_wait",
+        description="Espera a que un job termine (hasta 300 s) y devuelve toda su salida.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "job_id": {"type": "string"},
+            "timeout": {"type": "integer", "description": "Segundos a esperar (default 30, máx 300)"}},
+            "required": ["job_id"], "additionalProperties": False})
+    registry.register_function(job_kill_tool, name="job_kill",
+        description="Termina un job en background y sus procesos hijos.",
+        category="local",
+        parameters={"type": "object", "properties": {"job_id": {"type": "string"}},
+                    "required": ["job_id"], "additionalProperties": False})
+    registry.register_function(job_list_tool, name="job_list",
+        description="Lista los jobs en background con su estado.",
+        category="local",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False})
 
     # --- todo_write (harness parity whole-list replacement) ---
     _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)

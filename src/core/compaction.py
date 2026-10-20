@@ -108,6 +108,7 @@ class CompactionPipeline:
         summary_cfg = self.config.get("summary", {})
 
         self.keep_recent: int = int(snip_cfg.get("keep_recent", 4))
+        self.keep_recent_tool_results: int = int(micro_cfg.get("keep_recent", 3))
         self.max_tool_result_chars: int = int(budget_cfg.get("max_tool_result_chars", 2000))
         self.micro_placeholder: str = micro_cfg.get("placeholder", "[resultado_herramienta colapsado — ver ./data/spill/]")
         self.summary_model_hint: str = summary_cfg.get("model_hint", "simple")
@@ -204,14 +205,31 @@ class CompactionPipeline:
                 # No LLM available — already did fallback snip
                 return compacted, metrics
 
-            # Build summarization messages
+            # Build summarization messages: secciones fijas = el resumen no pierde
+            # el estado operativo (archivos, errores, pendientes, próximo paso).
             middle_text = "\n".join(f"[{m.get('role')}] {_content_str(m)[:2000]}" for m in middle)
             llm_messages = [
-                LLMMessage(role="system", content="Resume el siguiente historial de conversación de forma concisa. Preserva hechos clave, decisiones, salidas de herramientas y errores. Máx. 800 tokens."),
+                LLMMessage(role="system", content=(
+                    "Sos el compactador de contexto de un agente de código. Resumí el historial "
+                    "sin inventar nada. Usá EXACTAMENTE estas secciones:\n"
+                    "1. Pedido original y objetivo\n"
+                    "2. Decisiones tomadas y por qué\n"
+                    "3. Archivos leídos o modificados (rutas exactas)\n"
+                    "4. Comandos ejecutados y resultados relevantes\n"
+                    "5. Errores encontrados y cómo se resolvieron\n"
+                    "6. Estado actual del trabajo\n"
+                    "7. Pendientes concretos\n"
+                    "8. Próximo paso\n"
+                    "9. Datos que no se pueden perder (ids, valores, rutas)\n"
+                    f"Máximo {self.max_summary_tokens} tokens. Respondé solo con <summary>...</summary>."
+                )),
                 LLMMessage(role="user", content=middle_text[:12000]),
             ]
             resp = await routed.provider.chat(llm_messages, model=routed.model)
             summary_text = (resp.content or "")[: self.max_summary_tokens * 4]
+            m_tag = re.search(r"<summary>(.*?)</summary>", summary_text, re.S)
+            if m_tag:
+                summary_text = m_tag.group(1).strip()
             summary_msg = {"role": "system", "content": f"[resumen de {len(middle)} mensajes anteriores]\n{summary_text}"}
             out = system_msgs + [summary_msg] + recent
             # Recompute metrics
@@ -244,15 +262,28 @@ class CompactionPipeline:
         rest = [m for m in messages if m.get("role") != "system"]
         if len(rest) <= self.keep_recent:
             return messages
-        keep = rest[-self.keep_recent :]
+        start = len(rest) - self.keep_recent
+        # Nunca dejar un `tool` huérfano: si el primer mensaje retenido es un
+        # resultado, retrocedemos hasta su `assistant(tool_calls)` (si no, el
+        # proveedor rechaza el historial o el resultado queda sin contexto).
+        while start > 0 and rest[start].get("role") == "tool":
+            start -= 1
+        keep = rest[start:]
         omitted = len(rest) - len(keep)
         marker = {"role": "system", "content": f"[recorte: {omitted} mensajes omitidos — compactado en {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}]"}
         return system + [marker] + keep
 
     def _micro(self, messages: list[dict]) -> list[dict]:
+        # Los últimos N resultados de tools son el contexto vivo del turno:
+        # colapsarlos mata lo que el modelo acaba de pedir.
+        tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        keep = set(tool_idx[-self.keep_recent_tool_results:]) if self.keep_recent_tool_results > 0 else set()
         out: list[dict] = []
-        for m in messages:
+        for i, m in enumerate(messages):
             c = _content_str(m)
+            if i in keep:
+                out.append(m)
+                continue
             if m.get("role") == "tool" and len(c) > self.max_tool_result_chars:
                 # Persist full if dir configured
                 if self.persist_dir is not None:

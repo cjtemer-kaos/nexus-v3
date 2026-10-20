@@ -322,7 +322,13 @@ class ToolRegistry:
         args = args or {}
         entry = self.get(name)
         if not entry or not entry.handler:
-            raise KeyError(f"herramienta no encontrada o sin manejador: {name}")
+            import difflib
+            names = sorted(self._tools)
+            close = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
+            hint = f" ¿Quisiste decir: {', '.join(close)}?" if close else ""
+            raise KeyError(
+                f"herramienta no encontrada: {name!r}.{hint} "
+                f"Usá una de: {', '.join(names[:40])}")
 
         try:
             args = validate_args(name, args, entry.parameters)

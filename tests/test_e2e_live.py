@@ -273,6 +273,8 @@ def test_new_endpoints_backend():
     assert client.get(f"/api/sessions/{sid}/messages").status_code == 200
     assert client.post(f"/api/sessions/{sid}/mode", json={"mode": "plan"}).status_code == 200
     assert client.get(f"/api/sessions/{sid}/mode").json()["mode"] == "plan"
+    # El modo persiste entre reinicios: el test no debe dejar la sesión en plan.
+    assert client.post(f"/api/sessions/{sid}/mode", json={"mode": "act"}).status_code == 200
     assert client.get("/api/status").status_code == 200
     assert client.get("/api/worktree").status_code == 200
     f = client.post(f"/api/sessions/{sid}/fork", json={}).json()

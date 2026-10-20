@@ -437,6 +437,7 @@ class AgentLoop:
         self._reason_retries = 0  # type: ignore[attr-defined]
         self._retry_counts.clear()
         self._replan_counts.clear()
+        self._consecutive_failures = 0  # type: ignore[attr-defined]
         self._tool_fp_window = []  # type: ignore[attr-defined]
         self._tool_repeat = {}  # type: ignore[attr-defined]
         try:
@@ -617,8 +618,12 @@ class AgentLoop:
                 max_tokens = self.context_max_tokens
                 if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
                     await self._distill(session_id)
-                    dict_msgs, cmetrics = await self.compaction.compact(
-                        dict_msgs, int(max_tokens * self.compact_threshold))
+                    _limit = int(max_tokens * self.compact_threshold)
+                    if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
+                        dict_msgs, cmetrics = await self.compaction.summarize_with_llm(
+                            dict_msgs, _limit, self.router)
+                    else:
+                        dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, _limit)
                     messages = self._rebuild_messages(dict_msgs)
             except Exception as e:
                 logger.debug(f"compaction pre-check falló: {e}")
@@ -965,7 +970,7 @@ class AgentLoop:
                         pass
                 except Exception as e:
                     err_str = str(e)
-                    tool_result_str = f"Error: {err_str}"
+                    tool_result_str = self._error_hint(tool_name, e)
                     tool_success = False
                     # Classify error
                     action = self._classify_error(tool_name, err_str)
@@ -993,9 +998,41 @@ class AgentLoop:
                         tool_result_str = f"[omitido {tool_name}: {err_str}]"
                         tool_success = True  # treat as non-fatal
 
-                # Truncate very large results for context
+                # Un éxito limpia el presupuesto de esa tool; los fallos
+                # consecutivos (aunque cambien args) se escalan en vez de
+                # dejar al modelo reintentando indefinidamente.
+                if tool_success:
+                    self._retry_counts.pop(tool_name, None)
+                    self._replan_counts.pop(tool_name, None)
+                    self._consecutive_failures = 0  # type: ignore[attr-defined]
+                elif not str(tool_result_str).startswith("[omitido"):
+                    _cf = int(getattr(self, "_consecutive_failures", 0)) + 1
+                    self._consecutive_failures = _cf  # type: ignore[attr-defined]
+                    if _cf >= 6:
+                        final_output = (
+                            f"[abortado: {_cf} fallos consecutivos de herramientas; "
+                            f"último: {tool_name} -> {tool_result_str[:300]}]")
+                        success = False
+                        iteration = max_iters
+                        break
+                    if _cf == 3:
+                        messages.append(LLMMessage(role="user", content=(
+                            "[recordatorio del sistema] 3 fallos consecutivos de herramientas. "
+                            "No reintentes lo mismo: leé el error, inspeccioná el archivo o el "
+                            "entorno, y cambiá de enfoque antes de la próxima llamada.")))
+
+                # Recorte con cabeza+cola + spill: el final suele traer el error.
                 if len(tool_result_str) > 8000:
-                    tool_result_str = tool_result_str[:8000] + f"\n[...truncado {len(tool_result_str)-8000} caracteres]"
+                    try:
+                        from .spill import clip_output
+                        tool_result_str = clip_output(
+                            tool_result_str,
+                            session_id=session_id,
+                            tool=tool_name,
+                            call_id=getattr(tc, "id", "") or "",
+                        )
+                    except Exception:
+                        tool_result_str = tool_result_str[:8000] + f"\n[...truncado {len(tool_result_str)-8000} caracteres]"
 
                 # Observar: agregar resultado de herramienta to messages + session + trajectory
                 steps.append(LoopStep(iteration=iteration, phase="act", content=f"act: {tool_name}", tool_used=tool_name, result=ToolResult(success=tool_success, output=tool_result_str[:2000])))
@@ -1028,8 +1065,12 @@ class AgentLoop:
                     if self.compaction.maybe_compact(dict_msgs, max_tokens):
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
-                        dict_msgs, _ = await self.compaction.compact(
-                            dict_msgs, int(max_tokens * self.compact_threshold))
+                        _limit = int(max_tokens * self.compact_threshold)
+                        if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
+                            dict_msgs, _ = await self.compaction.summarize_with_llm(
+                                dict_msgs, _limit, self.router)
+                        else:
+                            dict_msgs, _ = await self.compaction.compact(dict_msgs, _limit)
                         messages = self._rebuild_messages(dict_msgs)
                         steps.append(LoopStep(iteration=iteration, phase="observe", content=f"contexto compactado ({len(dict_msgs)} mensajes)"))
                 except Exception as e:
@@ -1083,6 +1124,26 @@ class AgentLoop:
         except Exception:
             return ErrorAction.REPLAN
 
+    @staticmethod
+    def _error_hint(tool_name: str, e: BaseException) -> str:
+        """Error + acción sugerida: decir qué hacer, no solo qué falló."""
+        msg = str(e)
+        low = msg.lower()
+        if isinstance(e, PermissionError):
+            hint = ("la herramienta fue bloqueada por permisos/scope: verificá que la ruta esté "
+                    "dentro de las raíces permitidas, que el modo no sea plan (solo lectura) o "
+                    "pedí confirmación explícita.")
+        elif isinstance(e, TimeoutError) or "timeout" in low or "timed out" in low:
+            hint = ("el comando excedió el tiempo: reducí el alcance (un archivo, un test) o "
+                    "usá una tarea en background y consultá su salida.")
+        elif isinstance(e, FileNotFoundError):
+            hint = "la ruta no existe: confirmá con list_dir/glob antes de reintentar."
+        elif isinstance(e, (ValueError, TypeError)):
+            hint = f"revisá los argumentos contra el esquema de {tool_name}."
+        else:
+            hint = "leé el error completo; si se repite, cambiá de estrategia en vez de reintentar igual."
+        return f"Error: {msg}\n[acción sugerida] {hint}"
+
     def exit_plan_mode(self, plan_mode, approved: bool = False, request_id: str | None = None) -> bool:
         """Delegación fail-closed: fuera de plan (u sin controller) siempre falla."""
         try:
@@ -1103,3 +1164,4 @@ class AgentLoop:
         self.budget.reset()
         self._retry_counts.clear()
         self._replan_counts.clear()
+        self._consecutive_failures = 0  # type: ignore[attr-defined]

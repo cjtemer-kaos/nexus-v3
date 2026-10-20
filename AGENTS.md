@@ -35,6 +35,8 @@ docs/                 CAPABILITY_MATRIX, NEXUS_ROADMAP, COMPETITOR_AUTOPSY, PI_I
 - Diagnóstico E2E: `.venv-ft314\Scripts\python.exe scripts\e2e_diagnostic.py` (y `--llm`)
 - UI dev: `cd ui && npm run dev` (**5174**) · build: `cd ui && npm run build`
 - Compilar rápido: `.venv-ft314\Scripts\python.exe -m py_compile <archivo>`
+- Higiene (backups del brain + workspace + vendor): `.venv-ft314\Scripts\python.exe scripts\hygiene.py`
+  (dry-run; `--apply` para ejecutar, `--keep N` para retención).
 - Electron main: `npm run build:electron` (tsc → `electron/dist/main.js`, gitignored)
 
 ## Reglas (no negociables)

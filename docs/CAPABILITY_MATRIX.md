@@ -149,3 +149,34 @@ el camino del harness es `provider_router` + `agent_loop`. Sus dependencias opci
 **guardadas con try/except** o son lazy, así que su ausencia no rompe nada y el harness no las
 necesita para funcionar. Se dejan como referencia (regla: no borrar); si se cablean, declarar
 los extras en `pyproject.toml`.
+
+### Ronda de autopsia de harness (2026-10-19)
+
+Comparación contra los repos de `D:\ias\autopsia` (openharness, byo-coding-agent, goose, aider,
+opencode, deepseek-harness, agent-zero, OpenHands, mimo-code, hermes-agent, grok-build, engram).
+Se implementó lo que el árbol realmente no tenía:
+
+| Mejora | Evidencia / comportamiento |
+| --- | --- |
+| Deny duro de secretos | `scope.HARD_DENY_PATTERNS` se **une** a `deny_patterns`: `permission: full` ya no puede leer `.ssh`, `.aws`, `.env`, `*.pem`. Antes la lista de `config.yaml` **reemplazaba** los defaults y dejaba esos patrones afuera |
+| Compactación que no rompe pares | `_snip` retrocede el corte si el primer mensaje retenido es `role=tool` (arrastra su `assistant(tool_calls)`); `_micro` conserva los últimos `micro.keep_recent` resultados (default 3) en vez de colapsar el contexto vivo del turno |
+| Resumen L4 conectado | `agent_loop` usa `summarize_with_llm(...)` cuando hay router (antes era **código muerto**: solo se llamaba `compact()`). Prompt con 9 secciones fijas (pedido, decisiones, archivos, comandos, errores, estado, pendientes, próximo paso, datos) y parseo de `<summary>` |
+| Spill de salidas grandes | `src/core/spill.py`: resultado > 8000 chars → cabeza 62% + cola 38% + archivo completo en `data/spill/<sesión>/` con la ruta para releer. Antes se cortaba **el final**, donde están los errores |
+| Errores accionables | `_error_hint()` (permiso/timeout/archivo/args) + sugerencias con `difflib` para tools inexistentes. Los reintentos se resetean al éxito y 3 fallos consecutivos inyectan un recordatorio; 6 abortan el run |
+| `read_file` paginado | `offset`/`limit` por líneas con header (`líneas 1-80 de 240; seguí con offset=80`) |
+| `list_dir` recursivo | `recursive=true` + tope configurable |
+| Tool `glob` | `glob(pattern, path)` con jail por scope y cap de 500 |
+| Tool `apply_patch` | Parche multi-archivo **atómico** (`*** Begin Patch` / `*** Update File:` / hunks `@@`). Valida todos los hunks antes de escribir, `dry_run=true`, checkpoint por archivo y rollback completo si falla |
+| `edit` tolerante | Normaliza CRLF/LF para comparar y **restaura el estilo** del archivo; el error pide releer el archivo |
+| Jobs en background | `job_start`/`job_read`/`job_wait`/`job_kill`/`job_list` (`src/core/jobs.py`): builds/tests/dev-servers ya no bloquean el turno; lectura por cursor (delta), mismo `_blocked_command` + jail que `exec`, kill del árbol (`taskkill /T /F`) |
+| Sandbox endurecido | `SandboxService` ya **no hereda todo `os.environ`** (allowlist; `inherit_env=True` es opt-in), mata el árbol en timeout y recorta salida cabeza+cola (`max_output_bytes`) |
+| RAG con diversidad | MMR (Jaccard de tokens, λ=0.7) sobre el top-k: evita 5 chunks casi idénticos del mismo archivo |
+| Modo plan persistente | `_SESSION_MODES` sobrevive al reinicio en `data/session_modes.json` (solo se guardan las sesiones en `plan`) |
+| Selector de modo en la UI | botón **Act/Plan** en el chat con `sessionModeApi` + refresco de `/api/status`; antes el endpoint existía pero era inalcanzable |
+| `scripts/hygiene.py` | Backup **consistente** de las bases del brain con `sqlite3.backup()` (no `copy` con WAL activo), retención por familia (`--keep`, default 3), exclusión de `rag_index.db` (regenerable), limpieza de `workspace/` (`__pycache__`, dirs vacíos, `-p`/`pkg`) y reporte de `vendor/llama.cpp`. Dry-run por defecto; `--apply` para ejecutar |
+| `vendor/` ordenado | `llama.cpp` (556 MB, sin uso desde la migración a Ollama) se movió a `D:\ias\backups\nexus-v3\vendor-llama.cpp-20261019`; `vendor/README.md` documenta procedencia, restauración y verificación |
+| Tests | **11 nuevos** en `tests/test_harness_upgrades.py` (deny duro, snip/micro, spill, jobs, apply_patch atómico, MMR, modo plan persistente) → suite **618 passed, 3 skipped**; E2E **41/41** |
+
+Descartado a propósito: extracción de memoria automática por turno (`memory_extractor` existe pero
+sumaría un LLM por turno con la GPU compartida con juego/OBS) y subconjunto de tools por sub-agente
+(el executor del spawner no transporta ese dato; requiere cambiar su firma).
