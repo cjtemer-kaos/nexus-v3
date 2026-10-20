@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -69,9 +70,11 @@ def _prune(files: list[Path], keep: int, apply: bool) -> list[str]:
     for f in files:
         if not f.exists():
             continue
-        # `knowledge_graph.db`, `knowledge_graph-20261019_120000.db` y
-        # `knowledge_graph.db.bak-clean-...` comparten la misma familia.
-        key = f.name.split(".")[0]
+        # `knowledge_graph.db.bak-viejo`, `knowledge_graph-20261019_213639.db` y
+        # `knowledge_graph.db` comparten la misma familia.
+        name = f.name.split(".bak-")[0]
+        name = re.sub(r"-\d{8}_\d{6}.*$", "", name)
+        key = name[:-3] if name.endswith(".db") else name
         groups.setdefault(key, []).append(f)
     removed: list[str] = []
     for group in groups.values():
@@ -126,15 +129,22 @@ def run(apply: bool = False, keep: int = 3, as_json: bool = False) -> dict:
             else:
                 report["backups"].append({"ok": None, "detail": f"{db.name}: se respaldaria con sqlite3.backup()"})
 
-    legacy = sorted(BRAIN.glob("*.bak-*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    backups = sorted(BACKUPS.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if apply and legacy:
+    brain_legacy = sorted(BRAIN.glob("*.bak-*"), key=lambda p: p.stat().st_mtime, reverse=True) if BRAIN.exists() else []
+    if apply and brain_legacy:
         LEGACY.mkdir(parents=True, exist_ok=True)
-        for old in legacy:
+        for old in brain_legacy:
             target = LEGACY / old.name
             if not target.exists():
                 shutil.move(str(old), str(target))
-    report["pruned"] = _prune([(LEGACY / p.name) if apply else p for p in legacy] + backups, keep=keep, apply=apply)
+    _seen: set = set()
+    legacy = []
+    for p in list(LEGACY.glob("*.bak-*") if LEGACY.exists() else []) + brain_legacy:
+        if p.exists() and p not in _seen:
+            _seen.add(p)
+            legacy.append(p)
+    legacy.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    backups = sorted(BACKUPS.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    report["pruned"] = _prune(legacy + backups, keep=keep, apply=apply)
     report["workspace"] = _clean_workspace(apply)
 
     if as_json:

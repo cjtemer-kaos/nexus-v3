@@ -162,3 +162,48 @@ def test_modo_plan_sobrevive_al_reinicio(tmp_path, monkeypatch):
     srv._SESSION_MODES.pop("s1", None)
     srv._save_session_modes()
     assert srv._load_session_modes() == {}
+
+
+# --- 8. Higiene: backup consistente, retención y limpieza -------------------
+def test_hygiene_backup_retencion_y_workspace(tmp_path, monkeypatch):
+    import importlib.util
+    import os
+    import sqlite3
+
+    spec = importlib.util.spec_from_file_location("hygiene", ROOT / "scripts" / "hygiene.py")
+    h = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(h)
+
+    brain = tmp_path / "brain"
+    workspace = tmp_path / "workspace"
+    backups = tmp_path / "data" / "backups" / "brain"
+    brain.mkdir()
+    (workspace / "__pycache__").mkdir(parents=True)
+    (workspace / "-p").mkdir()
+    (workspace / "real.txt").write_text("no tocar", encoding="utf-8")
+
+    db = brain / "knowledge_graph.db"
+    with sqlite3.connect(db) as c:
+        c.execute("create table t (x text)")
+        c.execute("insert into t values ('dato')")
+    # Un backup viejo de la misma familia (debe quedar 1 tras keep=1).
+    legacy = brain / "knowledge_graph.db.bak-viejo"
+    legacy.write_bytes(b"viejo")
+    os.utime(legacy, (1, 1))
+
+    for name, value in {"ROOT": tmp_path, "BRAIN": brain, "BACKUPS": backups,
+                        "LEGACY": backups / "legacy", "WORKSPACE": workspace,
+                        "VENDOR": tmp_path / "vendor" / "llama.cpp"}.items():
+        monkeypatch.setattr(h, name, value)
+
+    report = h.run(apply=True, keep=1)
+    assert all(b["ok"] for b in report["backups"])
+    created = list(backups.glob("knowledge_graph-*.db"))
+    assert created, "debe crear un backup consistente"
+    with sqlite3.connect(created[0]) as c:
+        assert c.execute("select x from t").fetchone()[0] == "dato"
+    assert not (backups / "legacy" / legacy.name).exists(), "retención keep=1 debe borrar el viejo"
+    assert not (workspace / "__pycache__").exists()
+    assert not (workspace / "-p").exists()
+    assert (workspace / "real.txt").exists()
+
