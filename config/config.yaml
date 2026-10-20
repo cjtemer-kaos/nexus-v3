@@ -132,6 +132,15 @@ skills:
 memory:
   agent_write_enabled: true
   learn_min_chars: 12
+  # Extraccion automatica de hechos duraderos al terminar cada turno. Usa el
+  # provider que resuelva el router (local o cloud); sin provider queda el
+  # fallback regex. Portable: no asume hardware ni modelo concreto.
+  auto_extract:
+    enabled: true
+    # Mensajes recientes que ve el extractor (ventana de contexto).
+    window: 8
+    # Tope de hechos nuevos por turno (evita saturar la memoria).
+    max_facts: 5
   # Reservado: persistencia automatica de insights (el ciclo actual registra
   # telemetria en learning; la destilacion es explicita via /api/dream/run).
   auto_insight_persist: true

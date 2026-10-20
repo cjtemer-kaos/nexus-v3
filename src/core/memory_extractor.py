@@ -210,9 +210,13 @@ class MemoryExtractor:
         await extractor.after_response(session_messages)
     """
 
-    def __init__(self, director=None, memory_consolidator=None):
+    def __init__(self, director=None, memory_consolidator=None, router=None):
         self.director = director
         self.consolidator = memory_consolidator
+        # ProviderRouter del harness: alternativa portable al Director. El
+        # extractor usa el provider que la config resuelva (local o cloud);
+        # si no hay ninguno, queda el fallback regex y no rompe nada.
+        self.router = router
         self._extractions_since_audit = 0
         self._last_fingerprint = ""
         self._tidy_state_path = os.path.join(str(brain_path()), "memory_tidy_state.json")
@@ -222,6 +226,8 @@ class MemoryExtractor:
         messages: List[Dict],
         session_id: str = "",
         owner: str = "",
+        router=None,
+        max_facts: int = 0,
     ) -> Dict:
         """
         Extrae hechos de los últimos mensajes y los almacena.
@@ -241,8 +247,8 @@ class MemoryExtractor:
         # Fallback regex (sin LLM)
         fallback = _fallback_candidates(recent)
 
-        # Intentar extracción vía LLM
-        llm_facts = await self._llm_extract(recent)
+        # Intentar extracción vía LLM (Director o router del harness)
+        llm_facts = await self._llm_extract(recent, router=router)
 
         # Combinar resultados
         facts = llm_facts + fallback
@@ -283,6 +289,8 @@ class MemoryExtractor:
 
             existing.append(entry)
             added += 1
+            if max_facts and added >= int(max_facts):
+                break
 
         if added > 0:
             # Merge con TODAS las memorias: no pisar otros owners ni las sin owner.
@@ -300,21 +308,32 @@ class MemoryExtractor:
 
         return {"added": added, "total_facts": len(facts)}
 
-    async def _llm_extract(self, messages: List[Dict]) -> List[Dict]:
-        """Extrae hechos vía LLM del Director."""
+    async def _llm_extract(self, messages: List[Dict], router=None) -> List[Dict]:
+        """Extrae hechos vía LLM (Director legacy o ProviderRouter del harness)."""
+        # Code-gate de admisión: solo mensajes del usuario (no el monólogo del
+        # asistente ni salidas de tools con posible prompt-injection).
+        user_only = [m for m in messages if isinstance(m, dict) and m.get("role") == "user" and m.get("content")]
+        if not user_only:
+            return []
+
+        router = router or self.router
+        if router is not None and not self.director:
+            try:
+                from src.core.provider_base import LLMMessage
+                llm_messages = [LLMMessage(role="system", content=EXTRACT_SYSTEM_PROMPT)] + [
+                    LLMMessage(role="user", content=str(m["content"])) for m in user_only
+                ]
+                resp = await router.chat(llm_messages, hint="simple")
+                return self._parse_json_list((resp.content or "").strip())
+            except Exception as e:
+                logger.debug(f"[memory-extract] router extraction failed: {e}")
+                return []
+
         if not self.director:
             return []
 
         try:
-            # Code-gate de admision (capa 3): el system prompt ya pide hechos
-            # SOLO del usuario, pero aqui se aplica en codigo — ni el monologo
-            # del asistente ni salidas de herramientas (contenido web con
-            # posible prompt-injection) pueden llegar a la extraction LLM como
-            # material de hechos.
-            user_only = [m for m in messages if isinstance(m, dict) and m.get("role") == "user" and m.get("content")]
-            if not user_only:
-                return []
-            # Construir prompt de extracción
+            # Construir prompt de extracción (user_only ya quedó filtrado arriba)
             extraction_messages = [
                 {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
             ] + user_only
@@ -542,11 +561,15 @@ class MemoryExtractor:
 _extractor: Optional[MemoryExtractor] = None
 
 
-def get_memory_extractor(director=None, consolidator=None) -> MemoryExtractor:
-    """Obtiene o crea la instancia global del extractor."""
+def get_memory_extractor(director=None, consolidator=None, router=None) -> MemoryExtractor:
+    """Obtiene o crea la instancia global del extractor (Director o router)."""
     global _extractor
     if _extractor is None:
-        _extractor = MemoryExtractor(director=director, memory_consolidator=consolidator)
-    elif director and not _extractor.director:
-        _extractor.director = director
+        _extractor = MemoryExtractor(director=director, memory_consolidator=consolidator,
+                                     router=router)
+    else:
+        if director and not _extractor.director:
+            _extractor.director = director
+        if router and not _extractor.router:
+            _extractor.router = router
     return _extractor

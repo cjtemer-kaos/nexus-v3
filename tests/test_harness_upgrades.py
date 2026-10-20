@@ -1,8 +1,9 @@
 """Upgrades de harness incorporados desde la autopsia de repos (2026-10-19).
 
 Cubre: deny duro de secretos, compactación que preserva pares tool/result,
-spill de salidas grandes, jobs en background, apply_patch atómico, MMR en RAG
-y persistencia del modo plan.
+spill de salidas grandes, jobs en background, apply_patch atómico, MMR en RAG,
+persistencia del modo plan, subconjunto de tools por sub-agente y memoria
+automática por turno vía router.
 """
 from __future__ import annotations
 
@@ -206,4 +207,93 @@ def test_hygiene_backup_retencion_y_workspace(tmp_path, monkeypatch):
     assert not (workspace / "__pycache__").exists()
     assert not (workspace / "-p").exists()
     assert (workspace / "real.txt").exists()
+
+
+# --- 12. Sub-agentes: subconjunto de tools transportado por el spawner ------
+def test_registry_subset_acota_tools():
+    from src.core.tool_registry import ToolRegistry
+
+    reg = ToolRegistry()
+
+    async def _noop(**kwargs):
+        return "ok"
+
+    params = {"type": "object", "properties": {}}
+    reg.register_function(_noop, name="read_file", description="", parameters=params)
+    reg.register_function(_noop, name="write_file", description="", parameters=params)
+
+    sub = reg.subset(["read_file", "no_existe"])
+    assert sub.count() == 1
+    assert sub.has("read_file") and not sub.has("write_file")
+    assert reg.count() == 2, "el registro original no se modifica"
+
+
+def test_spawner_transporta_allowed_tools():
+    import asyncio
+
+    from src.core.sub_agent_spawner import SubAgentSpec, SubAgentSpawner
+
+    seen = {}
+
+    async def _exec(task, gem="auto", context="", allowed_tools=()):
+        seen["tools"] = tuple(allowed_tools)
+        return "ok"
+
+    sp = SubAgentSpawner(executor=_exec)
+    spec = SubAgentSpec(task="leer", gem="scholar", allowed_tools=("read_file", "web_search"))
+    res = asyncio.run(sp.spawn_child(spec))
+    assert res.status.value == "completed"
+    assert seen["tools"] == ("read_file", "web_search")
+
+
+def test_spawner_compatible_con_executor_viejo():
+    import asyncio
+
+    from src.core.sub_agent_spawner import SubAgentSpec, SubAgentSpawner
+
+    seen = {}
+
+    def _exec(task, gem="auto", context=""):
+        seen["called"] = True
+        return "ok"
+
+    sp = SubAgentSpawner(executor=_exec)
+    res = asyncio.run(sp.spawn_child(SubAgentSpec(task="x", allowed_tools=("read_file",))))
+    assert res.status.value == "completed"
+    assert seen["called"] is True
+
+
+# --- 13. Memoria automática: el router del harness extrae y persiste --------
+def test_memory_extractor_usa_router(tmp_path, monkeypatch):
+    import asyncio
+    import json
+
+    import src.core.memory_extractor as me
+
+    monkeypatch.setattr(me, "brain_path", lambda: tmp_path)
+    calls = {"n": 0}
+
+    class _Resp:
+        content = '[{"text": "El usuario trabaja en nexus-v3 sobre Windows 11", "category": "fact"}]'
+
+    class _Router:
+        async def chat(self, messages, **kwargs):
+            calls["n"] += 1
+            assert kwargs.get("hint") == "simple"
+            return _Resp()
+
+    ex = me.MemoryExtractor(router=_Router())
+    stats = asyncio.run(ex.after_response(
+        [
+            {"role": "user", "content": "Trabajo en nexus-v3 sobre Windows 11, acordate"},
+            {"role": "assistant", "content": "Anotado."},
+        ],
+        session_id="s-test",
+        max_facts=3,
+    ))
+    assert calls["n"] == 1, "debe consultar al router, no solo al fallback regex"
+    assert stats["added"] >= 1
+    data = json.loads((tmp_path / "memories.json").read_text(encoding="utf-8"))
+    assert any("nexus-v3" in e.get("text", "") for e in data)
+
 

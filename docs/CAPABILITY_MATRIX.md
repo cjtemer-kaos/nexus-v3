@@ -175,8 +175,19 @@ Se implementó lo que el árbol realmente no tenía:
 | Selector de modo en la UI | botón **Act/Plan** en el chat con `sessionModeApi` + refresco de `/api/status`; antes el endpoint existía pero era inalcanzable |
 | `scripts/hygiene.py` | Backup **consistente** de las bases del brain con `sqlite3.backup()` (no `copy` con WAL activo), retención por familia (`--keep`, default 3), exclusión de `rag_index.db` (regenerable), limpieza de `workspace/` (`__pycache__`, dirs vacíos, `-p`/`pkg`) y reporte de `vendor/llama.cpp`. Dry-run por defecto; `--apply` para ejecutar |
 | `vendor/` ordenado | `llama.cpp` (556 MB, sin uso desde la migración a Ollama) se movió a `D:\ias\backups\nexus-v3\vendor-llama.cpp-20261019`; `vendor/README.md` documenta procedencia, restauración y verificación |
-| Tests | **11 nuevos** en `tests/test_harness_upgrades.py` (deny duro, snip/micro, spill, jobs, apply_patch atómico, MMR, modo plan persistente) → suite **618 passed, 3 skipped**; E2E **41/41** |
+| Tests | **15 nuevos** en `tests/test_harness_upgrades.py` (deny duro, snip/micro, spill, jobs, apply_patch atómico, MMR, modo plan persistente) → suite **623 passed, 3 skipped**; E2E **41/41** |
 
-Descartado a propósito: extracción de memoria automática por turno (`memory_extractor` existe pero
-sumaría un LLM por turno con la GPU compartida con juego/OBS) y subconjunto de tools por sub-agente
-(el executor del spawner no transporta ese dato; requiere cambiar su firma).
+Implementado en la misma ronda (portabilidad: sin supuestos de hardware ni de provider):
+
+- **Extracción de memoria automática por turno** (`memory.auto_extract`): al cerrar un turno
+  exitoso, `MemoryExtractor` analiza los últimos `window` mensajes (default 8) y guarda hasta
+  `max_facts` hechos (default 5) con dedupe. Usa **el provider que resuelva el router** (local o
+  cloud, el que haya); sin provider cae al extractor regex y no rompe nada. Corre en background
+  (`asyncio.create_task`), así no suma latencia al chat. Se apaga con
+  `memory.auto_extract.enabled: false`.
+- **Subconjunto de tools por sub-agente** (`SubAgentSpec.allowed_tools`): `sub_agent(tools="a,b")`
+  acota el registro del hijo; si no se especifica, se aplica un set curado por gema
+  (`scholar` = solo lectura+web, `code`/`engineer` = FS+shell, `debugger` = lectura+shell).
+  El executor del spawner transporta el dato de forma **compatible**: solo pasa `allowed_tools`
+  si la firma lo declara. Menos tools = menos superficie de error y menos tokens de esquema.
+

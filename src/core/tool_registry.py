@@ -270,6 +270,22 @@ class ToolRegistry:
         with self._lock:
             return len(self._tools)
 
+    def subset(self, names) -> "ToolRegistry":
+        """Registro acotado a `names` (comparte los ToolEntry, no los copia).
+
+        Lo usan los sub-agentes para correr con un set mínimo de tools: menos
+        superficie de error y menos tokens de esquema en el prompt.
+        """
+        wanted = [n for n in (names or []) if isinstance(n, str)]
+        sub = ToolRegistry()
+        with self._lock:
+            for n in wanted:
+                entry = self._tools.get(n)
+                if entry is not None:
+                    sub._tools[n] = entry
+        sub.current_images = list(getattr(self, "current_images", []) or [])
+        return sub
+
     def to_openai_tools(self) -> list[dict]:
         with self._lock:
             return [t.to_openai() for t in self._tools.values()]

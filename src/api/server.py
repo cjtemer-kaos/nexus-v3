@@ -1828,7 +1828,7 @@ async def skill_opt_validate(request: Request):
     async def _eval(case: dict) -> bool:
         try:
             sess = slog.create_session(project="skill-opt")
-            r = await _run_agent_once(str(case.get("task", "")), sess.id)
+            r = await _run_agent_once(str(case.get("task", "")), sess.id, extract_memory=False)
             expect = str(case.get("expect_contains", ""))
             return bool(expect) and expect in (getattr(r, "final_output", "") or "")
         except Exception:
@@ -3217,6 +3217,20 @@ def _steer_drain(session_id: str) -> list:
     return out
 
 
+_SUB_TOOLSETS: dict[str, tuple[str, ...]] = {
+    # Investigación: solo lectura + web + memoria. Sin mutaciones ni shell.
+    "scholar": ("read_file", "list_dir", "glob", "code_search", "web_search", "web_fetch",
+                "recall", "learn", "todo_write"),
+    # Código: lectura/escritura + shell + web. La delegación queda fuera.
+    "code": ("read_file", "list_dir", "glob", "code_search", "write_file", "edit",
+             "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
+    "engineer": ("read_file", "list_dir", "glob", "code_search", "write_file", "edit",
+                 "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
+    "debugger": ("read_file", "list_dir", "glob", "code_search", "exec", "web_search",
+                 "web_fetch", "recall", "learn", "todo_write"),
+}
+
+
 def _auto_apply_mode(cfg: dict | None = None) -> str:
     """auto | assisted (default) | approve. `approve` encola mutaciones para aprobación."""
     try:
@@ -3232,9 +3246,16 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
     if sp is None:
         from src.core.sub_agent_spawner import SubAgentSpawner
 
-        async def _exec(task: str, gem: str = "auto", context: str = ""):
+        async def _exec(task: str, gem: str = "auto", context: str = "", allowed_tools=()):
             child_sid = f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}"
             reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False)
+            # Set curado por gema (o el pedido explícito): menos tools = menos
+            # superficie de error y menos tokens de esquema en el prompt.
+            names = tuple(allowed_tools or ()) or _SUB_TOOLSETS.get(gem, ())
+            if names:
+                narrowed = reg.subset(names)
+                if narrowed.count():
+                    reg = narrowed
             loop = _new_agent_loop(cfg or {}, provider_router=router, tool_registry=reg, scope=scope,
                                    session_log=_session_log(), event_store=_event_store(),
                                    compaction=_build_compaction(cfg or {}), hooks=_build_hooks(cfg or {}),
@@ -3920,7 +3941,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             parameters={"type": "object", "properties": {"agent_id": {"type": "string"}, "task": {"type": "string"}},
                         "required": ["agent_id", "task"], "additionalProperties": False},
         )
-    async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "") -> str:
+    async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "",
+                             tools: str = "") -> str:
         """Delega una tarea a un sub-agente aislado (contexto propio, depth limit 3).
         mode='continuable' lo mantiene vivo para más mensajes vía sub_agent_message."""
         if router is None:
@@ -3938,7 +3960,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             except Exception:
                 context = ""
         spec = SubAgentSpec(task=task, gem=gema, context=context,
-                            mode=mode if mode in ("one-shot", "continuable") else "one-shot")
+                            mode=mode if mode in ("one-shot", "continuable") else "one-shot",
+                            allowed_tools=tuple(t.strip() for t in (tools or "").split(",") if t.strip()))
         res = await sp.spawn_child(spec)
         return _json.dumps({"child_id": res.child_id, "status": res.status.value,
                             "result": res.result, "error": res.error}, ensure_ascii=False, default=str)
@@ -3963,7 +3986,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {
             "task": {"type": "string"},
             "mode": {"type": "string", "enum": ["one-shot", "continuable"]},
-            "gema": {"type": "string"}, "context": {"type": "string"}},
+            "gema": {"type": "string"}, "context": {"type": "string"},
+            "tools": {"type": "string", "description": "Lista separada por comas con las tools permitidas al hijo (vacío = set curado según la gema)."}},
             "required": ["task"], "additionalProperties": False},
     )
     registry.register_function(
@@ -4082,6 +4106,63 @@ async def _learning_record(task: str, session_id: str, result,
         logger.debug("learning record skipped: %s", e)
 
 
+_BG_TASKS: set = set()
+
+
+def _spawn_bg(coro) -> None:
+    """Lanza una corrutina sin bloquear el turno, reteniendo la referencia."""
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        return
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+async def _memory_extract(cfg: dict, session_id: str, message: str, result) -> None:
+    """Extracción automática de hechos duraderos al cerrar un turno.
+
+    Portable: usa el router de la config (local o cloud, el que haya); si no
+    hay provider disponible queda el fallback regex del extractor. Se puede
+    apagar desde `memory.auto_extract.enabled`.
+    """
+    try:
+        conf = ((cfg.get("memory") or {}).get("auto_extract") or {})
+        if conf.get("enabled", True) is False:
+            return
+        if not getattr(result, "success", False):
+            return
+        window = max(2, int(conf.get("window", 8)))
+        msgs: list[dict] = []
+        try:
+            recent = _session_log().get_recent_messages(session_id, n=window)
+            msgs = [
+                {"role": m.role, "content": m.content}
+                for m in recent
+                if getattr(m, "role", "") in ("user", "assistant") and getattr(m, "content", "")
+            ]
+        except Exception:
+            msgs = []
+        if len(msgs) < 2:
+            msgs = [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": getattr(result, "final_output", "") or ""},
+            ]
+        from src.core.memory_extractor import get_memory_extractor
+
+        router = _get_router(cfg)
+        stats = await get_memory_extractor(router=router).after_response(
+            msgs,
+            session_id=session_id,
+            router=router,
+            max_facts=int(conf.get("max_facts", 5)),
+        )
+        if stats.get("added"):
+            logger.info("memoria automática: +%s hechos (sesión %s)", stats["added"], session_id)
+    except Exception as e:
+        logger.debug("memory extract skipped: %s", e)
+
+
 def _build_budget(cfg: dict | None = None):
     """IterationBudget desde config.agent_loop.budget (defaults holgados para modelos locales)."""
     from src.core.iteration_budget import IterationBudget
@@ -4194,7 +4275,8 @@ def _delegation_block() -> str:
 
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False,
-                          agent_id: str | None = None, on_delta=None, on_reasoning=None):
+                          agent_id: str | None = None, on_delta=None, on_reasoning=None,
+                          extract_memory: bool = True):
     """Un run de AgentLoop con la construccion estandar (config segura)."""
     from src.core.config import load_config
     cfg = _load_config_safe()
@@ -4234,6 +4316,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                             steer=(lambda: _steer_drain(session_id)) if session_id else None,
                             extra_system=(_extra or None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
+    if extract_memory:
+        _spawn_bg(_memory_extract(cfg, session_id, message, result))
     return result
 
 
@@ -4338,6 +4422,7 @@ async def chat(request: Request):
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
                                model=body.get("model"))
+        _spawn_bg(_memory_extract(cfg, session_id, message, result))
 
         # El asistente ya lo persiste el AgentLoop (session_log=slog). No duplicar.
 

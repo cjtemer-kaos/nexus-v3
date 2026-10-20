@@ -90,6 +90,9 @@ class SubAgentSpec:
     mode: str = "one-shot"        # one-shot|continuable
     descriptor: str = ""          # log-only: se registra, NUNCA se ejecuta
     scope_roots: Any = None       # raíces pedidas; se intersectan con el scope padre (nunca se ensancha)
+    # Subconjunto de tools del hijo. Vacío = todas las del padre. Al estrechar
+    # el set se reduce superficie de error y costo de contexto por sub-agente.
+    allowed_tools: Any = ()       # tuple[str, ...] | list[str]
 
 
 class SubAgentSpawner:
@@ -391,14 +394,25 @@ class SubAgentSpawner:
             logger.info(f"  Task: {spec.task[:100]}")
 
             try:
-                # Ejecutar con timeout
+                # Ejecutar con timeout. `allowed_tools` es opcional: se pasa
+                # solo si el executor lo declara (compatibilidad con executors
+                # viejos de 3 argumentos).
+                call_kwargs = {"gem": spec.gem, "context": spec.context}
+                try:
+                    params = inspect.signature(self.executor).parameters
+                    if "allowed_tools" in params or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+                    ):
+                        call_kwargs["allowed_tools"] = tuple(spec.allowed_tools or ())
+                except (TypeError, ValueError):
+                    pass
                 if inspect.iscoroutinefunction(self.executor):
                     task_result = await asyncio.wait_for(
-                        self.executor(spec.task, gem=spec.gem, context=spec.context),
+                        self.executor(spec.task, **call_kwargs),
                         timeout=spec.timeout_seconds,
                     )
                 else:
-                    task_result = self.executor(spec.task, gem=spec.gem, context=spec.context)
+                    task_result = self.executor(spec.task, **call_kwargs)
 
                 result.status = SubAgentStatus.COMPLETED
                 result.result = task_result

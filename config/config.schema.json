@@ -511,6 +511,23 @@
         },
         "auto_insight_persist": {
           "type": "boolean"
+        },
+        "auto_extract": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "window": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "max_facts": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
