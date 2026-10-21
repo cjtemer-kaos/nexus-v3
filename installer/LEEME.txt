@@ -1,0 +1,52 @@
+NEXUS V3 - INSTALACION EN OTRA PC WINDOWS
+=========================================
+
+1. Copia el ZIP a la otra PC.
+2. Extrae TODO el contenido del ZIP en una carpeta (por ejemplo, el Escritorio).
+   IMPORTANTE: no ejecutes INSTALAR.bat desde dentro del ZIP.
+3. Doble clic en INSTALAR.bat.
+4. Espera: crea el entorno de Python, instala dependencias y abre la app.
+   Puede tardar varios minutos la primera vez.
+
+QUE HACE EL INSTALADOR
+----------------------
+- Copia la app a: %LOCALAPPDATA%\Programs\Nexus v3
+- Busca Python 3.11 o superior. Si no lo encuentra, intenta instalarlo
+  automaticamente con winget (Python 3.14/3.13/3.12).
+- Crea el entorno virtual en:
+  resources\app.asar.unpacked\.venv-ft314
+- Instala las dependencias base y, si se puede, los extras opcionales
+  (LSP, PTY, tree-sitter, galeria, etc.).
+- Crea accesos directos en el Escritorio y en el Menu Inicio.
+- Abre Nexus v3.
+
+REQUISITOS
+----------
+- Windows 10/11 de 64 bits.
+- Conexion a internet la primera vez (para instalar Python y dependencias).
+- Unos 500 MB de disco libre.
+- No hace falta Node.js: Electron ya viene incluido en el paquete.
+- No hace falta ser administrador: la instalacion es por usuario.
+
+SI FALTA PYTHON
+---------------
+El instalador intenta instalarlo con winget. Si tu PC no tiene winget,
+instala Python 3.11+ desde:
+  https://www.python.org/downloads/windows/
+Marca la opcion "Add python.exe to PATH" y volve a ejecutar INSTALAR.bat.
+
+LOG
+---
+Si algo falla, revisa:
+  %TEMP%\nexus-v3-install.log
+
+DESINSTALAR
+-----------
+1. Cerra Nexus v3.
+2. Borra la carpeta %LOCALAPPDATA%\Programs\Nexus v3.
+3. Borra los accesos directos "Nexus v3" del Escritorio y del Menu Inicio.
+
+Tus datos (sesiones, brain, etc.) quedan dentro de:
+  %LOCALAPPDATA%\Programs\Nexus v3\resources\app.asar.unpacked\data
+  %LOCALAPPDATA%\Programs\Nexus v3\resources\app.asar.unpacked\brain
+Hace backup de esas carpetas si vas a reinstalar.

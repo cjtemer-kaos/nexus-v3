@@ -1,0 +1,15 @@
+# Nexus v3 - dependencias base para una instalacion nueva (Windows)
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+httpx>=0.27
+PyYAML>=6.0
+jsonschema>=4.20
+python-dotenv>=1.0
+numpy>=1.26
+psutil>=5.9
+websockets>=12
+mcp>=1.0
+aiohttp>=3.9
+aiosqlite>=0.19
+croniter>=2.0
+ruamel.yaml>=0.18

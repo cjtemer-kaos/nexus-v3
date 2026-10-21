@@ -50,6 +50,28 @@
         "to": "ui/dist"
       }
     ],
+    "extraFiles": [
+      {
+        "from": "installer/INSTALAR.bat",
+        "to": "INSTALAR.bat"
+      },
+      {
+        "from": "installer/install.ps1",
+        "to": "install.ps1"
+      },
+      {
+        "from": "installer/LEEME.txt",
+        "to": "LEEME.txt"
+      },
+      {
+        "from": "installer/requirements-runtime.txt",
+        "to": "requirements-runtime.txt"
+      },
+      {
+        "from": "installer/requirements-optional.txt",
+        "to": "requirements-optional.txt"
+      }
+    ],
     "win": {
       "target": [
         {
