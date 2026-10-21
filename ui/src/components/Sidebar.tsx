@@ -36,8 +36,8 @@ function NavButton({ item, active, onClick, indented }: { item: NavItem; active:
         active ? 'bg-[#0B62D6] text-white shadow' : 'text-[#9BA1AA] hover:bg-[#22262D] hover:text-[#EDEEF0]')}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      <span className="font-medium truncate">{item.label}</span>
-      {!indented && <span className={cn('ml-auto text-[11px] truncate', active ? 'text-[#B9DBFF]' : 'text-[#6B7280]')}>{item.desc}</span>}
+      <span className="font-medium shrink-0">{item.label}</span>
+      {!indented && <span className={cn('ml-auto min-w-0 text-[11px] truncate', active ? 'text-[#B9DBFF]' : 'text-[#6B7280]')}>{item.desc}</span>}
     </button>
   )
 }

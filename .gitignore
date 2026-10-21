@@ -80,3 +80,6 @@ pytest_out.txt
 
 # Salidas de Playwright MCP (capturas de verificacion)
 .playwright-mcp/
+
+# Manifiestos de update (se regeneran con scripts/build_update_manifest.py)
+updates-manifest*.json

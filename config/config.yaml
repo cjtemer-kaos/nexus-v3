@@ -290,3 +290,9 @@ voice:
   vad_hangover_ms: 300
   vad_min_speech_ms: 250
   tts_endpoint: http://127.0.0.1:4123
+updates:
+  # URL (http/https) o ruta al manifiesto. Vacio = chequeo deshabilitado.
+  manifest_url: ""
+  timeout_s: 10
+  # Deteccion y planificacion solamente: no descarga ni reemplaza archivos.
+  auto_apply: false

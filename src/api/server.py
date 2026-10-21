@@ -1593,6 +1593,85 @@ async def graph_maintain():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---- Knowledge bundles (intercambio portable entre instalaciones) ----
+@app.get("/api/knowledge/export")
+async def knowledge_export(categories: str = "", include_sessions: bool = False,
+                           download: bool = True):
+    """Exporta el grafo OPCODE a un bundle .nexuskg.json (claves estables)."""
+    from src.core.knowledge_bundle import export_bundle
+    from src.core.knowledge_memory import get_knowledge_memory
+    cats = [c.strip() for c in categories.split(",") if c.strip()]
+    try:
+        bundle = await asyncio.to_thread(
+            lambda: export_bundle(
+                get_knowledge_memory(), categories=cats,
+                include_sessions=bool(include_sessions),
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo exportar el grafo: {e}")
+    if not download:
+        return JSONResponse(bundle)
+    name = "nexus-knowledge-" + __import__("time").strftime("%Y%m%d-%H%M") + ".nexuskg.json"
+    return Response(
+        content=_json2.dumps(bundle, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.post("/api/knowledge/import")
+async def knowledge_import(request: Request):
+    """Importa/mergea un bundle. Dry-run por defecto; exige dry_run=false para escribir."""
+    from src.core.knowledge_bundle import import_bundle
+    from src.core.knowledge_memory import get_knowledge_memory
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="se esperaba un objeto JSON")
+    nested = body.get("bundle")
+    bundle = nested if isinstance(nested, dict) else body
+    dry_run = bool(body.get("dry_run", True)) if nested is not None else True
+    overwrite = bool(body.get("overwrite", False))
+    label = str(body.get("filename") or "api")[:120]
+    try:
+        res = await asyncio.to_thread(
+            lambda: import_bundle(
+                get_knowledge_memory(), bundle, dry_run=dry_run,
+                overwrite=overwrite, source_label=label,
+            )
+        )
+        return JSONResponse(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo importar el bundle: {e}")
+
+
+# ---- Updates (solo deteccion; nunca auto-apply) ----
+@app.get("/api/updates/check")
+async def updates_check(manifest_url: str = ""):
+    """Compara los archivos locales con un manifiesto remoto. No aplica nada."""
+    from src.core.updater import check as check_updates
+    cfg = _load_config_safe()
+    up = cfg.get("updates") or {}
+    src = (manifest_url or "").strip() or str(up.get("manifest_url") or "").strip()
+    if not src:
+        return {"enabled": False, "ok": True, "update_available": False,
+                "reason": "updates.manifest_url vacio"}
+    try:
+        timeout = float(up.get("timeout_s") or 10)
+    except (TypeError, ValueError):
+        timeout = 10.0
+    try:
+        res = await asyncio.to_thread(check_updates, src, _PROJECT_ROOT, timeout)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"no se pudo leer el manifiesto: {e}")
+    res["enabled"] = True
+    return JSONResponse(res)
+
+
 # ---- Sessions ----
 @app.get("/api/sessions")
 async def list_sessions(limit: int = 50):

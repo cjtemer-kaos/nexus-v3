@@ -347,7 +347,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     show: false,
-    backgroundColor: "#09090b", // zinc-950
+    backgroundColor: "#15171B",
     title: "Nexus v3 — Arnes",
     icon: iconPath,
     webPreferences: {
@@ -381,7 +381,12 @@ function createWindow() {
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml)}`);
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    // En pantallas con escalado (125/150%) el ancho en CSS queda por debajo de
+    // 900px y la topbar/composer no entran. Maximizar usa el work area real.
+    mainWindow?.maximize();
+    mainWindow?.show();
+  });
 
   mainWindow.on("close", (e) => {
     // Minimize to tray instead of quit when closing window (optional — like Goose/Hermes)

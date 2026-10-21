@@ -24,8 +24,8 @@
   --color-destructive: #FF6259;
   --color-destructive-foreground: #FFFFFF;
   --radius: 0.75rem;
-  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: system-ui, 'Segoe UI', -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
 }
 
 * { border-color: #2C3037; }

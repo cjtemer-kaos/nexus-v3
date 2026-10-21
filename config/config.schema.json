@@ -782,6 +782,15 @@
         "tts_endpoint": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "updates": {
+      "type": "object",
+      "properties": {
+        "manifest_url": { "type": "string" },
+        "timeout_s": { "type": "number", "minimum": 1 },
+        "auto_apply": { "type": "boolean" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

@@ -228,7 +228,8 @@ export function FileEditor() {
             onMount={(ed)=> { editorRef.current = ed }}
             theme="vs-dark"
             options={{
-              fontFamily: 'Geist Mono, JetBrains Mono, monospace',
+              fontFamily: 'Consolas, "Courier New", monospace',
+              fontLigatures: false,
               fontSize: 13,
               lineHeight: 20,
               minimap: { enabled: false },

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause, Brain } from 'lucide-react'
+import { Search, Maximize2, RefreshCw, X, Network, Sparkles, Box, Square, Orbit, Crosshair, Pause, Brain, Download, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch, resError } from '@/lib/api'
@@ -20,6 +20,12 @@ type GData = {
 type GraphEntity = { name: string; mentions: number; nodes: number }
 type SearchHit = { id: number; title: string; category: string; snippet: string; topic_key?: string; revision?: number }
 type GraphStatus = { connected_nodes: number; entities: number; topic_nodes: number; total_revisions: number }
+type ImportPreview = {
+  nodes: { new: number; updated: number; skipped: number; total: number }
+  edges: { new: number; skipped: number; total: number }
+  warnings?: string[]
+  content_hash?: string
+}
 type NodeDetail = {
   id: number; title: string; category: string; source: string; importance: number;
   tags: string; content: string; access_count: number; degree: number;
@@ -140,6 +146,13 @@ export function GraphView() {
   const [citeMsg, setCiteMsg] = useState<string | null>(null)
   const [restoringRev, setRestoringRev] = useState<number | null>(null)
   const searchSequence = useRef(0)
+  const importFileRef = useRef<HTMLInputElement>(null)
+  const [transferBusy, setTransferBusy] = useState(false)
+  const [transferMsg, setTransferMsg] = useState<string | null>(null)
+  const [transferErr, setTransferErr] = useState<string | null>(null)
+  const [pendingImport, setPendingImport] = useState<{
+    name: string; bundle: unknown; preview: ImportPreview
+  } | null>(null)
 
   const loadSeq = useRef(0)
 
@@ -179,6 +192,13 @@ export function GraphView() {
     }
   }, [qApplied, category, community, relation, minWeight, centrality])
 
+  const refreshStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/graph/status')
+      if (res.ok) setGraphStatus(await res.json() as GraphStatus)
+    } catch { /* el status es informativo */ }
+  }, [])
+
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -196,14 +216,7 @@ export function GraphView() {
     return () => { alive = false }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    apiFetch('/api/graph/status')
-      .then(res => res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`)))
-      .then((status: GraphStatus) => { if (!cancelled) setGraphStatus(status) })
-      .catch(() => { if (!cancelled) setGraphStatus(null) })
-    return () => { cancelled = true }
-  }, [])
+  useEffect(() => { void refreshStatus() }, [refreshStatus])
 
   useEffect(() => {
     if (!showEntities || entities !== null) return
@@ -432,6 +445,72 @@ export function GraphView() {
       .finally(() => { if (requestId === searchSequence.current) setSearchLoading(false) })
   }
 
+  const exportKnowledge = async () => {
+    setTransferBusy(true); setTransferErr(null); setTransferMsg(null)
+    try {
+      const res = await apiFetch('/api/knowledge/export')
+      if (!res.ok) throw new Error(await resError(res, 'No se pudo exportar el grafo'))
+      const blob = await res.blob()
+      const cd = res.headers.get('Content-Disposition') || ''
+      const name = /filename="([^"]+)"/.exec(cd)?.[1] || 'nexus-knowledge.nexuskg.json'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = name
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1500)
+      setTransferMsg(`Exportado ${name} (${(blob.size / 1024).toFixed(1)} KB)`)
+    } catch (e) {
+      setTransferErr((e as Error).message || 'No se pudo exportar el grafo')
+    } finally { setTransferBusy(false) }
+  }
+
+  const pickImport = () => importFileRef.current?.click()
+
+  const handleImportFile = async (ev: ChangeEvent<HTMLInputElement>) => {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    if (!file) return
+    setTransferBusy(true); setTransferErr(null); setTransferMsg(null); setPendingImport(null)
+    try {
+      let bundle: unknown
+      try { bundle = JSON.parse(await file.text()) }
+      catch { throw new Error('El archivo no es JSON válido') }
+      const res = await apiFetch('/api/knowledge/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundle, dry_run: true, filename: file.name }),
+      })
+      if (!res.ok) throw new Error(await resError(res, 'Bundle inválido'))
+      const preview = await res.json() as ImportPreview
+      setPendingImport({ name: file.name, bundle, preview })
+    } catch (e) {
+      setTransferErr((e as Error).message || 'No se pudo leer el bundle')
+    } finally { setTransferBusy(false) }
+  }
+
+  const confirmImport = async () => {
+    if (!pendingImport) return
+    setTransferBusy(true); setTransferErr(null)
+    try {
+      const res = await apiFetch('/api/knowledge/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundle: pendingImport.bundle, dry_run: false, filename: pendingImport.name,
+        }),
+      })
+      if (!res.ok) throw new Error(await resError(res, 'No se pudo importar el bundle'))
+      const done = await res.json() as ImportPreview
+      setTransferMsg(
+        `Importado: ${done.nodes.new} nuevos, ${done.nodes.updated} actualizados, ` +
+        `${done.nodes.skipped} sin cambios · ${done.edges.new} aristas nuevas`,
+      )
+      setPendingImport(null)
+      await load()
+      await refreshStatus()
+    } catch (e) {
+      setTransferErr((e as Error).message || 'No se pudo importar el bundle')
+    } finally { setTransferBusy(false) }
+  }
+
   const commonProps: any = {
     graphData,
     backgroundColor: mode === '3d' ? '#0B0D10' : 'rgba(0,0,0,0)',
@@ -541,6 +620,25 @@ export function GraphView() {
           </button>
         )}
         <div className="ml-auto flex items-center gap-1.5">
+          <input
+            ref={importFileRef} type="file" className="hidden"
+            accept=".json,.nexuskg.json,application/json"
+            onChange={handleImportFile}
+          />
+          <Button
+            variant="ghost" size="icon" aria-label="Exportar conocimiento"
+            title="Exportar el grafo a .nexuskg.json"
+            disabled={transferBusy} onClick={() => void exportKnowledge()}
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost" size="icon" aria-label="Importar conocimiento"
+            title="Importar un .nexuskg.json (preview y confirmación)"
+            disabled={transferBusy} onClick={pickImport}
+          >
+            <Upload className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost" size="sm" aria-expanded={showEntities}
             aria-label={showEntities ? 'Cerrar panel de entidades' : 'Abrir panel de entidades'}
@@ -554,6 +652,40 @@ export function GraphView() {
           <Button variant="ghost" size="icon" aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} onClick={() => setIsFullscreen(v => !v)}><Maximize2 className="h-4 w-4" /></Button>
         </div>
       </div>
+
+      {(pendingImport || transferMsg || transferErr || transferBusy) && (
+        <div className="border-b border-[#2C3037] bg-[#1E2127] px-4 py-2 text-xs">
+          {transferBusy && <span className="text-[#9BA1AA]">Procesando…</span>}
+          {transferErr && <span className="text-[#FF6B6B]">{transferErr}</span>}
+          {transferMsg && !pendingImport && <span className="text-[#3DDC84]">{transferMsg}</span>}
+          {pendingImport && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <span className="font-medium text-[#EDEEF0]">{pendingImport.name}</span>
+              <span className="text-[#9BA1AA]">
+                {pendingImport.preview.nodes.new} nuevos · {pendingImport.preview.nodes.updated} actualizados ·{' '}
+                {pendingImport.preview.nodes.skipped} sin cambios · {pendingImport.preview.edges.new} aristas nuevas
+              </span>
+              {!!pendingImport.preview.warnings?.length && (
+                <span className="text-[#FFB86B]" title={pendingImport.preview.warnings.join('\n')}>
+                  {pendingImport.preview.warnings.length} aviso(s)
+                </span>
+              )}
+              <div className="ml-auto flex items-center gap-2">
+                <Button
+                  size="sm" disabled={transferBusy ||
+                    (pendingImport.preview.nodes.new + pendingImport.preview.nodes.updated === 0)}
+                  onClick={() => void confirmImport()}
+                >
+                  Confirmar importación
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setPendingImport(null)}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div ref={wrapRef} className="relative flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.07),_transparent_60%)]">
         {loading && (
