@@ -272,7 +272,9 @@ export function ChatPanel() {
       return
     }
 
-    let { activeSession, selectedModel, activeAgent } = useAppStore.getState()
+    const state = useAppStore.getState()
+    let activeSession = state.activeSession
+    const { selectedModel, activeAgent } = state
     if (!activeSession) activeSession = await useAppStore.getState().ensureSession()
     const stillActive = () => useAppStore.getState().activeSession === activeSession
     if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })

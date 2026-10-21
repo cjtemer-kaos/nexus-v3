@@ -49,6 +49,9 @@ class Session:
     summary: str = ""
     compact_count: int = 0
     total_tokens: int = 0
+    # Id del mensaje `system` que contiene el ultimo resumen de compactacion.
+    # Sobrevive al reinicio: el historial se recarga desde aca (no se re-resume).
+    summary_message_id: Optional[int] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_active: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -61,6 +64,7 @@ class Session:
             "summary": self.summary,
             "compact_count": self.compact_count,
             "total_tokens": self.total_tokens,
+            "summary_message_id": self.summary_message_id,
             "created_at": self.created_at,
             "last_active": self.last_active,
         }
@@ -81,7 +85,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_active TEXT NOT NULL,
   summary TEXT DEFAULT '',
   compact_count INTEGER DEFAULT 0,
-  total_tokens INTEGER DEFAULT 0
+  total_tokens INTEGER DEFAULT 0,
+  summary_message_id INTEGER
 );
 -- alias for legacy code using parent_id
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
@@ -157,6 +162,13 @@ class SessionLog:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Migracion: DBs creadas antes del resumen durable no tienen la columna.
+            try:
+                _cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sessions)")}
+                if "summary_message_id" not in _cols:
+                    self._conn.execute("ALTER TABLE sessions ADD COLUMN summary_message_id INTEGER")
+            except Exception:
+                pass
             # Backfill FTS una vez (marcador user_version): en una tabla FTS5
             # external-content, count(*) devuelve el count de la tabla de contenido,
             # no del indice -> no sirve para detectar desincronizacion.
@@ -183,12 +195,15 @@ class SessionLog:
                 summary=row["summary"] or "",
                 compact_count=row["compact_count"] or 0,
                 total_tokens=row["total_tokens"] or 0,
+                summary_message_id=(row["summary_message_id"]
+                                    if "summary_message_id" in row.keys() else None),
             )
         # tuple fallback
         return Session(
             id=row[0], project=row[1], parent_id=row[2],
             created_at=row[3], last_active=row[4],
             summary=row[5] or "", compact_count=row[6] or 0, total_tokens=row[7] or 0,
+            summary_message_id=(row[8] if len(row) > 8 else None),
         )
 
     # ------------------------------------------------------------------
@@ -236,7 +251,7 @@ class SessionLog:
 
     def update_session(self, session_id: str, **fields) -> bool:
         """Generic update: summary, project, etc."""
-        allowed = {"summary", "project", "compact_count", "total_tokens"}
+        allowed = {"summary", "project", "compact_count", "total_tokens", "summary_message_id"}
         sets = []
         vals = []
         for k, v in fields.items():
@@ -399,11 +414,58 @@ class SessionLog:
     # ------------------------------------------------------------------
     # Compaction + branching
     # ------------------------------------------------------------------
-    def compact_mark(self, session_id: str, summary: str) -> None:
+    def compact_mark(self, session_id: str, summary: str) -> Optional[int]:
+        """Persiste el resumen como mensaje real y apunta `summary_message_id`.
+
+        Antes el resumen vivia solo en el campo `summary` y el historial se
+        recargaba sin el: al reiniciar, la compactacion se perdia. Ahora el
+        resumen es un mensaje `system` con id estable (patron OpenCode
+        `SummaryMessageID`), y el historial se recarga desde ahi.
+        """
+        content = (summary or "").strip()
+        if not content.startswith("[resumen de"):
+            content = f"[resumen de contexto]\n{content}".strip()
         with self._lock:
-            self._conn.execute(
-                "UPDATE sessions SET summary=?, compact_count=compact_count+1 WHERE id=?", (summary, session_id)
+            cur = self._conn.execute(
+                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (session_id, "system", content, "", "", 0, "", datetime.now(timezone.utc).isoformat()),
             )
+            mid = cur.lastrowid
+            self._conn.execute(
+                "UPDATE sessions SET summary=?, summary_message_id=?, compact_count=compact_count+1,"
+                " last_active=? WHERE id=?",
+                (summary, mid, datetime.now(timezone.utc).isoformat(), session_id),
+            )
+            return mid
+
+    def get_summary_message(self, session_id: str) -> Optional[dict]:
+        """Devuelve el mensaje de resumen vigente (o None)."""
+        sess = self.get_session(session_id)
+        if sess is None or not sess.summary_message_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                " FROM messages WHERE id=? AND session_id=?",
+                (int(sess.summary_message_id), session_id),
+            ).fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "role": row[1], "content": row[2], "tool_call_id": row[3],
+                "tool_name": row[4], "tokens": row[5], "model": row[6], "created_at": row[7]}
+
+    def get_messages_from(self, session_id: str, after_id: int = 0,
+                          limit: int = 10000) -> list[dict]:
+        """Mensajes con id > after_id (ASC), con shape completo."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                " FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?",
+                (session_id, int(after_id), int(limit)),
+            ).fetchall()
+        return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
+                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7]} for r in rows]
 
     def fork(self, session_id: str) -> Session:
         """Branch: nueva sesion con parent_session_id = session_id (OpenCode multi-session)."""

@@ -193,6 +193,8 @@ class ToolRegistry:
         # Imagenes (data-URI) del turno actual: la delegacion (gema_run/agent_run)
         # las hereda para que el sub-agente vea la imagen.
         self.current_images: list = []
+        # Guardrail de secuencia (ToolShield). Lo arma el servidor con config.
+        self.sequence_guard: Any = None
 
     # ---- registration ----
     def register(self, entry: ToolEntry) -> None:
@@ -331,8 +333,14 @@ class ToolRegistry:
             }
 
     # ---- dispatch ----
-    async def dispatch(self, name: str, args: dict[str, Any] | None = None, scope=None, hooks=None, call_log=None) -> Any:
-        """Guarded dispatch: validate → scope → hooks pre → exec → hooks post → metrics → log."""
+    async def dispatch(self, name: str, args: dict[str, Any] | None = None, scope=None, hooks=None,
+                       call_log=None, approval=None, session_id: str = "") -> Any:
+        """Guarded dispatch: validate -> scope -> approval (HITL) -> hooks pre -> exec -> hooks post -> metrics -> log.
+
+        `approval` es un `ApprovalContext`. Sin contexto el gate se omite (compat);
+        los caminos no interactivos (MCP server, subagentes) pasan un contexto con
+        `interactive=False`/`policy="never"` para fallar cerrado.
+        """
         if call_log is None:
             call_log = getattr(self, "call_log", None)
         args = args or {}
@@ -373,6 +381,93 @@ class ToolRegistry:
                     except Exception:
                         pass
                 raise
+
+        # Approval gate (HITL): choke point unico para loop, subagentes y MCP.
+        # Sin contexto se omite (compatibilidad); los caminos no interactivos
+        # pasan un ApprovalContext con interactive=False para fallar cerrado.
+        _approval_required = False
+        if approval is not None:
+            try:
+                from src.core.approval_policy import check_tool_approval, authorize
+                _check = check_tool_approval(name, args, entry, approval)
+                _approval_required = bool(getattr(_check, "required", False))
+                _out = await authorize(_check, approval, tool=name)
+                if not _out.allowed:
+                    raise PermissionError(
+                        f"aprobacion denegada para {name}: {_out.reason or _out.decision}")
+            except PermissionError as e:
+                if call_log is not None:
+                    try:
+                        call_log({"tool": name, "args": args, "outcome": "approval_denied",
+                                  "success": False, "error": str(e)[:300]})
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                # Fail-closed: si el gate falla, NO se ejecuta la tool.
+                logger.warning(f"approval gate error en {name}: {e}")
+                if call_log is not None:
+                    try:
+                        call_log({"tool": name, "args": args, "outcome": "approval_error",
+                                  "success": False, "error": str(e)[:300]})
+                    except Exception:
+                        pass
+                raise PermissionError(f"aprobacion no disponible para {name}: {e}")
+
+        # Guardrail de secuencia (ToolShield). El actor no decide su riesgo:
+        # HIGH = deny; MEDIUM = aprobacion (o fail-closed sin canal). Si el gate
+        # normal ya pidio aprobacion, no se duplica el pedido.
+        _sg = getattr(self, "sequence_guard", None)
+        # Sin ApprovalContext el gate HITL se omite por compatibilidad; el
+        # guardrail de secuencia sigue la misma regla (los caminos no
+        # interactivos SI pasan un contexto interactive=False).
+        if _sg is not None and approval is not None and not _approval_required:
+            try:
+                _verdict = await _sg.evaluate(name, args)
+            except Exception as e:
+                logger.debug("sequence guard error en %s: %s", name, e)
+                _verdict = None
+            _risk = str(getattr(_verdict, "risk", "LOW") or "LOW").upper()
+            _reason = str(getattr(_verdict, "reason", "") or "")
+            if _risk == "HIGH":
+                if call_log is not None:
+                    try:
+                        call_log({"tool": name, "args": args,
+                                  "outcome": "sequence_denied", "success": False,
+                                  "error": _reason[:300]})
+                    except Exception:
+                        pass
+                raise PermissionError(
+                    f"secuencia bloqueada (HIGH) para {name}: {_reason or 'riesgo alto'}")
+            if _risk == "MEDIUM":
+                if approval is None:
+                    raise PermissionError(
+                        f"secuencia MEDIUM sin canal de aprobacion para {name}: {_reason}")
+                try:
+                    from src.core.approval_policy import ApprovalCheck, authorize
+                    from src.core.approvals import fingerprint
+                    _seq_check = ApprovalCheck(
+                        required=True,
+                        action="sequence:medium",
+                        reason=f"secuencia MEDIUM: {_reason}",
+                        key_hash=fingerprint(name, "sequence:medium", args),
+                        preview=json.dumps(args, ensure_ascii=False,
+                                           default=str)[:2000],
+                    )
+                    _seq_out = await authorize(_seq_check, approval, tool=name)
+                    if not _seq_out.allowed:
+                        raise PermissionError(
+                            f"secuencia MEDIUM no aprobada para {name}: "
+                            f"{_seq_out.reason or _seq_out.decision}")
+                except PermissionError:
+                    if call_log is not None:
+                        try:
+                            call_log({"tool": name, "args": args,
+                                      "outcome": "sequence_denied",
+                                      "success": False, "error": _reason[:300]})
+                        except Exception:
+                            pass
+                    raise
 
         # Hooks pre (load-bearing: STOP/COMPACT bloquea en código)
         if hooks is not None and hasattr(hooks, "emit"):
@@ -432,6 +527,13 @@ class ToolRegistry:
                               "error": "" if success else error_msg[:300]})
                 except Exception:
                     pass
+            try:
+                if _sg is not None:
+                    _sg.record(name, args, success,
+                               outcome="ok" if success else "error",
+                               error=error_msg)
+            except Exception:
+                pass
             # Hooks post
             if hooks is not None and hasattr(hooks, "emit"):
                 try:

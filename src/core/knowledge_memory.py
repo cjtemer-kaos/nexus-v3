@@ -24,10 +24,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -69,6 +71,13 @@ def _now_iso() -> str:
 
 def _sha1(text: str) -> str:
     return hashlib.sha1(text.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _fold_text(text: str) -> str:
+    """Minusculas sin diacriticos para contar terminos sobre el contenido."""
+    norm = unicodedata.normalize("NFD", text or "")
+    flat = "".join(c for c in norm if unicodedata.category(c) != "Mn").lower()
+    return re.sub(r"\s+", " ", flat).strip()
 
 
 def _extract_entities(text: str, limit: int = MAX_ENTITIES_PER_NODE) -> list[str]:
@@ -329,6 +338,8 @@ class KnowledgeMemory:
         index_rag: Optional[bool] = None,
         persist_markdown: bool = True,
         persist_observation: bool = True,
+        session_id: str = "",
+        informed_by: Optional[list[int]] = None,
     ) -> dict[str, Any]:
         """4 destinos del pipeline; solo el grafo es obligatorio.
 
@@ -352,12 +363,38 @@ class KnowledgeMemory:
             tags=tags, title=title, source=source, importance=importance,
             chash=chash,
         )
-        if graph_out.get("deduped"):
+        node_id = graph_out["node_id"]
+        deduped = bool(graph_out.get("deduped"))
+
+        # --- aristas tipadas (procedencia): derived_from + informed_by
+        # El grafo no solo almacena: registra de donde salio cada nodo y que
+        # memoria inyectada influyo. Best-effort: un fallo de arista no pierde
+        # el nodo ni rompe el turno.
+        typed_edges: list[dict] = []
+        try:
+            if session_id:
+                _session_node = self.ensure_session_node(session_id)
+                if _session_node and _session_node != node_id:
+                    typed_edges.append(self.add_relation(
+                        node_id, _session_node, "derived_from", note=session_id))
+            for _src in (informed_by or []):
+                try:
+                    _src_id = int(_src)
+                except (TypeError, ValueError):
+                    continue
+                if _src_id and _src_id != node_id:
+                    typed_edges.append(self.add_relation(
+                        node_id, _src_id, "informed_by", weight=1.0,
+                        note="memory_used"))
+        except Exception as e:
+            logger.debug("aristas tipadas omitidas: %s", e)
+
+        if deduped:
             return {
-                "ok": True, "deduped": True, "node_id": graph_out["node_id"],
+                "ok": True, "deduped": True, "node_id": node_id,
+                "typed_edges": typed_edges,
                 "outputs": {"graph": "deduped"},
             }
-        node_id = graph_out["node_id"]
 
         # --- salida 3: markdown learnings.md
         md_ok, md_err = (self._append_markdown(topic_key or category, title, node_id)
@@ -383,6 +420,7 @@ class KnowledgeMemory:
             "deduped": False,
             "entities": graph_out["entities"],
             "edges_added": graph_out["edges_added"],
+            "typed_edges": typed_edges,
             "observation_id": obs_id,
             "outputs": {
                 "graph": "ok",
@@ -391,6 +429,31 @@ class KnowledgeMemory:
                 "observation": "ok" if obs_ok else f"skip: {obs_err}",
             },
         }
+
+    def ensure_session_node(self, session_id: str) -> Optional[int]:
+        """Nodo estable que representa una sesion (destino de `derived_from`).
+
+        Se crea una sola vez por sesion (`topic_key=session:<id>`) y con
+        importancia baja: sirve para procedencia, no para recall semantico.
+        """
+        sid = (session_id or "").strip()
+        if not sid:
+            return None
+        key = f"session:{sid}"
+        con = self._connect()
+        try:
+            row = con.execute("SELECT id FROM nodes WHERE topic_key=? LIMIT 1", (key,)).fetchone()
+            if row:
+                return int(row["id"])
+        finally:
+            con.close()
+        out = self._graph_upsert(
+            content=f"Sesion {sid}", topic_key=key, category="session",
+            tags=["session"], title=f"Sesion {sid}", source="session",
+            importance=1, chash=_sha1(key),
+        )
+        node_id = out.get("node_id")
+        return int(node_id) if node_id else None
 
     # ------------------------------------------------------------------
     # salidas internas
@@ -629,6 +692,120 @@ class KnowledgeMemory:
                  "snippet": r["snip"], "rank": r["rank"]}
                 for r in rows
             ]
+        finally:
+            con.close()
+
+    def search_terms(self, terms: list[str], limit: int = 10, per_term: int = 24) -> list[dict]:
+        """Busca terminos sueltos y fusiona por rango reciproco ponderado por IDF.
+
+        `fts_search` une todos los tokens con AND, asi que una frase larga en
+        espanol casi nunca matchea. Aca cada termino se consulta por separado:
+        una coincidencia fuerte no se pierde porque otra palabra no este en el
+        nodo. `matches` se verifica sobre el contenido completo del candidato,
+        no sobre el top de cada termino (con LIMIT chico la interseccion daba 0).
+        """
+        clean: list[str] = []
+        for t in terms or []:
+            t = _fold_text(re.sub(r"[\"']", "", str(t or ""))).strip()
+            if len(t) >= 3 and t not in clean:
+                clean.append(t[:40])
+        if not clean:
+            return []
+        limit = max(1, min(50, int(limit)))
+        per_term = max(1, min(40, int(per_term)))
+        scores: dict[int, float] = {}
+        meta: dict[int, dict] = {}
+        con = self._connect()
+        try:
+            total = int(con.execute("SELECT count(*) FROM nodes").fetchone()[0] or 1)
+            for term in clean[:16]:
+                df = int(con.execute(
+                    "SELECT count(*) FROM nodes_fts WHERE nodes_fts MATCH ?",
+                    (f'"{term}"',),
+                ).fetchone()[0] or 0)
+                # IDF: un termino raro (approval, tsc) pesa mas que uno comun
+                # (nexus, memoria). Sin esto, un nodo de prueba que menciona
+                # "nexus funciona" gana sobre la leccion real.
+                idf = math.log(1.0 + total / (1.0 + df))
+                rows = con.execute(
+                    """SELECT n.id, n.title, n.category, n.topic_key, n.revision_count,
+                              n.updated_at, n.content_hash,
+                              snippet(nodes_fts, 1, '«', '»', '...', 12) AS snip,
+                              bm25(nodes_fts) AS rank
+                       FROM nodes_fts JOIN nodes n ON n.id = nodes_fts.rowid
+                       WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?""",
+                    (f'"{term}"', per_term),
+                ).fetchall()
+                for pos, r in enumerate(rows):
+                    nid = int(r["id"])
+                    scores[nid] = scores.get(nid, 0.0) + idf / (60.0 + pos)
+                    if nid not in meta:
+                        meta[nid] = {
+                            "id": nid,
+                            "title": r["title"],
+                            "category": r["category"],
+                            "topic_key": r["topic_key"],
+                            "revision": r["revision_count"],
+                            "updated_at": r["updated_at"],
+                            "content_hash": r["content_hash"],
+                            "snippet": r["snip"],
+                            "rank": float(r["rank"] or 0.0),
+                        }
+            ranked = sorted(scores, key=lambda nid: scores[nid], reverse=True)[: max(limit * 4, 24)]
+            contents: dict[int, str] = {}
+            if ranked:
+                marks = ",".join("?" for _ in ranked)
+                for r in con.execute(
+                    f"SELECT id, content FROM nodes WHERE id IN ({marks})", ranked
+                ):
+                    contents[int(r["id"])] = _fold_text(r["content"] or "")
+        finally:
+            con.close()
+        out: list[dict] = []
+        seen_keys: set[str] = set()
+        for nid in ranked:
+            item = dict(meta[nid])
+            chash = item.pop("content_hash", "") or ""
+            text = contents.get(nid, "")
+            # El content_hash historico no siempre coincide aunque el texto sea
+            # identico (181 vs 4042): dedupe sobre el contenido normalizado.
+            key = hashlib.sha1(text.encode("utf-8")).hexdigest() if text else chash
+            if key and key in seen_keys:
+                continue
+            item["matches"] = sum(
+                1 for t in clean if re.search(rf"\b{re.escape(t)}\b", text)
+            ) if text else 1
+            if key:
+                seen_keys.add(key)
+            item["score"] = round(scores[nid], 6)
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    def touch_many(self, node_ids: list[int]) -> int:
+        """Marca nodos como usados: telemetria real de recuperacion."""
+        ids: list[int] = []
+        for nid in node_ids or []:
+            try:
+                nid = int(nid)
+            except (TypeError, ValueError):
+                continue
+            if nid > 0 and nid not in ids:
+                ids.append(nid)
+        if not ids:
+            return 0
+        ids = ids[:50]
+        placeholders = ",".join("?" for _ in ids)
+        con = self._connect()
+        try:
+            cur = con.execute(
+                f"UPDATE nodes SET access_count=access_count+1, last_accessed=? "
+                f"WHERE id IN ({placeholders})",
+                (_now_iso(), *ids),
+            )
+            con.commit()
+            return cur.rowcount or 0
         finally:
             con.close()
 
@@ -1051,6 +1228,11 @@ class KnowledgeMemory:
                 """SELECT count(DISTINCT id) FROM nodes WHERE id IN (
                      SELECT from_node FROM edges UNION SELECT to_node FROM edges)"""
             ).fetchone()[0]
+            uses, used_nodes, last_used = con.execute(
+                """SELECT COALESCE(SUM(access_count),0),
+                          COALESCE(SUM(CASE WHEN access_count>0 THEN 1 ELSE 0 END),0),
+                          MAX(last_accessed) FROM nodes"""
+            ).fetchone()
             return {
                 "db": str(self.db_path),
                 "nodes": nodes, "edges": edges, "connected_nodes": connected,
@@ -1058,6 +1240,9 @@ class KnowledgeMemory:
                 "archived_revisions": archived,
                 "entities": entities, "fts": bool(fts_ok),
                 "max_edges": MAX_EDGES, "edges_headroom": max(0, MAX_EDGES - edges),
+                # Telemetria de recuperacion: cuantos nodos se usaron y cuantas veces.
+                "uses": int(uses or 0), "used_nodes": int(used_nodes or 0),
+                "last_used": last_used,
             }
         finally:
             con.close()

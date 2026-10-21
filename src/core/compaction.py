@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +93,34 @@ def _content_str(m: dict) -> str:
     return str(c)
 
 
+def _msg_role(m: Any) -> str:
+    if isinstance(m, dict):
+        return str(m.get("role") or "")
+    return str(getattr(m, "role", "") or "")
+
+
+def _msg_content(m: Any) -> str:
+    if isinstance(m, dict):
+        return _content_str(m)
+    c = getattr(m, "content", None)
+    if c is None:
+        return ""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c)
+    return str(c)
+
+
+def _replace_msg_content(m: Any, content: str) -> Any:
+    if isinstance(m, dict):
+        return {**m, "content": content}
+    try:
+        return _dc_replace(m, content=content)
+    except Exception:
+        return m
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -106,13 +134,30 @@ class CompactionPipeline:
         micro_cfg = self.config.get("micro", {})
         budget_cfg = self.config.get("budget", {})
         summary_cfg = self.config.get("summary", {})
+        prune_cfg = self.config.get("prune", {})
 
         self.keep_recent: int = int(snip_cfg.get("keep_recent", 4))
         self.keep_recent_tool_results: int = int(micro_cfg.get("keep_recent", 3))
         self.max_tool_result_chars: int = int(budget_cfg.get("max_tool_result_chars", 2000))
         self.micro_placeholder: str = micro_cfg.get("placeholder", "[resultado_herramienta colapsado — ver ./data/spill/]")
         self.summary_model_hint: str = summary_cfg.get("model_hint", "simple")
-        self.max_summary_tokens: int = int(summary_cfg.get("max_summary_tokens", 800))
+        # Presupuesto dinamico del resumen (P1): min 2k, 20% del limite, techo 12k.
+        self.summary_min_tokens: int = int(summary_cfg.get("min_tokens", 2000))
+        self.summary_max_tokens: int = int(summary_cfg.get("max_tokens", 12000))
+        self.summary_ratio: float = float(summary_cfg.get("ratio", 0.20))
+        self.summary_min_progress: int = int(
+            summary_cfg.get("minimum_progress_messages", 2))
+        self.summary_failure_cooldown_s: float = float(
+            summary_cfg.get("failure_cooldown_s", 600))
+        self.handoff_prefix: str = str(summary_cfg.get(
+            "handoff_prefix",
+            "[handoff] Contexto compactado: el resumen siguiente reemplaza el "
+            "historial previo. No repitas trabajo ya hecho."))
+        self._summary_failed_at: float = 0.0
+        self.prune_enabled: bool = bool(prune_cfg.get("enabled", True))
+        self.prune_keep_recent: int = int(prune_cfg.get("keep_recent", 3))
+        self.prune_max_chars: int = int(
+            prune_cfg.get("max_tool_result_chars", 4000))
 
         persist_dir_raw = budget_cfg.get("persist_dir", "./data/spill")
         self.persist_dir: Path | None = Path(persist_dir_raw) if persist_dir_raw else None
@@ -120,7 +165,10 @@ class CompactionPipeline:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    async def compact(self, messages: list[dict], limit: int) -> tuple[list[dict], CompactionMetrics]:
+    async def compact(
+        self, messages: list[dict], limit: int, *,
+        include_summary_fallback: bool = True,
+    ) -> tuple[list[dict], CompactionMetrics]:
         t0 = time.monotonic()
         original_tokens = _estimate_messages_tokens(messages)
         metrics = CompactionMetrics(original_tokens=original_tokens)
@@ -154,7 +202,7 @@ class CompactionPipeline:
             metrics.layers_applied.append("budget")
 
         # L4 Summary — requires LLM; if still over limit, mark and attempt via cheap model if router available
-        if _estimate_messages_tokens(out) > limit:
+        if include_summary_fallback and _estimate_messages_tokens(out) > limit:
             # Try to summarize middle section via cheap model if we have a router reference
             # For now, apply aggressive snip as fallback; caller can do LLM summary externally
             before = _estimate_messages_tokens(out)
@@ -171,81 +219,253 @@ class CompactionPipeline:
         metrics.duration_ms = (time.monotonic() - t0) * 1000
         return out, metrics
 
-    async def summarize_with_llm(self, messages: list[dict], limit: int, router, model_hint: str | None = None) -> tuple[list[dict], CompactionMetrics]:
-        """L4 with actual LLM call. Uses router.resolve(task_hint='simple') for cheap model.
+    async def summarize_with_llm(
+        self,
+        messages: list[dict],
+        limit: int,
+        router,
+        model_hint: str | None = None,
+        previous_summary: str = "",
+        progress_messages: int = 0,
+    ) -> tuple[list[dict], CompactionMetrics]:
+        """L4 con LLM barato. Presupuesto dinamico, reuso y cooldown.
 
-        Falls back to compact() if router unavailable or LLM fails.
+        No hace snip ANTES de resumir: el valor del resumen es condensar el
+        "middle" que de otro modo se perderia. L1-L3 quedan como fallback.
         """
-        # First run L1-L3
-        compacted, metrics = await self.compact(messages, limit)
-        if _estimate_messages_tokens(compacted) <= limit:
-            return compacted, metrics
-        # Need LLM summary of middle section
+        original = list(messages)
+        metrics = CompactionMetrics(
+            original_tokens=_estimate_messages_tokens(original))
+        if metrics.original_tokens <= int(limit):
+            return original, metrics
+
+        system_msgs = [
+            m for m in original
+            if _msg_role(m) == "system" and "[resumen de " not in _msg_content(m)
+        ]
+        rest = [m for m in original if _msg_role(m) != "system"]
+        if len(rest) <= self.keep_recent + 1:
+            return await self.compact(original, limit)
+        middle = rest[: -self.keep_recent]
+        recent = rest[-self.keep_recent:]
+
+        # Resumen previo: lo pasa el loop o se recupera del historial.
+        prev = str(previous_summary or "").strip()
+        if not prev:
+            for _m in reversed(original):
+                if _msg_role(_m) == "system" and "[resumen de " in _msg_content(_m):
+                    prev = _msg_content(_m)
+                    break
+        # Evita anidar encabezados al reutilizar un resumen durable.
+        prev = re.sub(r"^\[resumen de [^\]]*\]\s*", "", prev).strip() or prev
+
+        # Cooldown tras un fallo del LLM de resumen.
+        if (
+            self._summary_failed_at
+            and self.summary_failure_cooldown_s > 0
+            and (time.monotonic() - self._summary_failed_at)
+            < self.summary_failure_cooldown_s
+        ):
+            return await self.compact(original, limit)
+
+        # Poco progreso desde el resumen anterior: reusarlo sin otra llamada.
+        if prev and progress_messages < self.summary_min_progress:
+            out = self._build_summary_output(
+                system_msgs, prev, recent, reused=True, limit=limit,
+                omitted=len(middle))
+            if out is not None:
+                self._record_summary_metric(metrics, original, out, "reuse")
+                return out, metrics
+            return await self.compact(original, limit)
+
         hint = model_hint or self.summary_model_hint
+        budget = self.summary_budget(limit)
         try:
             from .provider_base import LLMMessage  # local import to avoid cycle
 
-            # Build summary prompt: keep system + first + last keep_recent, summarize middle
-            system_msgs = [m for m in compacted if m.get("role") == "system"]
-            rest = [m for m in compacted if m.get("role") != "system"]
-            if len(rest) <= self.keep_recent + 1:
-                return compacted, metrics
-            middle = rest[: -self.keep_recent]
-            recent = rest[-self.keep_recent:]
-
-            # Cheap summary via router
             routed = None
             if router is not None:
                 try:
                     routed = router.resolve(task_hint=hint)
                 except Exception:
                     routed = None
-
             if routed is None:
-                # No LLM available — already did fallback snip
-                return compacted, metrics
+                return await self.compact(original, limit)
 
-            # Build summarization messages: secciones fijas = el resumen no pierde
-            # el estado operativo (archivos, errores, pendientes, próximo paso).
-            middle_text = "\n".join(f"[{m.get('role')}] {_content_str(m)[:2000]}" for m in middle)
+            # El material de entrada debe ser mayor que el resumen objetivo.
+            middle_chars = max(12000, min(200000, budget * 8))
+            middle_text = "\n".join(
+                f"[{_msg_role(m)}] {_msg_content(m)[:2000]}" for m in middle
+            )[:middle_chars]
+            prev_block = ""
+            if prev:
+                prev_block = (
+                    "Resumen previo (reutiliza lo vigente y actualiza solo lo que cambio):\n"
+                    + prev[: budget * 4]
+                    + "\n\n"
+                )
             llm_messages = [
                 LLMMessage(role="system", content=(
-                    "Sos el compactador de contexto de un agente de código. Resumí el historial "
-                    "sin inventar nada. Usá EXACTAMENTE estas secciones:\n"
+                    "Sos el compactador de contexto de un agente de codigo. Resumi el historial "
+                    "sin inventar nada. Usa EXACTAMENTE estas secciones:\n"
                     "1. Pedido original y objetivo\n"
-                    "2. Decisiones tomadas y por qué\n"
-                    "3. Archivos leídos o modificados (rutas exactas)\n"
+                    "2. Decisiones tomadas y por que\n"
+                    "3. Archivos leidos o modificados (rutas exactas)\n"
                     "4. Comandos ejecutados y resultados relevantes\n"
-                    "5. Errores encontrados y cómo se resolvieron\n"
+                    "5. Errores encontrados y como se resolvieron\n"
                     "6. Estado actual del trabajo\n"
                     "7. Pendientes concretos\n"
-                    "8. Próximo paso\n"
+                    "8. Proximo paso\n"
                     "9. Datos que no se pueden perder (ids, valores, rutas)\n"
-                    f"Máximo {self.max_summary_tokens} tokens. Respondé solo con <summary>...</summary>."
+                    f"Maximo {budget} tokens. Se concreto y no repitas el historial palabra por palabra. "
+                    "Responde solo con <summary>...</summary>."
                 )),
-                LLMMessage(role="user", content=middle_text[:12000]),
+                LLMMessage(role="user", content=prev_block + middle_text),
             ]
             resp = await routed.provider.chat(llm_messages, model=routed.model)
-            summary_text = (resp.content or "")[: self.max_summary_tokens * 4]
+            summary_text = (resp.content or "")[: budget * 4]
             m_tag = re.search(r"<summary>(.*?)</summary>", summary_text, re.S)
             if m_tag:
                 summary_text = m_tag.group(1).strip()
-            summary_msg = {"role": "system", "content": f"[resumen de {len(middle)} mensajes anteriores]\n{summary_text}"}
-            out = system_msgs + [summary_msg] + recent
-            # Recompute metrics
-            before = _estimate_messages_tokens(compacted)
-            after = _estimate_messages_tokens(out)
-            lm = LayerMetrics(name="summary_llm", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail=f"llm={routed.model}")
-            metrics.layers.append(lm)
-            if "summary" not in metrics.layers_applied:
-                metrics.layers_applied.append("summary")
-            metrics.compressed_tokens = after
-            metrics.tokens_saved = max(0, metrics.original_tokens - after)
-            metrics.compression_ratio = after / metrics.original_tokens if metrics.original_tokens else 1.0
+            summary_text = summary_text.strip()
+            if not summary_text:
+                raise ValueError("resumen vacio")
+            out = self._build_summary_output(
+                system_msgs, summary_text, recent, reused=False, limit=limit,
+                omitted=len(middle))
+            if out is None:
+                return await self.compact(original, limit)
+            self._summary_failed_at = 0.0
+            self._record_summary_metric(metrics, original, out, f"llm={routed.model}")
             return out, metrics
-        except Exception as e:
-            # LLM summary failed — return previous compacted
-            return compacted, metrics
+        except Exception:
+            # LLM summary failed — cooldown y fallback L1-L3.
+            self._summary_failed_at = time.monotonic()
+            return await self.compact(original, limit)
+
+    def _build_summary_output(
+        self, system_msgs: list[Any], summary_text: str, recent: list[Any], *,
+        reused: bool, limit: int, omitted: int = 0,
+    ) -> list[Any] | None:
+        """Arma system + handoff + resumen + recent, recortando recent al limite."""
+        prefix: list[Any] = list(system_msgs)
+        if self.handoff_prefix:
+            prefix.append({"role": "system", "content": self.handoff_prefix})
+        prefix.append(self._summary_msg(omitted, summary_text, reused=reused))
+        budget = max(32, int(limit) - _estimate_messages_tokens(prefix))
+        kept: list[Any] = []
+        for m in reversed(recent):
+            c = _msg_content(m)
+            cost = max(1, estimate_tokens(c))
+            if cost <= budget:
+                kept.append(m)
+                budget -= cost
+            elif budget > 16:
+                cut = max(16, budget * 4 - 24)
+                kept.append(_replace_msg_content(
+                    m, c[:cut] + "\n[...recortado para resumen]"))
+                budget = 0
+                break
+            else:
+                break
+            if budget <= 16:
+                break
+        kept.reverse()
+        out = prefix + kept
+        if _estimate_messages_tokens(out) > max(1, int(limit)) * 2:
+            return None
+        return out
+
+    def summary_budget(self, limit: int) -> int:
+        """Presupuesto: max(min_tokens, limit*ratio), con techo max_tokens."""
+        try:
+            budget = int(int(limit) * self.summary_ratio)
+        except Exception:
+            budget = self.summary_min_tokens
+        budget = max(self.summary_min_tokens, budget)
+        budget = min(self.summary_max_tokens, budget)
+        return max(128, budget)
+
+    def _summary_msg(self, omitted: int, summary_text: str, *, reused: bool) -> dict:
+        label = "reutilizado" if reused else "actualizado"
+        return {
+            "role": "system",
+            "content": (
+                f"[resumen de {omitted} mensajes anteriores — {label}]\n"
+                f"{summary_text}"
+            ),
+        }
+
+    def _with_summary(self, messages: list[Any], summary_text: str, *, reused: bool) -> list[Any]:
+        system = [
+            m for m in messages
+            if _msg_role(m) == "system" and "[resumen de " not in _msg_content(m)
+        ]
+        rest = [m for m in messages if _msg_role(m) != "system"]
+        keep = rest[-self.keep_recent:] if self.keep_recent > 0 else rest
+        omitted = max(0, len(rest) - len(keep))
+        out: list[Any] = list(system)
+        if self.handoff_prefix:
+            out.append({"role": "system", "content": self.handoff_prefix})
+        out.append(self._summary_msg(omitted, summary_text, reused=reused))
+        out.extend(keep)
+        return out
+
+    def _record_summary_metric(
+        self, metrics: CompactionMetrics, before_msgs: list[Any],
+        after_msgs: list[Any], detail: str,
+    ) -> None:
+        before = _estimate_messages_tokens(before_msgs)  # type: ignore[arg-type]
+        after = _estimate_messages_tokens(after_msgs)  # type: ignore[arg-type]
+        metrics.layers.append(LayerMetrics(
+            name="summary_llm",
+            input_tokens=before,
+            output_tokens=after,
+            tokens_saved=max(0, before - after),
+            ratio=after / before if before else 1.0,
+            applied=True,
+            detail=detail,
+        ))
+        if "summary" not in metrics.layers_applied:
+            metrics.layers_applied.append("summary")
+        metrics.compressed_tokens = after
+        metrics.tokens_saved = max(0, metrics.original_tokens - after)
+        metrics.compression_ratio = after / metrics.original_tokens if metrics.original_tokens else 1.0
+
+    def prune_for_llm(
+        self,
+        messages: list[Any],
+        keep_recent: int | None = None,
+        max_chars: int | None = None,
+    ) -> list[Any]:
+        """Poda cabeza+cola de resultados de tools viejos SOLO para el payload LLM.
+
+        No muta el historial persistido. Los ultimos ``keep_recent`` resultados
+        quedan intactos porque son el contexto vivo del turno.
+        """
+        if not self.prune_enabled:
+            return list(messages)
+        keep_n = self.prune_keep_recent if keep_recent is None else int(keep_recent)
+        limit = self.prune_max_chars if max_chars is None else int(max_chars)
+        if limit <= 0:
+            return list(messages)
+        tool_idx = [i for i, m in enumerate(messages) if _msg_role(m) == "tool"]
+        keep = set(tool_idx[-keep_n:]) if keep_n > 0 else set()
+        out: list[Any] = []
+        for i, m in enumerate(messages):
+            c = _msg_content(m)
+            if i in keep or _msg_role(m) != "tool" or len(c) <= limit:
+                out.append(m)
+                continue
+            head = limit // 2
+            tail = limit - head
+            pruned = (
+                c[:head]
+                + f"\n[...podado {len(c) - limit} caracteres — cola:]"
+                + c[-tail:]
+            )
+            out.append(_replace_msg_content(m, pruned))
+        return out
 
     def maybe_compact(self, messages: list[dict], max_tokens: int, threshold: float = 0.75) -> bool:
         """Return True if compaction should be triggered (tokens > threshold*max_tokens)."""

@@ -14,21 +14,32 @@ pytestmark = pytest.mark.ui
 
 _HAS_NPX = shutil.which("npx") is not None
 _HAS_NPM = shutil.which("npm") is not None
+_NODE = shutil.which("node")
+_TSC_JS = UI_DIR / "node_modules" / "typescript" / "bin" / "tsc"
 
 
 def test_package_json_exists():
     assert (UI_DIR / "package.json").exists()
 
 
-@pytest.mark.skipif(not _HAS_NPX, reason="npx no disponible en esta PC")
+@pytest.mark.skipif(
+    not (_HAS_NPX or (_NODE and _TSC_JS.exists())),
+    reason="npx/node+typescript no disponibles en esta PC",
+)
 def test_tsc_noemit():
+    if _NODE and _TSC_JS.exists():
+        cmd = [_NODE, str(_TSC_JS), "--noEmit"]
+        use_shell = False
+    else:
+        cmd = "npx --no-install tsc --noEmit"
+        use_shell = True
     r = subprocess.run(
-        "npx tsc --noEmit",
+        cmd,
         cwd=str(UI_DIR),
         capture_output=True,
         text=True,
-        timeout=60,
-        shell=True,
+        timeout=240,
+        shell=use_shell,
     )
     assert r.returncode == 0, f"returncode={r.returncode} stderr={r.stderr[:500]} stdout={r.stdout[:500]}"
 
@@ -40,7 +51,7 @@ def test_vite_build():
         cwd=str(UI_DIR),
         capture_output=True,
         text=True,
-        timeout=90,
+        timeout=300,
         shell=True,
     )
     assert r2.returncode == 0, f"returncode={r2.returncode} stdout={r2.stdout[-800:]} stderr={r2.stderr[-800:]}"

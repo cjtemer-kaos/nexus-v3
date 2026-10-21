@@ -99,6 +99,41 @@ def test_system_prompt_not_truncated():
         assert r.resolve("largo")["system_prompt"] == long_prompt.strip()
 
 
+def test_template_applies_role_defaults_and_mode():
+    with tempfile.TemporaryDirectory() as td:
+        r = _reg(td)
+        a = r.create(name="Explorador", template="scout")
+        assert a["gema"] == "scholar"
+        assert a["mode"] == "read_only"
+        assert a["template"] == "scout"
+        assert "scout" in a["system_prompt"].lower()
+        got = r.resolve("explorador")
+        assert got["mode"] == "read_only"
+        assert got["template"] == "scout"
+
+        b = r.create(name="Constructor", template="builder", mode="read_only", description="override")
+        assert b["mode"] == "read_only"
+        assert b["description"] == "override"
+        assert b["gema"] == "code"
+
+
+def test_invalid_template_and_mode_are_rejected():
+    with tempfile.TemporaryDirectory() as td:
+        r = _reg(td)
+        for kwargs in ({"template": "no-existe"}, {"mode": "root"}):
+            try:
+                r.create(name="x", **kwargs)
+                raise AssertionError(f"deberia rechazar {kwargs}")
+            except ValueError:
+                pass
+        a = r.create(name="ok")
+        try:
+            r.update(a["id"], {"mode": "root"})
+            raise AssertionError("update deberia rechazar modo invalido")
+        except ValueError:
+            pass
+
+
 def test_gema_field_and_catalog():
     from src.core.gema_profiles import list_gemas, hint_for_gema, system_prompt_for_gema
 

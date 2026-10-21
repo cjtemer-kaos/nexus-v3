@@ -148,6 +148,31 @@
             }
           }
         },
+        "anti_loop": {
+          "type": "object",
+          "properties": {
+            "repeat_warn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "repeat_stop": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failures_warn": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failures_stop": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
         "heartbeat_ms": {
           "type": "integer",
           "minimum": 100
@@ -178,6 +203,81 @@
             "max_tool_calls": {
               "type": "integer",
               "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["auto", "assisted", "strict", "never"]
+        },
+        "timeout_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "mcp_read_only": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hard_deny": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "guard": {
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["heuristic", "llm", "auto"] },
+            "window": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "repeat_medium": { "type": "integer", "minimum": 2 },
+            "failure_streak_medium": { "type": "integer", "minimum": 1 },
+            "timeout_s": { "type": "number", "minimum": 0.1, "maximum": 60 },
+            "model_hint": { "type": "string" },
+            "policy": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "file": { "type": "string" },
+                "rules": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "action": {
+                        "type": "string",
+                        "enum": ["deny", "high", "medium", "approve", "allow", "low"]
+                      },
+                      "tools": {
+                        "oneOf": [
+                          { "type": "string" },
+                          { "type": "array", "items": { "type": "string" } }
+                        ]
+                      },
+                      "pattern": { "type": "string" },
+                      "path_pattern": { "type": "string" },
+                      "case_sensitive": { "type": "boolean" },
+                      "reason": { "type": "string" }
+                    },
+                    "required": ["action"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -227,8 +327,11 @@
           "type": "string",
           "enum": [
             "read_only",
+            "read-only",
             "workspace_write",
-            "full"
+            "workspace-write",
+            "full",
+            "danger-full-access"
           ]
         }
       },
@@ -261,6 +364,10 @@
         "micro": {
           "type": "object",
           "properties": {
+            "keep_recent": {
+              "type": "integer",
+              "minimum": 0
+            },
             "placeholder": {
               "type": "string"
             }
@@ -284,8 +391,48 @@
             "model_hint": {
               "type": "string"
             },
+            "min_tokens": {
+              "type": "integer",
+              "minimum": 128
+            },
+            "ratio": {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 0.5
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 256
+            },
+            "minimum_progress_messages": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failure_cooldown_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "handoff_prefix": {
+              "type": "string"
+            },
             "max_summary_tokens": {
               "type": "integer"
+            }
+          }
+        },
+        "prune": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "keep_recent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_tool_result_chars": {
+              "type": "integer",
+              "minimum": 200
             }
           }
         }
@@ -525,6 +672,55 @@
             "max_facts": {
               "type": "integer",
               "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "inject": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "max_terms": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 16
+            },
+            "min_terms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "min_matches": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_chars": {
+              "type": "integer",
+              "minimum": 200
+            },
+            "snippet_chars": {
+              "type": "integer",
+              "minimum": 80
+            },
+            "rerank": {
+              "type": "string",
+              "enum": ["auto", "off", "force"]
+            },
+            "rerank_timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 30000
+            },
+            "rerank_candidates": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
             }
           },
           "additionalProperties": false

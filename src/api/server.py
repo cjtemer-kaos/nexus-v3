@@ -351,7 +351,8 @@ async def _distill_run(cfg: dict, session_id: str, *, wait_llm: bool, llm_timeou
 
     def _learn(content, *, topic_key="", category="general", tags=None, title=""):
         return km.learn(content, topic_key=topic_key, category=category,
-                        tags=tags or [], title=title, source="session-distill")
+                        tags=tags or [], title=title, source="session-distill",
+                        session_id=session_id)
 
     res = distill_session(session_id, dict_msgs, _learn)  # determinista: siempre fiable
     if use_llm and res.get("turns"):
@@ -1450,6 +1451,8 @@ async def learn_direct(request: Request):
                 title=body.get("title") or "",
                 source=body.get("source") or "api",
                 importance=int(body.get("importance") or 5),
+                session_id=str(body.get("session_id") or ""),
+                informed_by=body.get("informed_by") or [],
             )
         )
         return JSONResponse(res)
@@ -1828,7 +1831,8 @@ async def skill_opt_validate(request: Request):
     async def _eval(case: dict) -> bool:
         try:
             sess = slog.create_session(project="skill-opt")
-            r = await _run_agent_once(str(case.get("task", "")), sess.id, extract_memory=False)
+            r = await _run_agent_once(str(case.get("task", "")), sess.id, extract_memory=False,
+                                      interactive=False, source="skill-eval")
             expect = str(case.get("expect_contains", ""))
             return bool(expect) and expect in (getattr(r, "final_output", "") or "")
         except Exception:
@@ -2454,7 +2458,27 @@ async def session_replay(session_id: str, limit: int = 500):
 @app.get("/api/approvals")
 async def approvals_list(session_id: str = ""):
     from src.core.approvals import get_approvals
-    return {"approvals": get_approvals().list(session_id), "mode": _auto_apply_mode()}
+    cfg = _load_config_safe()
+    return {
+        "approvals": get_approvals().list(session_id),
+        "mode": _auto_apply_mode(cfg),
+        "approval_mode": str((cfg.get("approval") or {}).get("mode", "assisted")),
+        "grants": get_approvals().list_grants(session_id),
+    }
+
+
+@app.get("/api/approvals/grants")
+async def approvals_grants(session_id: str = ""):
+    from src.core.approvals import get_approvals
+    return {"grants": get_approvals().list_grants(session_id)}
+
+
+@app.post("/api/approvals/grants/clear")
+async def approvals_grants_clear(request: Request):
+    from src.core.approvals import get_approvals
+    body = await _json_body(request, required=False)
+    sid = str((body or {}).get("session_id") or "") if isinstance(body, dict) else ""
+    return {"ok": True, "cleared": get_approvals().clear_grants(sid)}
 
 
 def _approval_result(res: dict) -> dict:
@@ -2470,15 +2494,27 @@ def _approval_result(res: dict) -> dict:
 
 
 @app.post("/api/approvals/{approval_id}/approve")
-async def approvals_approve(approval_id: str):
+async def approvals_approve(approval_id: str, request: Request):
     from src.core.approvals import get_approvals
-    return _approval_result(get_approvals().resolve(approval_id, True))
+    body = await _json_body(request, required=False)
+    scope = "once"
+    if isinstance(body, dict):
+        scope = str(body.get("scope") or "once").lower()
+    if scope not in ("once", "session", "always"):
+        raise HTTPException(status_code=400, detail="scope invalido: once|session|always")
+    return _approval_result(get_approvals().resolve(approval_id, True, scope=scope))
 
 
 @app.post("/api/approvals/{approval_id}/reject")
-async def approvals_reject(approval_id: str):
+async def approvals_reject(approval_id: str, request: Request):
     from src.core.approvals import get_approvals
-    return _approval_result(get_approvals().resolve(approval_id, False))
+    body = await _json_body(request, required=False)
+    scope = "once"
+    if isinstance(body, dict):
+        scope = str(body.get("scope") or "once").lower()
+    if scope not in ("once", "session", "always"):
+        raise HTTPException(status_code=400, detail="scope invalido: once|session|always")
+    return _approval_result(get_approvals().resolve(approval_id, False, scope=scope))
 
 
 @app.post("/api/approvals/clear")
@@ -3086,9 +3122,13 @@ def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: st
     roots = list(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
     if agent_id:
         try:
-            ws = _agent_registry().resolve(agent_id).get("workspace_abs")
+            resolved = _agent_registry().resolve(agent_id)
+            ws = resolved.get("workspace_abs")
             if ws and ws not in roots:
                 roots.insert(0, ws)
+            # Un ayudante read_only no hereda escritura aunque el scope global sea full.
+            if resolved.get("mode") == "read_only":
+                permission = "read_only"
         except Exception:
             pass
     roots = tuple(roots)
@@ -3157,10 +3197,14 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
         pass
     scope = _build_scope(cfg, agent_id)
     sub_reg = _build_registry(scope, sid, cfg, router=router, helpers=False)
+    _appr = _build_approval_context(cfg, sid, source="gema",
+                                    interactive=False, policy="never")
+    sub_reg.approval = _appr
     loop = _new_agent_loop(
         cfg, provider_router=router, tool_registry=sub_reg, scope=scope, session_log=slog,
         event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
         distill_hook=_build_distill_hook(cfg),
+        approval=_appr,
     )
     res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None, images=images or None)
     return _j.dumps({
@@ -3231,6 +3275,33 @@ _SUB_TOOLSETS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _build_approval_context(cfg: dict | None, session_id: str, *, source: str = "chat",
+                            interactive: bool = True, policy: str | None = None,
+                            parent_session_id: str = ""):
+    """Contexto HITL para ToolRegistry.dispatch.
+
+    `interactive=True` solo en los caminos donde hay una UI/HTTP que puede
+    responder `/api/approvals`. Subagentes, gemas y el servidor MCP entrante
+    pasan `interactive=False` + `policy="never"`: fail-closed sin bloquear.
+    """
+    try:
+        from src.core.approval_policy import build_context
+        return build_context(
+            session_id=session_id or "", source=source, interactive=interactive,
+            policy=policy, config=cfg or {}, event_store=_event_store(),
+            auto_apply=_auto_apply_mode(cfg),
+            parent_session_id=parent_session_id or "",
+        )
+    except Exception:
+        try:
+            from src.core.approval_policy import ApprovalContext
+            return ApprovalContext(session_id=session_id or "", source=source,
+                                   interactive=False, policy="never",
+                                   config=cfg or {})
+        except Exception:
+            return None
+
+
 def _auto_apply_mode(cfg: dict | None = None) -> str:
     """auto | assisted (default) | approve. `approve` encola mutaciones para aprobación."""
     try:
@@ -3256,10 +3327,16 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
                 narrowed = reg.subset(names)
                 if narrowed.count():
                     reg = narrowed
+            _appr = _build_approval_context(
+                cfg or {}, child_sid, source="subagent",
+                interactive=False, policy="never",
+                parent_session_id=session_id)
+            reg.approval = _appr
             loop = _new_agent_loop(cfg or {}, provider_router=router, tool_registry=reg, scope=scope,
                                    session_log=_session_log(), event_store=_event_store(),
                                    compaction=_build_compaction(cfg or {}), hooks=_build_hooks(cfg or {}),
-                                   distill_hook=_build_distill_hook(cfg or {}))
+                                   distill_hook=_build_distill_hook(cfg or {}),
+                                   approval=_appr)
             _sub_sys = ("Eres un sub-agente de nexus-v3. Tenés tools de archivos (read_file/write_file/edit/"
                         "list_dir/exec/code_search), web (web_search/web_fetch), memoria (recall/learn) y todo_write. "
                         "NO tenés delegación: hacé la tarea VOS MISMO. Devolvé un resultado conciso y verificable.")
@@ -3337,6 +3414,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             pass
 
     registry.call_log = _tool_call_log
+    try:
+        from src.core.sequence_guard import SequenceGuard
+        registry.sequence_guard = SequenceGuard(
+            cfg, router=router, session_id=session_id, event_store=_event_store())
+    except Exception as _sg_err:
+        logger.debug("sequence guard no disponible: %s", _sg_err)
     # --- Real tools for AgentLoop (Scope-guarded, no mock) ---
     def echo_tool(text: str) -> str:
         return text
@@ -3388,9 +3471,17 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
 
         if _auto_apply_mode(cfg) == "approve":
-            from src.core.approvals import get_approvals
-            pr = get_approvals().propose(session_id, "write_file", {"path": path, "content": content},
-                                         preview=content, apply=_do)
+            _ctx = getattr(registry, "approval", None)
+            if _ctx is not None and (not getattr(_ctx, "interactive", False)
+                                     or getattr(_ctx, "policy", "") == "never"):
+                raise PermissionError(
+                    "write_file requiere aprobacion y no hay canal interactivo (fail-closed)")
+            from src.core.approvals import fingerprint, get_approvals
+            _act = f"write_file:{path}"
+            pr = get_approvals().propose(
+                session_id, "write_file", {"path": path, "content": content},
+                preview=content, apply=_do, action=_act,
+                key_hash=fingerprint("write_file", _act, {"path": path}))
             return (f"[pendiente de aprobacion id={pr['id']}] write_file {path} ({len(content)} chars) — "
                     f"el usuario debe aprobar en la UI (Aprobaciones).")
         return _do()
@@ -3429,12 +3520,20 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
 
         if _auto_apply_mode(cfg) == "approve":
-            from src.core.approvals import get_approvals
+            _ctx = getattr(registry, "approval", None)
+            if _ctx is not None and (not getattr(_ctx, "interactive", False)
+                                     or getattr(_ctx, "policy", "") == "never"):
+                raise PermissionError(
+                    "edit requiere aprobacion y no hay canal interactivo (fail-closed)")
+            from src.core.approvals import fingerprint, get_approvals
             from src.core.diffutil import unified
             _new = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-            pr = get_approvals().propose(session_id, "edit", {"path": path, "old": old, "new": new},
-                                         preview=unified(text, _new, name_a=path, name_b=path + " (propuesto)"),
-                                         apply=_do)
+            _act = f"edit:{path}"
+            pr = get_approvals().propose(
+                session_id, "edit", {"path": path, "old": old, "new": new},
+                preview=unified(text, _new, name_a=path, name_b=path + " (propuesto)"),
+                apply=_do, action=_act,
+                key_hash=fingerprint("edit", _act, {"path": path}))
             return (f"[pendiente de aprobacion id={pr['id']}] edit {path} — "
                     f"el usuario debe aprobar en la UI (Aprobaciones).")
         return _do()
@@ -3634,6 +3733,29 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "include": {"type": "string", "description": "Filtro de archivos glob (ej: *.py)"},
                                    "limit": {"type": "integer", "description": "Máximo de resultados (1-50, default 20)"}},
                                    "required": ["query"], "additionalProperties": False})
+
+    async def repo_map_tool(root: str = ".", budget_tokens: int = 2000,
+                            max_files: int = 300) -> str:
+        """Mapa compacto del repo (simbolos + PageRank de imports, con presupuesto)."""
+        import json as _j
+        from src.core.repo_map import build_repo_map
+        p = scope.check_path(root or ".")
+        res = await asyncio.to_thread(
+            build_repo_map, str(p),
+            budget_tokens=max(128, min(20000, int(budget_tokens or 2000))),
+            max_files=max(1, min(2000, int(max_files or 300))),
+        )
+        return _j.dumps(res, ensure_ascii=False)
+    registry.register_function(
+        repo_map_tool, name="repo_map",
+        description="Mapa compacto del repo: archivos clave ordenados por PageRank de imports/simbolos, con presupuesto de tokens.",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "root": {"type": "string", "description": "Directorio raíz (default '.')"},
+            "budget_tokens": {"type": "integer", "description": "Presupuesto de tokens (128-20000, default 2000)"},
+            "max_files": {"type": "integer", "description": "Máximo de archivos a escanear (default 300)"},
+        }, "additionalProperties": False},
+    )
     registry.register_function(list_dir_tool, name="list_dir",
                                description="Lista los archivos y carpetas de un directorio; recursive=true recorre subcarpetas.",
                                category="local",
@@ -3657,6 +3779,37 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "cwd": {"type": "string", "description": "Directorio de trabajo (opcional; default raíz del proyecto)"},
                                    "timeout": {"type": "integer", "description": "Segundos (2-60, default 15)"}},
                                    "required": ["command"], "additionalProperties": False})
+
+    try:
+        from src.tools.pty_shell import pty_available, pty_enabled, run_command as _pty_run
+        if pty_enabled() and pty_available():
+            async def pty_exec_tool(command: str, cwd: str = "", timeout: int = 30) -> str:
+                """Ejecuta en PTY real (opt-in NEXUS_PTY=1) con el mismo jail."""
+                import json as _j
+                cmd = _validate_command(command)
+                cwd_p = _resolve_exec_cwd(cwd)
+                _jail = _exec_jail(cmd, cwd_p, scope)
+                if _jail is not None:
+                    raise PermissionError(_jail)
+                pty_cwd = str(cwd_p) if (cwd or "").strip() else ""
+                out, err, code, interrupted = await _pty_run(
+                    cmd, pty_cwd, max(1, min(120, int(timeout))))
+                payload = (out or "") + (err or "")
+                if len(payload) > 20000:
+                    payload = payload[:20000] + "\n... [truncado]"
+                return _j.dumps({"exit_code": code, "interrupted": interrupted,
+                                 "output": payload}, ensure_ascii=False)
+            registry.register_function(
+                pty_exec_tool, name="pty_exec",
+                description="Ejecuta en un PTY real persistente (cwd/env entre llamadas, opt-in). Fallback a shell persistente si pywinpty no esta.",
+                category="local",
+                parameters={"type": "object", "properties": {
+                    "command": {"type": "string", "description": "Comando a ejecutar"},
+                    "cwd": {"type": "string", "description": "Directorio de trabajo (opcional)"},
+                    "timeout": {"type": "integer", "description": "Segundos (1-120, default 30)"}},
+                    "required": ["command"], "additionalProperties": False})
+    except Exception:
+        pass
 
     def _jobs():
         from src.core.jobs import get_jobs
@@ -3814,6 +3967,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 content.strip(), topic_key=(topic_key or "").strip(),
                 category=(category or "general").strip(), tags=tag_list,
                 title=content.strip().split("\n")[0][:80], source="agent",
+                session_id=session_id,
+                informed_by=list(getattr(registry, "current_memory_node_ids", []) or []),
             )
         )
         return _j.dumps(res, ensure_ascii=False)
@@ -3829,7 +3984,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "required": ["content"], "additionalProperties": False},
     )
 
-    async def recall_tool(query: str, limit: int = 5) -> str:
+    async def recall_tool(query: str, limit: int = 5, budget: str = "medium",
+                          max_tokens: int = 0) -> str:
         """Search prior knowledge in the local graph before answering from history."""
         import json as _j
         from src.core.knowledge_memory import get_knowledge_memory
@@ -3838,7 +3994,31 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 query, limit=max(1, min(10, int(limit)))
             )
         )
-        return _j.dumps({"query": query, "results": hits}, ensure_ascii=False)
+        budgets = {"low": 800, "small": 800, "medium": 2000, "high": 5000}
+        cap = int(max_tokens or 0) or budgets.get(str(budget or "medium").lower(), 2000)
+        cap = max(128, min(20000, cap))
+        max_chars = cap * 4
+        used = 0
+        truncated = False
+        results = []
+        for h in hits:
+            text = str(h.get("snippet") or h.get("content") or "")
+            remaining = max_chars - used
+            if remaining <= 0:
+                truncated = True
+                break
+            if len(text) > remaining:
+                h = {**h, "snippet": text[: max(0, remaining - 1)] + "…"}
+                truncated = True
+            results.append(h)
+            used += len(str(h.get("snippet") or h.get("content") or ""))
+            if truncated:
+                break
+        return _j.dumps({
+            "query": query, "results": results,
+            "budget": {"max_tokens": cap, "used_tokens": used // 4,
+                       "truncated": truncated},
+        }, ensure_ascii=False)
     registry.register_function(
         recall_tool, name="recall",
         description="Search the local knowledge graph with FTS5 before answering questions about prior decisions, preferences, lessons, or project history.",
@@ -3846,6 +4026,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {
             "query": {"type": "string", "description": "Keywords for prior knowledge."},
             "limit": {"type": "integer", "description": "Maximum results (1-10)."},
+            "budget": {"type": "string", "enum": ["low", "medium", "high"],
+                       "description": "Payload budget: low=800, medium=2000, high=5000 tokens."},
+            "max_tokens": {"type": "integer",
+                           "description": "Explicit token cap (overrides budget)."},
         }, "required": ["query"], "additionalProperties": False},
     )
 
@@ -3940,6 +4124,73 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             category="local",
             parameters={"type": "object", "properties": {"agent_id": {"type": "string"}, "task": {"type": "string"}},
                         "required": ["agent_id", "task"], "additionalProperties": False},
+        )
+
+        def agent_create(name: str, template: str = "", gema: str = "", description: str = "",
+                         system_prompt: str = "", model: str = "", provider: str = "",
+                         emoji: str = "", mode: str = "", toolsets: str = "", skills: str = "",
+                         mcp: str = "", confirm: bool = False) -> str:
+            """Crea un ayudante persistente. La plantilla aporta defaults; lo explícito gana."""
+            import json as _j
+            from src.core.agent_registry import AGENT_MODES, AGENT_TEMPLATES
+            from src.core.gema_profiles import list_gemas
+            from src.core.model_assign import assign_model
+
+            tpl = (template or "").strip().lower()
+            if tpl and tpl not in AGENT_TEMPLATES:
+                raise ValueError(f"plantilla desconocida '{tpl}' (usa: {', '.join(AGENT_TEMPLATES)})")
+            gema = (gema or "").strip()
+            if gema:
+                known_gemas = {g.get("name") for g in list_gemas()}
+                if gema not in known_gemas:
+                    raise ValueError(f"gema desconocida '{gema}'; usa gema_list para ver las disponibles")
+            mode = (mode or "").strip().lower()
+            if mode and mode not in AGENT_MODES:
+                raise ValueError(f"modo inválido '{mode}' (usa: {', '.join(AGENT_MODES)})")
+            model = (model or "").strip()
+            known_models = {m.id: m for m in router.list_models()}
+            if model:
+                if model not in known_models:
+                    raise ValueError(f"modelo '{model}' no disponible; usa agent_list/gema_list para ver los instalados")
+                provider = known_models[model].provider_name
+            fields = {
+                "gema": gema, "description": description, "system_prompt": system_prompt,
+                "model": model, "provider": provider, "emoji": emoji, "mode": mode,
+                "toolsets": toolsets, "skills": skills, "mcp": mcp,
+            }
+            fields = {k: v for k, v in fields.items() if v not in (None, "")}
+            agent = _agent_registry().create(name=name, template=tpl, **fields)
+            asg = assign_model(router, gema=agent.get("gema", ""), explicit=agent.get("model") or None,
+                               overrides=_assign_overrides(cfg))
+            return _j.dumps({
+                "ok": True, "agent": agent,
+                "assigned_model": asg.get("model"), "provider": asg.get("provider"),
+                "reason": asg.get("reason"),
+                "note": "El ayudante ya está disponible para agent_run(agent_id, task).",
+            }, ensure_ascii=False)
+        registry.register_function(
+            agent_create, name="agent_create",
+            description=(
+                "Crea un ayudante persistente para delegar trabajo. Usá plantillas: scout (explora read-only), "
+                "builder (implementa), reviewer (revisa read-only), qa (tests), researcher (investiga), ops (devops). "
+                "Podés fijar gema, modelo, prompt, modo build/read_only y toolsets. Después usá agent_run."
+            ),
+            category="local",
+            parameters={"type": "object", "properties": {
+                "name": {"type": "string", "description": "Nombre visible; el id se deriva en slug."},
+                "template": {"type": "string", "enum": ["scout", "builder", "reviewer", "qa", "researcher", "ops"]},
+                "gema": {"type": "string", "description": "Gema especializada (ver gema_list)."},
+                "description": {"type": "string"},
+                "system_prompt": {"type": "string"},
+                "model": {"type": "string", "description": "Modelo exacto instalado (vacío = auto)."},
+                "provider": {"type": "string"},
+                "emoji": {"type": "string"},
+                "mode": {"type": "string", "enum": ["build", "read_only"]},
+                "toolsets": {"type": "string", "description": "Lista separada por comas (ej: read,search)."},
+                "skills": {"type": "string", "description": "Lista separada por comas."},
+                "mcp": {"type": "string", "description": "Servidores MCP separados por comas."},
+                "confirm": {"type": "boolean", "description": "Confirmación explícita si el scope la exige."},
+            }, "required": ["name"], "additionalProperties": False},
         )
     async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "",
                              tools: str = "") -> str:
@@ -4194,6 +4445,7 @@ def _new_agent_loop(cfg: dict | None = None, **kwargs):
         heartbeat_ms=int(al.get("heartbeat_ms", 2000)),
         context_max_tokens=int(se.get("max_tokens", 32000)),
         compact_threshold=float(se.get("compact_threshold", 0.75)),
+        config=cfg,
         **kwargs,
     )
     ep = al.get("error_policy") or {}
@@ -4204,32 +4456,22 @@ def _new_agent_loop(cfg: dict | None = None, **kwargs):
     return loop
 
 
-async def _knowledge_block(query: str, limit: int = 3) -> str:
-    """RAG automático: recupera conocimiento relevante del grafo (FTS5) e inyecta al prompt.
+async def _knowledge_block(query: str, limit: int | None = None, session_id: str = "",
+                           cfg: dict | None = None, collect: dict | None = None) -> str:
+    """Memoria automatica del grafo, con presupuesto y telemetria.
 
-    Hace que nexus-v3 LEA su propio conocimiento sin depender de que el modelo llame a recall.
-    Limitado (3 hits × 250 chars) para no meter ruido en el contexto.
+    Antes se hacia un unico FTS con AND sobre la frase completa, que en espanol
+    devolvia cero casi siempre. La logica vive en src/core/memory_context.py.
     """
-    q = (query or "").strip()
-    if len(q) < 4:
-        return ""
     try:
-        from src.core.knowledge_memory import get_knowledge_memory
-        hits = await asyncio.to_thread(
-            lambda: get_knowledge_memory().fts_search(q, limit=max(1, min(5, limit))))
+        from src.core.memory_context import build_memory_context
+        return await asyncio.to_thread(
+            build_memory_context, query,
+            session_id=session_id, limit=limit,
+            event_store=_event_store(), config=cfg, collect=collect,
+        )
     except Exception:
         return ""
-    lines: list[str] = []
-    for h in (hits or []):
-        title = (h.get("title") or "").strip()
-        body = (h.get("snippet") or h.get("content") or "").strip()
-        if not body:
-            continue
-        lines.append(f"- [{h.get('id', '?')}] {title}: {body[:250]}")
-    if not lines:
-        return ""
-    return ("CONOCIMIENTO RELEVANTE (recuperado AUTOMÁTICAMENTE del grafo local; usá estos datos "
-            "EXACTOS y citá el nodo [id]; NO inventes valores técnicos):\n" + "\n".join(lines))
 
 
 def _so_rules() -> str:
@@ -4253,7 +4495,10 @@ def _delegation_block() -> str:
             lines.append("AYUDANTES (delegá con la tool agent_run(agent_id, task)):")
             for a in agents:
                 desc = a.get("description") or a.get("gema") or ""
-                lines.append(f"- {a['id']}: {a.get('name')} (model={a.get('model') or 'auto'})"
+                extra = f"modo={a.get('mode') or 'build'}"
+                if a.get("template"):
+                    extra += f", plantilla={a.get('template')}"
+                lines.append(f"- {a['id']}: {a.get('name')} (model={a.get('model') or 'auto'}, {extra})"
                              + (f" — {desc}" if desc else ""))
     except Exception:
         pass
@@ -4266,25 +4511,37 @@ def _delegation_block() -> str:
         pass
     web = ("BÚSQUEDA WEB: usá la tool web_search(query) para buscar en internet (resultados reales, "
            "sin API key). Para leer una URL, usá web_fetch(url). No hace falta llamar al MCP a mano.")
+    creation = ("CREAR AYUDANTES: si falta un especialista, usá agent_create(name, template=...) con "
+                "scout/builder/reviewer/qa/researcher/ops. Para tareas de solo lectura elegí mode=read_only; "
+                "después delegá con agent_run(agent_id, task).")
     if not lines:
-        return web
+        return web + "\n" + creation
     return ("AYUDANTES Y GEMAS DISPONIBLES — cuando la tarea encaje con la especialidad de uno, "
             "DELEGÁ con agent_run/gema_run en vez de hacerlo vos, y verificá el resultado.\n"
-            + "\n".join(lines) + "\n" + web)
+            + "\n".join(lines) + "\n" + web + "\n" + creation)
 
 
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False,
                           agent_id: str | None = None, on_delta=None, on_reasoning=None,
-                          extract_memory: bool = True):
-    """Un run de AgentLoop con la construccion estandar (config segura)."""
-    from src.core.config import load_config
+                          extract_memory: bool = True, interactive: bool = True,
+                          source: str = "chat"):
+    """Un run de AgentLoop con la construccion estandar (config segura).
+
+    `interactive=False` para clientes sin canal de aprobacion (p.ej. `/v1`):
+    las acciones gateadas se deniegan de inmediato en vez de esperar 120 s.
+    """
     cfg = _load_config_safe()
     router = _get_router(cfg)
     # Plan mode: el turno corre con alcance read_only (sin mutaciones).
     _plan = _SESSION_MODES.get(session_id) == "plan"
     scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
+    _approval = _build_approval_context(cfg, session_id, source=source,
+                                        interactive=interactive)
     registry = _build_registry(scope, session_id, cfg, router=router)
+    # Los handlers con gate propio (write_file/edit) leen este contexto para
+    # fallar cerrado cuando no hay UI (subagentes/MCP).
+    registry.approval = _approval
     agent = _agent_registry().resolve(agent_id) if agent_id else None
     _gema = (agent or {}).get("gema") or ""
     _sys = (agent or {}).get("system_prompt") or ""
@@ -4298,10 +4555,19 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
         except Exception:
             pass
     loop = _new_agent_loop(cfg, provider_router=router, tool_registry=registry, scope=scope, session_log=_session_log(),
-                           event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
+                           event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
+                           distill_hook=_build_distill_hook(cfg),
+                           approval=_approval)
     _extra = _delegation_block() if (not agent_id or agent_id == "default") else ""
     try:
-        _kb = await _knowledge_block(message)
+        registry.current_memory_node_ids = []
+    except Exception:
+        pass
+    try:
+        _mem_ids: dict = {}
+        _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg, collect=_mem_ids)
+        # Para que `learn` cree aristas informed_by hacia lo que se inyecto.
+        registry.current_memory_node_ids = list(_mem_ids.get("node_ids") or [])
         if _kb:
             _extra = (_extra + "\n\n" + _kb).strip() if _extra else _kb
     except Exception:
@@ -4373,9 +4639,7 @@ async def chat(request: Request):
     # (session_log=slog), para que el historial se cargue entre turnos (memoria multi-turno).
     # Try to run AgentLoop if providers are configured
     try:
-        from src.core.config import load_config
-
-        cfg = load_config()
+        cfg = _load_config_safe()
         router = _get_router(cfg)
 
         # Quick health probe with short timeout — don't block chat if providers offline
@@ -4397,7 +4661,9 @@ async def chat(request: Request):
         # Scope + tools (mismo helper que /v1, /ws y /stream)
         _plan = _SESSION_MODES.get(session_id) == "plan"
         scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
+        _approval = _build_approval_context(cfg, session_id, source="chat", interactive=True)
         registry = _build_registry(scope, session_id, cfg, router=router)
+        registry.approval = _approval
 
         _gema = (_agent_cfg or {}).get("gema") or ""
         _sys = (_agent_cfg or {}).get("system_prompt") or ""
@@ -4412,12 +4678,23 @@ async def chat(request: Request):
                 pass
 
         loop = _new_agent_loop(cfg, provider_router=router, tool_registry=registry, scope=scope, session_log=slog,
-                               event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg), distill_hook=_build_distill_hook(cfg))
+                               event_store=_event_store(), compaction=_build_compaction(cfg), hooks=_build_hooks(cfg),
+                               distill_hook=_build_distill_hook(cfg),
+                               approval=_approval)
+        _extra = ""
+        try:
+            _mem_ids: dict = {}
+            _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg, collect=_mem_ids)
+            registry.current_memory_node_ids = list(_mem_ids.get("node_ids") or [])
+            _extra = _kb or ""
+        except Exception:
+            pass
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
                                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
                                 images=images or None,
-                                system_prompt=_sys or None)
+                                system_prompt=_sys or None,
+                                extra_system=(_extra or None))
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
@@ -4486,6 +4763,12 @@ async def list_agents():
     return {"agents": _agent_registry().list()}
 
 
+@app.get("/api/agents/templates")
+async def list_agent_templates():
+    from src.core.agent_registry import AGENT_MODES, list_templates
+    return {"templates": list_templates(), "modes": list(AGENT_MODES)}
+
+
 @app.get("/api/agents/{agent_id}")
 async def get_agent(agent_id: str):
     a = _agent_registry().get(agent_id)
@@ -4497,14 +4780,13 @@ async def get_agent(agent_id: str):
 @app.post("/api/agents")
 async def create_agent(request: Request):
     body = await _json_body(request)
+    fields = {k: body[k] for k in
+              ("model", "provider", "system_prompt", "description", "emoji", "color", "gema",
+               "mode", "toolsets", "skills", "mcp")
+              if k in body and body[k] not in (None, "", [])}
     try:
         agent = _agent_registry().create(
-            name=body.get("name") or "",
-            model=body.get("model", ""), provider=body.get("provider", ""),
-            system_prompt=body.get("system_prompt", ""), description=body.get("description", ""),
-            emoji=body.get("emoji", ""), color=body.get("color", ""), gema=body.get("gema", ""),
-            toolsets=body.get("toolsets", []), skills=body.get("skills", []), mcp=body.get("mcp", []),
-        )
+            name=body.get("name") or "", template=body.get("template") or "", **fields)
         return {"ok": True, "agent": agent}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4655,6 +4937,8 @@ async def openai_chat_completions(req: Request):
             session_id=sess.id,
             hint=infer_hint(user_text),
             model=None if model == "auto" else model,
+            interactive=False,
+            source="openai-api",
         )
         reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
     except Exception as e:
@@ -4731,6 +5015,8 @@ async def ws_chat(ws: WebSocket):
                     session_id=ws_session_id,
                     hint=infer_hint(msg),
                     model=None if model == "auto" else model,
+                    interactive=True,
+                    source="ws",
                 )
                 reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
             except Exception as e:
@@ -4782,6 +5068,8 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 agent_id=(agent_id or None),
                 on_delta=_on_delta,
                 on_reasoning=_on_reasoning,
+                interactive=True,
+                source="chat-stream",
             ))
             while not task.done():
                 try:

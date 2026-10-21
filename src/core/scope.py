@@ -87,14 +87,14 @@ IDEMPOTENT_TOOLS = frozenset({
     "read", "read_file", "todo_write", "web_fetch", "search_files", "web_search", "web_fetch",
     "browser_snapshot", "browser_console", "mcp_filesystem_read_file",
     "mcp_filesystem_list_directory", "mcp_filesystem_get_file_info",
-    "glob", "grep", "search_observations",
+    "glob", "grep", "search_observations", "repo_map", "code_search", "recall",
 })
 
 MUTATING_TOOLS = frozenset({
     "write", "edit", "write_file", "patch", "apply_patch", "terminal", "bash", "execute_code",
     "browser_click", "browser_type", "browser_press", "browser_navigate",
-    "send_message", "delegate_task", "execute", "exec", "job_start", "job_kill",
-    "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run",
+    "send_message", "delegate_task", "execute", "exec", "pty_exec", "job_start", "job_kill",
+    "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run", "agent_create",
 })
 
 NETWORK_TOOLS = frozenset({
@@ -115,6 +115,37 @@ HARD_DENY_PATTERNS = (
 )
 
 _MAX_BYTES_DEFAULT = 1_048_576
+
+# Sandbox ladder: nombres estilo Codex/OpenCode -> preset interno.
+# Solo se puede escalar HACIA ARRIBA y con aprobacion previa.
+SANDBOX_LEVELS: dict[str, int] = {
+    "read_only": 0,
+    "workspace_write": 1,
+    "full": 2,
+}
+SANDBOX_ALIASES: dict[str, str] = {
+    "read_only": "read_only",
+    "read-only": "read_only",
+    "readonly": "read_only",
+    "workspace_write": "workspace_write",
+    "workspace-write": "workspace_write",
+    "workspacewrite": "workspace_write",
+    "full": "full",
+    "full-access": "full",
+    "full_access": "full",
+    "danger-full-access": "full",
+    "danger_full_access": "full",
+}
+
+
+def normalize_permission(value: str | None) -> str:
+    """Alias tolerant (read-only, workspace-write, danger-full-access)."""
+    key = str(value or "workspace_write").strip().lower()
+    return SANDBOX_ALIASES.get(key, "workspace_write")
+
+
+def permission_level(value: str | None) -> int:
+    return SANDBOX_LEVELS.get(normalize_permission(value), 1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +183,31 @@ class Scope:
 
     cfg: ScopeConfig
     project_root: Path
+    # Override runtime del ladder (solo escala hacia arriba, con aprobacion).
+    runtime_permission: str = ""
+
+    @property
+    def permission(self) -> str:
+        return normalize_permission(self.runtime_permission or self.cfg.permission)
+
+    def can_escalate_to(self, target: str | None) -> bool:
+        return permission_level(target) >= permission_level(self.permission)
+
+    def escalate(self, target: str | None, *, approved: bool = False) -> str:
+        """Sube el nivel de sandbox. Nunca baja y exige aprobacion previa."""
+        new_perm = normalize_permission(target)
+        old_level = permission_level(self.permission)
+        new_level = permission_level(new_perm)
+        if new_level < old_level:
+            raise ScopeDenied(
+                f"el sandbox solo escala hacia arriba: {self.permission} -> {new_perm}")
+        if new_level == old_level:
+            return self.permission
+        if not approved:
+            raise ScopeDenied(
+                f"escalado de sandbox {self.permission} -> {new_perm} requiere aprobacion previa")
+        self.runtime_permission = new_perm
+        return new_perm
 
     def __post_init__(self):
         # Normalize project_root once
@@ -227,7 +283,7 @@ class Scope:
         if self._is_denied(p):
             raise ScopeDenied(f"ruta denegada por patrones de denegación: {p} (patrones: {self.cfg.deny_patterns})")
         # permission 'full' = acceso total a la PC (el usuario lo activa en Ajustes).
-        perm = getattr(self.cfg, "permission", "workspace_write") or "workspace_write"
+        perm = self.permission
         if perm != "full" and not self._is_allowed(p):
             raise ScopeDenied(
                 f"ruta fuera de raíces permitidas: {p} (permitidas: {self.cfg.allowed_roots}). "
@@ -248,7 +304,7 @@ class Scope:
             raise ScopeDenied(f"herramienta de red denegada: {tool_name} (permitir_red=false)")
 
         # Permission preset gate — harness parity (Read Only / Workspace Write / Full access)
-        perm = getattr(self.cfg, "permission", "workspace_write") or "workspace_write"
+        perm = self.permission
         if perm == "read_only" and tool_name not in IDEMPOTENT_TOOLS:
             raise ScopeDenied(f"permission read_only: herramienta bloqueada {tool_name!r} (solo lectura)")
         # Mutating gate (opt-in): exige confirm=true en args cuando require_confirm_mutating.
@@ -300,5 +356,6 @@ class Scope:
             "max_read_bytes": self.cfg.effective_max_bytes(),
             "allow_network": self.cfg.allow_network,
             "allow_mutating_without_confirm": self.cfg.allow_mutating_without_confirm,
-            "permission": getattr(self.cfg, "permission", "workspace_write"),
+            "permission": self.permission,
+            "permission_level": permission_level(self.permission),
         }

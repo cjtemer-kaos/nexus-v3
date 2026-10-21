@@ -2,13 +2,29 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Bot, Plus, Trash2, Pencil, X, Zap, Cloud, Cpu, Sparkles, AlertCircle } from 'lucide-react'
 import { useAppStore, type ModelOption } from '@/store/app-store'
-import { agentsApi, agentCreateApi, agentUpdateApi, agentDeleteApi, gemasApi, assignApi, type Agent, type Gema } from '@/lib/api'
+import { agentsApi, agentCreateApi, agentUpdateApi, agentDeleteApi, agentTemplatesApi, gemasApi, assignApi, type Agent, type AgentTemplate, type Gema } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const providerIcon: Record<string, typeof Cpu> = { ollama: Zap, cloud: Cloud, llamacpp: Cpu }
 
-type Draft = { name: string; emoji: string; model: string; system_prompt: string; description: string; gema: string }
-const EMPTY: Draft = { name: '', emoji: '🤖', model: '', system_prompt: '', description: '', gema: '' }
+type Draft = {
+  name: string
+  emoji: string
+  model: string
+  system_prompt: string
+  description: string
+  gema: string
+  mode: 'build' | 'read_only'
+  template: string
+  toolsets: string
+  skills: string
+  mcp: string
+}
+const EMPTY: Draft = {
+  name: '', emoji: '🤖', model: '', system_prompt: '', description: '', gema: '',
+  mode: 'build', template: '', toolsets: '', skills: '', mcp: '',
+}
+const splitList = (value: string): string[] => value.split(',').map((s) => s.trim()).filter(Boolean)
 
 function ModelOptions({ models, providerHealth }: { models: ModelOption[]; providerHealth: Record<string, string> }) {
   const grouped = useMemo(() => {
@@ -36,6 +52,7 @@ export function AgentsPanel() {
   const { models, providerHealth, refreshProviders } = useAppStore()
   const [agents, setAgents] = useState<Agent[]>([])
   const [gemas, setGemas] = useState<Gema[]>([])
+  const [templates, setTemplates] = useState<AgentTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -58,6 +75,8 @@ export function AgentsPanel() {
   useEffect(() => {
     gemasApi().then((r) => { setGemas(r.gemas); setGemasErr(null) })
       .catch((e) => setGemasErr(String(e).slice(0, 200)))
+    agentTemplatesApi().then((r) => setTemplates(r.templates))
+      .catch(() => setTemplates([]))
   }, [])
   useEffect(() => { if (models.length === 0) void refreshProviders() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -77,6 +96,26 @@ export function AgentsPanel() {
       .catch((e) => { if (seq === assignSeq.current) setAssignErr(String(e).slice(0, 200)) })
   }
 
+  const applyTemplate = (templateName: string) => {
+    const t = templates.find((x) => x.name === templateName)
+    if (!t) { setDraft((d) => ({ ...d, template: templateName })); return }
+    setDraft((d) => ({
+      ...d,
+      template: t.name,
+      gema: t.gema,
+      mode: t.mode,
+      description: t.description,
+      system_prompt: t.system_prompt,
+      toolsets: t.toolsets.join(', '),
+    }))
+    setAutoModel('')
+    setAssignErr(null)
+    const seq = ++assignSeq.current
+    if (t.gema) assignApi({ gema: t.gema })
+      .then((r) => { if (seq === assignSeq.current) setAutoModel(r.assign.model) })
+      .catch((e) => { if (seq === assignSeq.current) setAssignErr(String(e).slice(0, 200)) })
+  }
+
   const saveModel = async (a: Agent, model: string) => {
     const provider = models.find((m) => m.id === model)?.provider ?? ''
     setErr(null)
@@ -87,12 +126,18 @@ export function AgentsPanel() {
   const submit = async () => {
     setSaving(true); setErr(null)
     const provider = models.find((m) => m.id === draft.model)?.provider ?? ''
+    const payload = {
+      name: draft.name, emoji: draft.emoji, model: draft.model, provider,
+      system_prompt: draft.system_prompt, description: draft.description, gema: draft.gema,
+      mode: draft.mode, template: draft.template,
+      toolsets: splitList(draft.toolsets), skills: splitList(draft.skills), mcp: splitList(draft.mcp),
+    }
     try {
       if (editing) {
-        const r = await agentUpdateApi(editing.id, { ...draft, provider })
+        const r = await agentUpdateApi(editing.id, payload)
         setAgents((p) => p.map((x) => (x.id === editing.id ? r.agent : x)))
       } else {
-        const r = await agentCreateApi({ ...draft, provider })
+        const r = await agentCreateApi(payload)
         setAgents((p) => [...p, r.agent])
       }
       setCreating(false); setEditing(null)
@@ -107,7 +152,11 @@ export function AgentsPanel() {
 
   const openCreate = () => { setDraft(EMPTY); setCreating(true); assignSeq.current++; setAutoModel(''); setAssignErr(null) }
   const openEdit = (a: Agent) => {
-    setDraft({ name: a.name, emoji: a.emoji || '🤖', model: a.model, system_prompt: a.system_prompt, description: a.description, gema: a.gema || '' })
+    setDraft({
+      name: a.name, emoji: a.emoji || '🤖', model: a.model, system_prompt: a.system_prompt,
+      description: a.description, gema: a.gema || '', mode: a.mode || 'build', template: a.template || '',
+      toolsets: (a.toolsets || []).join(', '), skills: (a.skills || []).join(', '), mcp: (a.mcp || []).join(', '),
+    })
     setEditing(a)
     // recomputar el hint de modelo auto para la gema de ESTE agente (no dejar el de otro)
     setAutoModel('')
@@ -139,6 +188,10 @@ export function AgentsPanel() {
           </div>
         )}
 
+        <div className="mt-4 rounded-xl border border-[#2C3037] bg-[#1E2127] px-3 py-2 text-[11px] text-[#9BA1AA]">
+          También podés crearlo desde el chat: <span className="text-[#EDEEF0]">“Creá un ayudante reviewer read-only para revisar este diff”</span>.
+        </div>
+
         {loading ? (
           <div className="mt-8 text-center text-sm text-[#9BA1AA]">Cargando ayudantes…</div>
         ) : (
@@ -155,6 +208,8 @@ export function AgentsPanel() {
                         <span className="truncate text-sm font-semibold">{a.name}</span>
                         {a.builtin && <span className="rounded-full border border-[#4C9DFF]/30 bg-[#0B62D6]/15 px-1.5 py-0.5 text-[10px] text-[#8CC1FF]">por defecto</span>}
                         {a.gema && <span className="rounded-full border border-[#8B5CF6]/30 bg-[#8B5CF6]/15 px-1.5 py-0.5 text-[10px] text-[#C4B5FD]">{a.gema}</span>}
+                        {a.template && <span className="rounded-full border border-[#2C3037] bg-[#15171B] px-1.5 py-0.5 text-[10px] text-[#9BA1AA]">{a.template}</span>}
+                        {a.mode === 'read_only' && <span className="rounded-full border border-[#FFB86B]/30 bg-[#FFB86B]/10 px-1.5 py-0.5 text-[10px] text-[#FFB86B]">read-only</span>}
                       </div>
                       <div className="truncate font-mono text-[11px] text-[#9BA1AA]">{a.id}</div>
                     </div>
@@ -202,7 +257,7 @@ export function AgentsPanel() {
       <Dialog.Root open={dialogOpen} onOpenChange={(v) => { if (!v) { setCreating(false); setEditing(null) } }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" />
-          <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-1/2 z-[90] w-[94vw] max-w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[#2C3037] bg-[#1E2127] shadow-2xl focus:outline-none">
+          <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-1/2 z-[90] max-h-[90vh] w-[94vw] max-w-[600px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-[#2C3037] bg-[#1E2127] shadow-2xl focus:outline-none">
             <div className="flex items-center justify-between border-b border-[#2C3037] px-5 py-4">
               <Dialog.Title className="flex items-center gap-2 text-sm font-semibold"><Bot className="h-4 w-4 text-[#4C9DFF]" /> {editing ? `Editar ${editing.name}` : 'Nuevo ayudante'}</Dialog.Title>
               <Dialog.Close asChild>
@@ -223,6 +278,15 @@ export function AgentsPanel() {
               </div>
 
               <div>
+                <label htmlFor="ag-template" className="text-[11px] font-medium tracking-widest text-[#9BA1AA]">PLANTILLA (OPCIONAL)</label>
+                <select id="ag-template" value={draft.template} onChange={(e) => applyTemplate(e.target.value)} className="mt-1 w-full rounded-xl border border-[#2C3037] bg-[#15171B] px-3 py-2 text-sm focus:outline-none focus:border-[#4C9DFF]/50">
+                  <option value="">— sin plantilla —</option>
+                  {templates.map((t) => <option key={t.name} value={t.name}>{t.name} · {t.mode === 'read_only' ? 'solo lectura' : 'build'}</option>)}
+                </select>
+                <div className="mt-1 text-[10px] text-[#9BA1AA]">La plantilla completa descripción, prompt, gema, modo y toolsets. Después podés ajustar todo.</div>
+              </div>
+
+              <div>
                 <label htmlFor="ag-gema" className="text-[11px] font-medium tracking-widest text-[#9BA1AA]">GEMA (ESPECIALIDAD)</label>
                 <select id="ag-gema" value={draft.gema} onChange={(e) => applyGema(e.target.value)} className="mt-1 w-full rounded-xl border border-[#2C3037] bg-[#15171B] px-3 py-2 text-sm focus:outline-none focus:border-[#4C9DFF]/50">
                   <option value="">— sin gema (ayudante libre) —</option>
@@ -230,6 +294,15 @@ export function AgentsPanel() {
                 </select>
                 <div className="mt-1 text-[10px] text-[#9BA1AA]">La gema define la especialidad: si no escribes un system prompt, se usa el suyo y su hint de modelo.</div>
                 {gemasErr && <div className="mt-1 text-[10px] text-[#FFA8A8]">No se pudieron cargar las gemas: {gemasErr}. Podés elegir el modelo a mano.</div>}
+              </div>
+
+              <div>
+                <label htmlFor="ag-mode" className="text-[11px] font-medium tracking-widest text-[#9BA1AA]">MODO</label>
+                <select id="ag-mode" value={draft.mode} onChange={(e) => setDraft((d) => ({ ...d, mode: e.target.value as Draft['mode'] }))} className="mt-1 w-full rounded-xl border border-[#2C3037] bg-[#15171B] px-3 py-2 text-sm focus:outline-none focus:border-[#4C9DFF]/50">
+                  <option value="build">build — puede editar y ejecutar</option>
+                  <option value="read_only">read_only — solo lectura</option>
+                </select>
+                <div className="mt-1 text-[10px] text-[#9BA1AA]">read_only se aplica al scope real del ayudante: no puede escribir ni ejecutar comandos mutantes.</div>
               </div>
 
               <div>
@@ -257,6 +330,24 @@ export function AgentsPanel() {
                 <label htmlFor="ag-sys" className="text-[11px] font-medium tracking-widest text-[#9BA1AA]">SYSTEM PROMPT</label>
                 <textarea id="ag-sys" value={draft.system_prompt} onChange={(e) => setDraft((d) => ({ ...d, system_prompt: e.target.value }))} rows={4} placeholder="Eres un ingeniero senior. Responde conciso y con evidencia." className="mt-1 w-full resize-y rounded-xl border border-[#2C3037] bg-[#15171B] px-3 py-2 text-sm focus:outline-none focus:border-[#4C9DFF]/50" />
               </div>
+
+              <details className="rounded-xl border border-[#2C3037] bg-[#15171B] px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-medium tracking-widest text-[#9BA1AA]">AVANZADO (TOOLSETS, SKILLS, MCP)</summary>
+                <div className="mt-2 space-y-2">
+                  <div>
+                    <label htmlFor="ag-toolsets" className="text-[10px] text-[#9BA1AA]">Toolsets (separados por coma)</label>
+                    <input id="ag-toolsets" value={draft.toolsets} onChange={(e) => setDraft((d) => ({ ...d, toolsets: e.target.value }))} placeholder="read, write, exec, search" className="mt-1 w-full rounded-lg border border-[#2C3037] bg-[#1E2127] px-2.5 py-1.5 text-xs focus:outline-none focus:border-[#4C9DFF]/50" />
+                  </div>
+                  <div>
+                    <label htmlFor="ag-skills" className="text-[10px] text-[#9BA1AA]">Skills (separadas por coma)</label>
+                    <input id="ag-skills" value={draft.skills} onChange={(e) => setDraft((d) => ({ ...d, skills: e.target.value }))} placeholder="python-testing, code-review" className="mt-1 w-full rounded-lg border border-[#2C3037] bg-[#1E2127] px-2.5 py-1.5 text-xs focus:outline-none focus:border-[#4C9DFF]/50" />
+                  </div>
+                  <div>
+                    <label htmlFor="ag-mcp" className="text-[10px] text-[#9BA1AA]">Servidores MCP (separados por coma)</label>
+                    <input id="ag-mcp" value={draft.mcp} onChange={(e) => setDraft((d) => ({ ...d, mcp: e.target.value }))} placeholder="github, context7" className="mt-1 w-full rounded-lg border border-[#2C3037] bg-[#1E2127] px-2.5 py-1.5 text-xs focus:outline-none focus:border-[#4C9DFF]/50" />
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div className="flex justify-end gap-2 border-t border-[#2C3037] px-5 py-3">

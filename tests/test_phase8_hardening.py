@@ -370,8 +370,11 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, agent_id=None):
-        captured.update(message=message, session_id=session_id, hint=hint, model=model)
+    async def fake_run(message, session_id, hint=None, model=None, force_tools=False, agent_id=None,
+                       **kwargs):
+        captured.update(message=message, session_id=session_id, hint=hint, model=model,
+                        interactive=kwargs.get("interactive"),
+                        source=kwargs.get("source"))
         return SimpleNamespace(final_output="respuesta real del modelo", success=True)
 
     class FakeSlog:
@@ -392,6 +395,8 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
     assert captured["message"] == "hola nexus"
     assert captured["session_id"] == "sess-fake"
     assert captured["model"] is None  # "auto" -> model None (resolve interno)
+    assert captured["interactive"] is False  # /v1 no tiene canal de aprobacion
+    assert captured["source"] == "openai-api"
 
     # modelo explicito se pasa tal cual
     r = client.post("/v1/chat/completions",
@@ -405,8 +410,9 @@ def test_chat_stream_sse_uses_standard_loop(monkeypatch):
     captured: dict = {}
 
     async def fake_run(message, session_id, hint=None, model=None, force_tools=False, on_delta=None,
-                       on_reasoning=None, agent_id=None):
-        captured.update(message=message, session_id=session_id, model=model)
+                       on_reasoning=None, agent_id=None, **kwargs):
+        captured.update(message=message, session_id=session_id, model=model,
+                        interactive=kwargs.get("interactive"))
         if on_delta is not None:
             await on_delta("respuesta ")
         if on_reasoning is not None:
@@ -427,6 +433,7 @@ def test_chat_stream_sse_uses_standard_loop(monkeypatch):
     assert "data: [DONE]" in r.text
     assert "Error:" not in r.text
     assert captured["message"] == "hola sse" and captured["session_id"] == "sess-sse"
+    assert captured["interactive"] is True  # la UI puede responder /api/approvals
 
 
 def test_v1_models_lists_real_routes(monkeypatch):

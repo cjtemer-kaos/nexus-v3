@@ -35,7 +35,7 @@ import os as _os
 # Herramientas de SOLO LECTURA: seguras de ejecutar en paralelo (sin efectos).
 _READONLY_TOOLS = {
     "read", "read_file", "list", "ls", "list_dir", "glob", "grep", "search",
-    "code_search", "recall", "memory_recall", "brain_recall", "search_observations",
+    "code_search", "repo_map", "recall", "memory_recall", "brain_recall", "search_observations",
     "web_fetch", "web_search", "fetch", "mcp_list", "gema_list", "agent_list",
     "get_system_info", "system_resources", "status", "graph", "knowledge_graph",
     "fts_search", "find_related", "get_entities", "latest_topic", "find_path",
@@ -137,6 +137,8 @@ class AgentLoop:
         heartbeat_ms: int = 2000,
         context_max_tokens: int = 32000,
         compact_threshold: float = 0.75,
+        approval=None,
+        config: dict | None = None,
     ):
         self.router = provider_router
         self.tools = tool_registry
@@ -148,14 +150,49 @@ class AgentLoop:
         self.compaction = compaction
         self.distill_hook = distill_hook
         self.heartbeat_ms = heartbeat_ms
+        # Gate HITL: lo arma el servidor (interactivo) o el subagente (never).
+        self.approval = approval
         # Presupuesto de contexto y umbral de compactación (config.session.*).
         # Antes estaban fijos en 32000/0.75 y la config no tenía efecto.
         self.context_max_tokens = int(context_max_tokens or 32000)
         self.compact_threshold = float(compact_threshold or 0.75)
+        self._cfg = config or {}
+
+        # Umbrales anti-loop configurables (defaults conservadores para tests
+        # que instancian AgentLoop sin config; produccion pasa config.yaml).
+        _anti = ((self._cfg.get("agent_loop") or {}).get("anti_loop") or {})
+        try:
+            self.anti_loop_repeat_warn = tuple(
+                int(x) for x in (_anti.get("repeat_warn") or [2, 3]))
+        except Exception:
+            self.anti_loop_repeat_warn = (2, 3)
+        self.anti_loop_repeat_stop = int(_anti.get("repeat_stop", 4) or 4)
+        self.anti_loop_failures_warn = int(_anti.get("failures_warn", 3) or 3)
+        self.anti_loop_failures_stop = int(_anti.get("failures_stop", 6) or 6)
 
         # Per-task retry/replan counters
         self._retry_counts: dict[str, int] = {}
         self._replan_counts: dict[str, int] = {}
+
+    def _persist_compaction_summary(self, session_id: str, dict_msgs: list[dict]) -> None:
+        """Guarda el resumen L4 como mensaje real (durable entre reinicios)."""
+        if self.session_log is None:
+            return
+        for m in dict_msgs or []:
+            if str(m.get("role") or "") != "system":
+                continue
+            content = str(m.get("content") or "")
+            if not content.startswith("[resumen de "):
+                continue
+            try:
+                prev = self.session_log.get_summary_message(session_id)
+                if prev and str(prev.get("content") or "").strip() == content.strip():
+                    return
+                self.session_log.compact_mark(session_id, content)
+                logger.info("resumen durable persistido en sesion %s", session_id)
+            except Exception as e:
+                logger.debug("no se pudo persistir el resumen: %s", e)
+            return
 
     async def _distill(self, session_id: str) -> None:
         """Destila la sesión al grafo ANTES de compactar (no perder conocimiento)."""
@@ -167,6 +204,59 @@ class AgentLoop:
                 await res
         except Exception as e:
             logger.debug(f"distill hook falló: {e}")
+
+    def _summary_state(self, session_id: str) -> tuple[str, int]:
+        """Resumen durable previo y mensajes nuevos desde el (para no re-resumir)."""
+        prev = ""
+        progress = 0
+        if self.session_log is None:
+            return prev, progress
+        try:
+            sm = self.session_log.get_summary_message(session_id)
+            if sm:
+                prev = str(sm.get("content") or "").strip()
+                after = self.session_log.get_messages_from(
+                    session_id, int(sm["id"]), limit=10000)
+                progress = len(after or [])
+        except Exception:
+            pass
+        return prev, progress
+
+    async def _emit_compact_hook(self, session_id: str, metrics: Any,
+                                 summary: str = "") -> None:
+        """Notifica al hook on_compact sin romper el loop si falla."""
+        if self.hooks is None or not hasattr(self.hooks, "has_handlers"):
+            return
+        try:
+            if not self.hooks.has_handlers("on_compact"):
+                return
+            payload = {
+                "session_id": session_id,
+                "summary": (summary or "")[:2000],
+                "metrics": metrics.to_dict() if hasattr(metrics, "to_dict") else {},
+            }
+            await self.hooks.emit("on_compact", payload)
+        except Exception as e:
+            logger.debug("hook on_compact falló: %s", e)
+
+    def _compaction_summary(self, dict_msgs: list[dict]) -> str:
+        for m in dict_msgs or []:
+            if str(m.get("role") or "") != "system":
+                continue
+            c = str(m.get("content") or "")
+            if c.startswith("[resumen de "):
+                return c
+        return ""
+
+    def _prune_payload(self, messages: list[LLMMessage]) -> list[LLMMessage]:
+        """Poda solo el payload que va al LLM; el historial real no se toca."""
+        if self.compaction is None or not hasattr(self.compaction, "prune_for_llm"):
+            return messages
+        try:
+            return self.compaction.prune_for_llm(messages)  # type: ignore[arg-type]
+        except Exception as e:
+            logger.debug("prune_for_llm falló: %s", e)
+            return messages
 
     def _extract_text_tool_calls(self, content: str) -> list:
         """Respaldo para modelos que escriben JSON en texto en vez de tool_calls.
@@ -497,7 +587,8 @@ class AgentLoop:
                 "con el contenido. Para tareas especializadas puedes DELEGAR en ayudantes: "
                 "usa gema_list/agent_list para descubrirlos y gema_run/agent_run para delegar "
                 "(el LLM de cada ayudante se asigna automáticamente según lo disponible en la PC). "
-                "No invoques herramientas innecesarias. Sé conciso."
+                "Si falta un especialista, creálo con agent_create (plantillas scout/builder/reviewer/"
+                "qa/researcher/ops y modo read_only/build). No invoques herramientas innecesarias. Sé conciso."
             )))
 
         # Inyectar ENTORNO (SO/shell) para que el modelo use comandos NATIVOS.
@@ -565,13 +656,42 @@ class AgentLoop:
         history_limit = 20
         if self.session_log is not None:
             try:
-                # Ventana de los 20 mensajes MAS RECIENTES: get_messages es ASC,
-                # asi que hay que paginar desde el final — con limit asecas se
-                # cargaban los 20 mas viejos de la sesion y se perdia el
-                # contexto reciente (capa 2, contaminacion/olvido).
-                _total = self.session_log.count_messages(session_id)
-                _off = max(0, _total - history_limit)
-                recent = self.session_log.get_messages(session_id, limit=history_limit, offset=_off)
+                # Resumen durable: si existe, el historial arranca DESPUES del
+                # mensaje de resumen y este se inyecta como system. Sin esto,
+                # tras un reinicio se recargaba la cola cruda y el resumen se
+                # perdia (compactacion efimera).
+                _summary_msg = None
+                try:
+                    _summary_msg = self.session_log.get_summary_message(session_id)
+                except Exception:
+                    _summary_msg = None
+                if _summary_msg:
+                    _from = self.session_log.get_messages_from(
+                        session_id, int(_summary_msg["id"]), limit=10000)
+                    _tail = _from[-history_limit:]
+                    from src.core.session_log import Message as _SLMessage
+                    recent = [
+                        _SLMessage(role=r["role"], content=r["content"],
+                                   tool_call_id=r.get("tool_call_id", ""),
+                                   tool_name=r.get("tool_name", ""),
+                                   tokens=int(r.get("tokens") or 0),
+                                   model=r.get("model", ""),
+                                   created_at=r.get("created_at", ""))
+                        for r in _tail
+                    ]
+                    _sc = str(_summary_msg.get("content") or "").strip()
+                    if _sc:
+                        _pref = str(getattr(self.compaction, "handoff_prefix", "") or "")
+                        _content = f"{_pref}\n{_sc}" if _pref else _sc
+                        messages.insert(1, LLMMessage(role="system", content=_content))
+                else:
+                    # Ventana de los 20 mensajes MAS RECIENTES: get_messages es ASC,
+                    # asi que hay que paginar desde el final — con limit asecas se
+                    # cargaban los 20 mas viejos de la sesion y se perdia el
+                    # contexto reciente (capa 2, contaminacion/olvido).
+                    _total = self.session_log.count_messages(session_id)
+                    _off = max(0, _total - history_limit)
+                    recent = self.session_log.get_messages(session_id, limit=history_limit, offset=_off)
                 # Skip the just-appended user message duplicate
                 for m in recent[:-1]:
                     if m.role in ("user", "assistant"):
@@ -619,11 +739,16 @@ class AgentLoop:
                 if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
                     await self._distill(session_id)
                     _limit = int(max_tokens * self.compact_threshold)
+                    _prev, _progress = self._summary_state(session_id)
                     if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
                         dict_msgs, cmetrics = await self.compaction.summarize_with_llm(
-                            dict_msgs, _limit, self.router)
+                            dict_msgs, _limit, self.router,
+                            previous_summary=_prev, progress_messages=_progress)
                     else:
                         dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                    self._persist_compaction_summary(session_id, dict_msgs)
+                    await self._emit_compact_hook(
+                        session_id, cmetrics, self._compaction_summary(dict_msgs))
                     messages = self._rebuild_messages(dict_msgs)
             except Exception as e:
                 logger.debug(f"compaction pre-check falló: {e}")
@@ -691,17 +816,19 @@ class AgentLoop:
                 # Hooks pre_llm_call
                 if self.hooks is not None and self.hooks.has_handlers("pre_llm_call"):
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
+                # Poda SOLO el payload: cabeza+cola de tool results viejos.
+                _payload = self._prune_payload(messages)
                 # Router.chat con fallback (o streaming token-a-token si hay on_delta)
                 if getattr(self, "_on_delta", None) is not None and hasattr(self.router, "stream"):
-                    llm_resp = await self._stream_turn(messages, openai_tools, hint, force_tools, require_vision=bool(images))
+                    llm_resp = await self._stream_turn(_payload, openai_tools, hint, force_tools, require_vision=bool(images))
                 elif hasattr(self.router, "chat"):
-                    llm_resp = await self.router.chat(messages, tools=openai_tools, hint=hint, force_tools=force_tools, model=getattr(self, "_req_model", None), require_vision=bool(images))
+                    llm_resp = await self.router.chat(_payload, tools=openai_tools, hint=hint, force_tools=force_tools, model=getattr(self, "_req_model", None), require_vision=bool(images))
                 else:
                     # Fallback: resolve then chat
                     routed = self.router.resolve(task_hint=hint)
                     if routed is None:
                         raise RuntimeError(f"sin proveedor para pista={hint}")
-                    llm_resp = await routed.provider.chat(messages, tools=openai_tools, model=routed.model)
+                    llm_resp = await routed.provider.chat(_payload, tools=openai_tools, model=routed.model)
                 # Hooks post_llm_call
                 if self.hooks is not None and self.hooks.has_handlers("post_llm_call"):
                     await self.hooks.emit("post_llm_call", {"iteration": iteration, "finish_reason": llm_resp.finish_reason, "has_tool_calls": llm_resp.has_tool_calls})
@@ -885,7 +1012,8 @@ class AgentLoop:
                         _safe.append((_i, _tc.name or _n, _a if isinstance(_a, dict) else {}))
                     if len(_safe) > 1:
                         _res = await gather_limited([
-                            self.tools.dispatch(n, a, scope=self.scope, hooks=self.hooks)
+                            self.tools.dispatch(n, a, scope=self.scope, hooks=self.hooks,
+                                                approval=self.approval, session_id=session_id)
                             for (_i, n, a) in _safe
                         ])
                         for (_i, _n, _a), _r in zip(_safe, _res):
@@ -920,7 +1048,7 @@ class AgentLoop:
                         self._tool_repeat = _cnt  # type: ignore[attr-defined]
                     _n = _cnt.get(_fp, 0) + 1
                     _cnt[_fp] = _n
-                    if _n in (2, 3):
+                    if _n in self.anti_loop_repeat_warn:
                         try:
                             messages.append(LLMMessage(role="user", content=(
                                 f"[recordatorio del sistema] repetiste la herramienta '{tool_name}' {_n} veces con "
@@ -928,7 +1056,7 @@ class AgentLoop:
                                 f"o da tu respuesta final con lo que ya tenés.")))
                         except Exception:
                             pass
-                    elif _n >= 4:
+                    elif _n >= self.anti_loop_repeat_stop:
                         final_output = f"[doom-loop: {tool_name} repetido {_n} veces con mismos args — bucle detenido; sin respuesta final]"
                         success = False
                         iteration = max_iters  # force exit
@@ -945,7 +1073,8 @@ class AgentLoop:
                             raise _pr
                         raw_result = _pr
                     else:
-                        raw_result = await self.tools.dispatch(tool_name, tool_args, scope=self.scope, hooks=self.hooks)
+                        raw_result = await self.tools.dispatch(tool_name, tool_args, scope=self.scope, hooks=self.hooks,
+                                                               approval=self.approval, session_id=session_id)
                     # Normalize result to string
                     if isinstance(raw_result, str):
                         tool_result_str = raw_result
@@ -1008,16 +1137,16 @@ class AgentLoop:
                 elif not str(tool_result_str).startswith("[omitido"):
                     _cf = int(getattr(self, "_consecutive_failures", 0)) + 1
                     self._consecutive_failures = _cf  # type: ignore[attr-defined]
-                    if _cf >= 6:
+                    if _cf >= self.anti_loop_failures_stop:
                         final_output = (
                             f"[abortado: {_cf} fallos consecutivos de herramientas; "
                             f"último: {tool_name} -> {tool_result_str[:300]}]")
                         success = False
                         iteration = max_iters
                         break
-                    if _cf == 3:
+                    if _cf == self.anti_loop_failures_warn:
                         messages.append(LLMMessage(role="user", content=(
-                            "[recordatorio del sistema] 3 fallos consecutivos de herramientas. "
+                            f"[recordatorio del sistema] {_cf} fallos consecutivos de herramientas. "
                             "No reintentes lo mismo: leé el error, inspeccioná el archivo o el "
                             "entorno, y cambiá de enfoque antes de la próxima llamada.")))
 
@@ -1066,11 +1195,16 @@ class AgentLoop:
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
                         _limit = int(max_tokens * self.compact_threshold)
+                        _prev, _progress = self._summary_state(session_id)
                         if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
-                            dict_msgs, _ = await self.compaction.summarize_with_llm(
-                                dict_msgs, _limit, self.router)
+                            dict_msgs, _cmetrics = await self.compaction.summarize_with_llm(
+                                dict_msgs, _limit, self.router,
+                                previous_summary=_prev, progress_messages=_progress)
                         else:
-                            dict_msgs, _ = await self.compaction.compact(dict_msgs, _limit)
+                            dict_msgs, _cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                        self._persist_compaction_summary(session_id, dict_msgs)
+                        await self._emit_compact_hook(
+                            session_id, _cmetrics, self._compaction_summary(dict_msgs))
                         messages = self._rebuild_messages(dict_msgs)
                         steps.append(LoopStep(iteration=iteration, phase="observe", content=f"contexto compactado ({len(dict_msgs)} mensajes)"))
                 except Exception as e:

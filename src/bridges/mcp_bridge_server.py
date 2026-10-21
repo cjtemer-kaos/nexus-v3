@@ -384,8 +384,17 @@ async def brain_remember(
 
 
 @mcp.tool()
-async def brain_recall(query: str = "", topic: str = "", limit: int = 10) -> str:
-    """Recall knowledge from the shared brain. Search by topic or free-text query across all stored knowledge."""
+async def brain_recall(query: str = "", topic: str = "", limit: int = 10,
+                       budget: str = "medium", max_tokens: int = 0) -> str:
+    """Recall knowledge from the shared brain. Search by topic or free-text query across all stored knowledge.
+
+    ``budget`` (low|medium|high) o ``max_tokens`` limitan el payload devuelto:
+    el agente no se ahoga con todo el cerebro en cada recall.
+    """
+    limit = max(1, min(50, int(limit or 10)))
+    budgets = {"low": 800, "small": 800, "medium": 2000, "high": 5000}
+    cap = int(max_tokens or 0) or budgets.get(str(budget or "medium").lower(), 2000)
+    cap = max(128, min(20000, cap))
     conn = _get_brain_conn()
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS conocimientos (
@@ -402,11 +411,33 @@ async def brain_recall(query: str = "", topic: str = "", limit: int = 10) -> str
         c.execute("SELECT tema, contenido, fuente, fecha, utilidad FROM conocimientos ORDER BY utilidad DESC, fecha DESC LIMIT ?", (limit,))
     rows = c.fetchall()
     conn.close()
-    knowledge = [
-        {"topic": r[0], "content": r[1], "source": r[2], "date": r[3], "importance": r[4]}
-        for r in rows
-    ]
-    return json.dumps({"knowledge": knowledge, "count": len(knowledge)}, indent=2, ensure_ascii=False)
+
+    max_chars = cap * 4
+    used = 0
+    truncated = False
+    knowledge = []
+    for r in rows:
+        content = str(r[1] or "")
+        remaining = max_chars - used
+        if remaining <= 0:
+            truncated = True
+            break
+        if len(content) > remaining:
+            content = content[: max(0, remaining - 1)] + "…"
+            truncated = True
+        knowledge.append({
+            "topic": r[0], "content": content, "source": r[2],
+            "date": r[3], "importance": r[4],
+        })
+        used += len(content)
+        if truncated:
+            break
+    return json.dumps({
+        "knowledge": knowledge,
+        "count": len(knowledge),
+        "budget": {"max_tokens": cap, "used_tokens": used // 4,
+                   "truncated": truncated},
+    }, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()

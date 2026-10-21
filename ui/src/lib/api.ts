@@ -338,6 +338,8 @@ export type Agent = {
   emoji: string
   color: string
   gema: string
+  mode?: 'build' | 'read_only'
+  template?: string
   workspace?: string
   toolsets: string[]
   skills: string[]
@@ -345,6 +347,15 @@ export type Agent = {
   created_at?: string
   updated_at?: string
   builtin?: boolean
+}
+
+export type AgentTemplate = {
+  name: string
+  description: string
+  system_prompt: string
+  gema: string
+  mode: 'build' | 'read_only'
+  toolsets: string[]
 }
 
 export type Gema = {
@@ -379,6 +390,12 @@ export async function assignApi(params: { gema?: string; agent?: string; model?:
 export async function agentsApi(): Promise<{ agents: Agent[] }> {
   const res = await apiFetch("/api/agents")
   if (!res.ok) throw new Error(`agents ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  return res.json()
+}
+
+export async function agentTemplatesApi(): Promise<{ templates: AgentTemplate[]; modes: string[] }> {
+  const res = await apiFetch("/api/agents/templates")
+  if (!res.ok) throw new Error(`agent templates ${res.status}`)
   return res.json()
 }
 

@@ -261,6 +261,7 @@ async def _h_tools(args, ctx):
         ("agent_list", "lista los ayudantes configurados"),
         ("gema_run", "delega una tarea a una gema"),
         ("agent_run", "delega una tarea a un ayudante"),
+        ("agent_create", "crea un ayudante con plantilla y modo"),
         ("echo", "eco (debug)"),
     ]
     return SlashResult(ok=True,

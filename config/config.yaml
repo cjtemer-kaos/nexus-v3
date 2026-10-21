@@ -30,6 +30,12 @@ agent_loop:
   error_policy:
     retry: 3
     replan: 2
+  # Anti doom-loop: avisos y corte por repeticion exacta / fallos consecutivos.
+  anti_loop:
+    repeat_warn: [3, 5]
+    repeat_stop: 8
+    failures_warn: 3
+    failures_stop: 6
   heartbeat_ms: 2000
   # assisted = las tools mutantes piden aprobacion; auto = se aplican solas.
   auto_apply: assisted
@@ -39,6 +45,85 @@ agent_loop:
     max_tokens: 32000
     max_wall_ms: 900000
     max_tool_calls: 60
+approval:
+  # auto     = no pide humano (solo hard-deny de secretos/comandos catastroficos)
+  # assisted = pide por acciones sensibles + MCP sin allowlist (default)
+  # strict   = pide por toda tool mutante / no clasificada como lectura
+  # never    = fail-closed sin UI (subagentes y servidor MCP entrante)
+  mode: assisted
+  timeout_s: 120
+  # MCP de solo lectura: server/tool con wildcards. El resto pide aprobacion.
+  mcp_read_only:
+    - brave-search/*
+    - parallel-search/*
+    - context7/*
+    - mcp-local-rag/*
+    - rea/*
+    - github/get_*
+    - github/list_*
+    - github/search_*
+    - hindsight/recall
+    - hindsight/search
+    - nexus-sovereign/read_*
+    - nexus-sovereign/list_*
+    - nexus-sovereign/search_*
+    - nexus-sovereign/brain_recall
+    - serena/find_*
+    - serena/search_*
+  # Patrones tool:action que NINGUN grant puede aprobar.
+  hard_deny: []
+guard:
+  # Guardrail de secuencia (ToolShield): el actor NO decide su propio riesgo.
+  # heuristic = solo patrones; auto = heuristic + LLM barato si la secuencia es
+  # sospechosa (MEDIUM); llm = siempre consulta.
+  sequence:
+    enabled: true
+    mode: auto
+    window: 20
+    repeat_medium: 3
+    failure_streak_medium: 2
+    timeout_s: 2.0
+    model_hint: simple
+    # Politica formal declarativa. Se evalua antes de la heuristica: deny/high
+    # gana sobre allow, y allow solo aplica si ninguna regla mas severa matchea.
+    policy:
+      enabled: true
+      rules:
+      - id: deny-rm-root
+        action: deny
+        tools: [exec, pty_exec, job_start]
+        pattern: '(?i)\brm\s+-rf\s+(?:/|~|\$home|\$env:userprofile)(?:\s|$)'
+        reason: borrado recursivo de raiz/home
+      - id: deny-disk-boot
+        action: deny
+        tools: [exec, pty_exec, job_start]
+        pattern: '(?i)\b(?:mkfs|diskpart|bcdedit|shutdown|reboot)\b|\bformat\s+[a-z]:'
+        reason: operacion de disco/arranque irreversible
+      - id: deny-force-history
+        action: deny
+        tools: [exec, pty_exec, job_start]
+        pattern: '(?i)\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f)(?:\s|$)|\bgit\s+reset\s+--hard\b'
+        reason: reescritura destructiva del historial
+      - id: deny-pipe-shell
+        action: deny
+        tools: [exec, pty_exec, job_start]
+        pattern: '(?i)\b(?:curl|wget)\b[^\n]*\|\s*(?:ba|z|k)?sh\b'
+        reason: descarga y ejecucion de shell sin revision
+      - id: medium-secrets
+        action: medium
+        tools: ['*']
+        pattern: '(?i)(?:^|[\s"'']|[\\/])\.env(?:[\s"'']|[\\/]|$)|\.(?:key|pem|pfx|p12)(?:[\s"'']|$)|\b(?:credentials|secrets?|id_rsa|id_ed25519)\b'
+        reason: toca secretos o credenciales
+      - id: medium-irreversible
+        action: medium
+        tools: [exec, pty_exec, job_start]
+        pattern: '(?i)\b(?:git\s+clean\b[^\n]*-[a-z]*f|docker\s+(?:system\s+)?prune\b|kubectl\s+delete\b|terraform\s+(?:apply|destroy)\b|(?:npm|pnpm|yarn)\s+publish\b|twine\s+upload\b|gh\s+release\s+create\b|docker\s+push\b|aws\b[^\n]*\bdelete-|gcloud\b[^\n]*\bdelete\b)'
+        reason: comando sensible o irreversible
+      - id: allow-readonly
+        action: allow
+        tools: [exec, pty_exec]
+        pattern: '(?i)^\s*(?:git\s+(?:status|diff|log|show|branch|remote)\b|dir\b|type\b|where\b|pwd\b|echo\b|python\s+-m\s+pytest\b)'
+        reason: lectura/verificacion explicita
 scope:
   allowed_roots:
   - .
@@ -71,7 +156,20 @@ compaction:
     persist_dir: ./data/spill
   summary:
     model_hint: simple
-    max_summary_tokens: 800
+    # Presupuesto dinamico: max(min_tokens, limit*ratio), techo max_tokens.
+    min_tokens: 2000
+    ratio: 0.20
+    max_tokens: 12000
+    # No re-resumir si hubo poco progreso desde el resumen anterior.
+    minimum_progress_messages: 2
+    # Tras un fallo del LLM de resumen, no reintentar por 10 min.
+    failure_cooldown_s: 600
+    handoff_prefix: '[handoff] Contexto compactado: el resumen siguiente reemplaza el historial previo. No repitas trabajo ya hecho; verifica antes de asumir.'
+  prune:
+    # Poda cabeza+cola de resultados de tools viejos antes de cada llamada LLM.
+    enabled: true
+    keep_recent: 3
+    max_tool_result_chars: 4000
 providers:
   ollama:
     base_url: http://localhost:11434
@@ -144,6 +242,21 @@ memory:
   # Reservado: persistencia automatica de insights (el ciclo actual registra
   # telemetria en learning; la destilacion es explicita via /api/dream/run).
   auto_insight_persist: true
+  # Inyeccion automatica del grafo en el prompt antes de cada turno (no depende
+  # de que el modelo decida llamar recall). Presupuesto y filtro anti-ruido.
+  inject:
+    enabled: true
+    limit: 3
+    max_terms: 10
+    min_terms: 2
+    min_matches: 2
+    max_chars: 2400
+    snippet_chars: 320
+    # Rerank semantico opcional: auto intenta embeddings locales y cae a lexico
+    # sin romper el turno; force falla si no hay embeddings; off lo desactiva.
+    rerank: auto
+    rerank_timeout_ms: 2000
+    rerank_candidates: 8
 assignment:
   overrides: {}
 learning:

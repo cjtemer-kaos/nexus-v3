@@ -39,7 +39,7 @@ def test_tools_registry_complete():
     tools = reg.to_openai_tools()
     names = [t["function"]["name"] for t in tools]
     for n in ["read_file", "write_file", "edit", "list_dir", "exec", "gema_run", "agent_run",
-              "gema_list", "agent_list", "learn", "recall", "web_search", "mcp_list", "mcp_call"]:
+              "agent_create", "gema_list", "agent_list", "learn", "recall", "web_search", "mcp_list", "mcp_call"]:
         assert n in names, n
     # schemas validos + tipos integer (from __future__ annotations)
     for t in tools:
@@ -48,6 +48,16 @@ def test_tools_registry_complete():
     assert by["exec"]["properties"]["timeout"]["type"] == "integer"
     # atributo para la delegacion con imagen
     assert hasattr(reg, "current_images")
+
+
+def test_agent_templates_endpoint():
+    r = client.get("/api/agents/templates")
+    assert r.status_code == 200
+    data = r.json()
+    names = {t["name"] for t in data.get("templates", [])}
+    assert {"scout", "builder", "reviewer", "qa", "researcher", "ops"} <= names
+    assert "build" in data.get("modes", [])
+    assert "read_only" in data.get("modes", [])
 
 
 def test_edit_tool_str_replace():

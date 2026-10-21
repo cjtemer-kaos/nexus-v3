@@ -31,6 +31,7 @@ class NexusMCPServer:
         if os.getcwd() not in sys.path:
             sys.path.insert(0, os.getcwd())
         from src.api.server import (
+            _build_approval_context,
             _build_registry,
             _build_router_from_config,
             _build_scope,
@@ -39,6 +40,10 @@ class NexusMCPServer:
         cfg = _load_config_safe()
         self.scope = _build_scope(cfg)
         self.registry = _build_registry(self.scope, "mcp", cfg, router=_build_router_from_config(cfg))
+        # Servidor MCP entrante: no hay UI que apruebe -> fail-closed.
+        self.approval = _build_approval_context(
+            cfg, "mcp", source="mcp-server", interactive=False, policy="never")
+        self.registry.approval = self.approval
 
     def tools(self) -> list[dict]:
         out = []
@@ -51,7 +56,8 @@ class NexusMCPServer:
         return out
 
     async def call(self, name: str, arguments: dict) -> str:
-        res = await self.registry.dispatch(name, arguments or {}, scope=self.scope)
+        res = await self.registry.dispatch(name, arguments or {}, scope=self.scope,
+                                           approval=self.approval, session_id="mcp")
         return res if isinstance(res, str) else json.dumps(res, ensure_ascii=False, default=str)
 
     async def handle(self, msg: dict) -> dict | None:
