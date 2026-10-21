@@ -126,7 +126,12 @@ class OllamaProvider(BaseProvider):
                 tcs.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=args if isinstance(args, dict) else {}))
         finish = "tool_calls" if tcs else "stop"
         _think = msg.get("thinking") or msg.get("reasoning_content") or msg.get("reasoning") or ""
-        return LLMResponse(content=content, tool_calls=tuple(tcs), finish_reason=finish, model=model, usage={"total_tokens": data.get("eval_count", 0)}, reasoning_content=(_think or None))
+        _usage = {
+            "prompt_tokens": int(data.get("prompt_eval_count") or 0),
+            "completion_tokens": int(data.get("eval_count") or 0),
+            "total_tokens": int(data.get("eval_count") or 0) + int(data.get("prompt_eval_count") or 0),
+        }
+        return LLMResponse(content=content, tool_calls=tuple(tcs), finish_reason=finish, model=model, usage=_usage, reasoning_content=(_think or None))
 
     async def stream(self, messages, tools=None, model=None, **kw):
         """Streaming real via /api/chat con stream:true (deltas token a token)."""
@@ -200,7 +205,11 @@ class OllamaProvider(BaseProvider):
                             args = {}
                     tcs.append(ToolCall(id=_tid, name=fn.get("name", ""), arguments=args if isinstance(args, dict) else {}))
                 if data.get("done"):
-                    _usage = {"total_tokens": (data.get("eval_count") or 0) + (data.get("prompt_eval_count") or 0)}
+                    _usage = {
+                        "prompt_tokens": int(data.get("prompt_eval_count") or 0),
+                        "completion_tokens": int(data.get("eval_count") or 0),
+                        "total_tokens": int(data.get("eval_count") or 0) + int(data.get("prompt_eval_count") or 0),
+                    }
                     _done_reason = data.get("done_reason")
                     break
         yield {"type": "final", "response": LLMResponse(

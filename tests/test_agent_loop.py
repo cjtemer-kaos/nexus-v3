@@ -10,6 +10,7 @@ from src.core.event_store import EventStore
 from src.core.hooks_engine import HooksEngine
 from src.core.iteration_budget import IterationBudget
 from src.core.provider_router import ModelRoute, ProviderRouter
+from src.core.provider_base import BaseProvider, LLMResponse, ToolCall
 from src.core.scope import Scope, ScopeConfig
 from src.core.session_log import Message, SessionLog
 from src.core.tool_registry import ToolRegistry
@@ -22,6 +23,28 @@ from helpers import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+class OrderedBatchProvider(BaseProvider):
+    """Primer turno: [write_file, read_file] en el MISMO batch (write primero)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(content="", tool_calls=(
+                ToolCall(id="c1", name="write_file", arguments={"path": "x.txt", "content": "hola"}),
+                ToolCall(id="c2", name="read_file", arguments={"path": "x.txt"}),
+            ), finish_reason="tool_calls", model="batch")
+        return LLMResponse(content="ok", model="batch")
+
+    async def health(self):
+        return True
+
+    async def list_models(self):
+        return ["batch"]
 
 
 def test_final_answer_no_tools():
@@ -180,3 +203,43 @@ def test_error_classifier():
     assert c1 == ErrorAction.RETRY
     assert c2 == ErrorAction.ABORT
     assert c3 == ErrorAction.REPLAN
+
+
+def test_parallel_prefix_stops_at_mutating_tool():
+    """Un batch [write, read] debe ejecutar write ANTES de read.
+
+    Regresion: el pre-dispatch paralelo tomaba TODAS las tools read-only del
+    batch, aunque estuvieran despues de una mutante, y las corria antes.
+    """
+    async def run():
+        slog = SessionLog(":memory:")
+        try:
+            sess = slog.create_session(project="loop-order")
+            order: list[str] = []
+            reg = ToolRegistry()
+
+            def write_file(path: str, content: str = ""):
+                order.append("write")
+                return "ok"
+
+            def read_file(path: str):
+                order.append("read")
+                return "contenido"
+
+            reg.register_function(write_file, name="write_file", description="write")
+            reg.register_function(read_file, name="read_file", description="read")
+            router = ProviderRouter()
+            router.register_provider("mock", OrderedBatchProvider())
+            router.register_model(ModelRoute(id="batch", provider_name="mock"))
+            loop = AgentLoop(
+                provider_router=router,
+                tool_registry=reg,
+                budget=IterationBudget(max_iterations=5),
+            )
+            res = await loop.run(task="escribe y luego lee", session_id=sess.id, hint="coding")
+            assert res.success
+            assert order == ["write", "read"], order
+        finally:
+            slog.close()
+
+    asyncio.run(run())

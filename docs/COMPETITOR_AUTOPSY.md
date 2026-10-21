@@ -91,3 +91,26 @@ Fecha: 2026-10-12.
 - **No confiar en un analyzer Electron para árboles Node/TS** (REA devolvió todo-cero para `packages/core`).
 - **Sin git worktrees reales en opencode** (pese al prompt) → nexus debe implementarlos de verdad.
 - **Prompt-cache**: nunca reescribir mensajes viejos mid-run (rompe prefijo).
+
+---
+
+## 6. Cline (`cline/cline`, commit `e9dafbb`, 2026-10-21)
+
+Autopsia completa: **[`AUTOPSY_CLINE.md`](./AUTOPSY_CLINE.md)** (monorepo `sdk/packages/*`; `apps/vscode/src` es legacy).
+
+Top 5 por ROI para nexus-v3:
+
+1. **`buildBudgetProjection`** (`sdk/packages/core/src/extensions/context/budget-projection/project.ts:479`): closure de pares `tool_use`/`tool_result`, live tail protegido, drop de `thinking`/binarios, truncado proporcional y auditoría de acciones. Gap real: la compactación de nexus conserva “últimos N” y puede perder el pedido actual.
+2. **Trigger 90% + corrección por subestimación** (`context/compaction.ts:342-362`): factor `actual/estimado` cap 4x usando `usage.prompt_tokens`.
+3. **Overflow recovery determinista** (`compaction.ts:480-543`): fallback `basic` sin LLM y validación “estrictamente menor” antes de reintentar.
+4. **`apply_patch` difuso** (`tools/executors/apply-patch-parser.ts:85`): Add/Delete/Move + cascada exacta→NFC→trim→similitud 0.66, warnings por chunk, atomicidad.
+5. **Hooks por archivo** (`hooks/hook-file-config.ts:17`): scripts `PreToolUse.py`/`PostToolUse.ps1`/… con payload JSON y control `cancel/context/systemPrompt/appendMessages`.
+
+Ya portado en el lote 2026-10-21: **proyección de presupuesto** (`src/core/compaction_budget.py`,
+integrada en `compaction.py`), **`apply_patch` difuso** con Add/Delete/Move y rollback
+(`src/core/apply_patch.py` + `server.py`), **`command-guard` de plan mode**
+(`src/core/command_guard.py` + `scope.py`), **calibración por `usage.prompt_tokens`** y
+**recovery que exige un request menor** (`agent_loop.py` + `compaction.py`), **kill de árbol
+de procesos** (`src/core/process_tree.py`), barrera de paralelismo por prefijo contiguo,
+diff numerado en `edit` y truncado head+tail en `exec`/`read_file`. Detalle, invariantes y
+tests en **[`AUTOPSY_CLINE.md`](./AUTOPSY_CLINE.md)** §8.

@@ -72,6 +72,7 @@ def test_edit_tool_str_replace():
     try:
         r = asyncio.run(reg.dispatch("edit", {"path": f, "old": "dos", "new": "DOS"}, scope=scope))
         assert "editado" in str(r)
+        assert "```diff" in str(r) and "-2: dos" in str(r) and "+2: DOS" in str(r)
         assert "DOS" in pathlib.Path(f).read_text(encoding="utf-8")
     finally:
         remove_path(f)

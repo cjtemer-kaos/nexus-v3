@@ -13,11 +13,18 @@ Pipeline:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Any
+
+from .compaction_budget import (
+    build_budget_projection,
+    find_latest_typed_user_message_index,
+    is_turn_start_message,
+)
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -60,26 +67,25 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4 if text else 0
 
 
-def _estimate_messages_tokens(messages: list[dict]) -> int:
+def _estimate_one(m: dict) -> int:
+    """Tokens de UN mensaje. Sumar esto da el total de _estimate_messages_tokens."""
     total = 0
-    for m in messages:
-        c = m.get("content")
-        if c is None:
-            continue
-        if isinstance(c, str):
-            total += estimate_tokens(c)
-        elif isinstance(c, list):
-            for part in c:
-                if isinstance(part, dict) and "text" in part:
-                    total += estimate_tokens(part["text"])
-                elif isinstance(part, str):
-                    total += estimate_tokens(part)
-        # tool_calls also consume tokens
-        if m.get("tool_calls"):
-            total += len(str(m["tool_calls"])) // 4
-    # overhead per message
-    total += len(messages) * 4
-    return total
+    c = m.get("content")
+    if isinstance(c, str):
+        total += estimate_tokens(c)
+    elif isinstance(c, list):
+        for part in c:
+            if isinstance(part, dict) and "text" in part:
+                total += estimate_tokens(part["text"])
+            elif isinstance(part, str):
+                total += estimate_tokens(part)
+    if m.get("tool_calls"):
+        total += len(str(m["tool_calls"])) // 4
+    return total + 4
+
+
+def _estimate_messages_tokens(messages: list[dict]) -> int:
+    return sum(_estimate_one(m) for m in messages)
 
 
 def _content_str(m: dict) -> str:
@@ -145,6 +151,11 @@ class CompactionPipeline:
         self.summary_min_tokens: int = int(summary_cfg.get("min_tokens", 2000))
         self.summary_max_tokens: int = int(summary_cfg.get("max_tokens", 12000))
         self.summary_ratio: float = float(summary_cfg.get("ratio", 0.20))
+        # Techo del material que se manda al summarizer (Cline presupuesta el
+        # request del resumen; sin esto, un historial enorme overflowea al
+        # modelo barato que resume). 0 = sin techo explicito.
+        self.summary_input_max_tokens: int = int(
+            summary_cfg.get("input_max_tokens", 24000))
         self.summary_min_progress: int = int(
             summary_cfg.get("minimum_progress_messages", 2))
         self.summary_failure_cooldown_s: float = float(
@@ -203,12 +214,28 @@ class CompactionPipeline:
 
         # L4 Summary — requires LLM; if still over limit, mark and attempt via cheap model if router available
         if include_summary_fallback and _estimate_messages_tokens(out) > limit:
-            # Try to summarize middle section via cheap model if we have a router reference
-            # For now, apply aggressive snip as fallback; caller can do LLM summary externally
+            # Proyeccion determinista (port de Cline budget-projection): protege
+            # prompts tipados, el live tail y los pares tool_use/tool_result.
+            # Reemplaza el snip ciego, que podia orphanar un tool o borrar el
+            # pedido actual. Si no alcanza con las protecciones, cae al fallback.
             before = _estimate_messages_tokens(out)
-            out = self._summary_fallback(out, limit)
+            projection = build_budget_projection(
+                out,
+                target_tokens=max(1, int(limit)),
+                policy_intent="basic_compaction_projection",
+                estimate_message_tokens=_estimate_one,
+            )
+            if projection.status == "ok":
+                out = projection.messages
+                detail = (
+                    f"proyeccion determinista: {len(projection.actions)} acciones, "
+                    f"{projection.estimated_tokens} tokens"
+                )
+            else:
+                out = self._summary_fallback(projection.messages, limit)
+                detail = "fallback agresivo; la proyeccion no alcanzo con protecciones"
             after = _estimate_messages_tokens(out)
-            lm = LayerMetrics(name="summary", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail="fallback aggressive snip; use summarize_with_llm for LLM summary")
+            lm = LayerMetrics(name="summary", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail=detail)
             metrics.layers.append(lm)
             metrics.layers_applied.append("summary")
 
@@ -248,6 +275,14 @@ class CompactionPipeline:
             return await self.compact(original, limit)
         middle = rest[: -self.keep_recent]
         recent = rest[-self.keep_recent:]
+        middle_count = len(middle)
+        # Cline nunca resume el ultimo prompt tipado: si quedo en `middle`
+        # (p.ej. el loop lleva muchas tools desde que el usuario hablo), se
+        # reinyecta textual para que el resumen no se lo coma.
+        latest_prompt = next(
+            (m for m in reversed(rest) if isinstance(m, dict) and is_turn_start_message(m)),
+            None,
+        )
 
         # Resumen previo: lo pasa el loop o se recupera del historial.
         prev = str(previous_summary or "").strip()
@@ -272,7 +307,7 @@ class CompactionPipeline:
         if prev and progress_messages < self.summary_min_progress:
             out = self._build_summary_output(
                 system_msgs, prev, recent, reused=True, limit=limit,
-                omitted=len(middle))
+                omitted=middle_count, latest_prompt=latest_prompt)
             if out is not None:
                 self._record_summary_metric(metrics, original, out, "reuse")
                 return out, metrics
@@ -294,6 +329,23 @@ class CompactionPipeline:
 
             # El material de entrada debe ser mayor que el resumen objetivo.
             middle_chars = max(12000, min(200000, budget * 8))
+            # Presupuesto del request del summarizer (Cline agentic-compaction):
+            # el modelo barato que resume tambien tiene ventana. Proyectamos el
+            # middle a un techo y serializamos desde ahi.
+            if self.summary_input_max_tokens > 0 and middle:
+                input_target = max(
+                    1024,
+                    min(self.summary_input_max_tokens,
+                        max(self.summary_min_tokens, budget) * 4),
+                )
+                projected = build_budget_projection(
+                    middle,
+                    target_tokens=input_target,
+                    policy_intent="agentic_summary",
+                    estimate_message_tokens=_estimate_one,
+                )
+                middle = projected.messages
+                middle_chars = max(4096, min(middle_chars, input_target * 4))
             middle_text = "\n".join(
                 f"[{_msg_role(m)}] {_msg_content(m)[:2000]}" for m in middle
             )[:middle_chars]
@@ -332,7 +384,7 @@ class CompactionPipeline:
                 raise ValueError("resumen vacio")
             out = self._build_summary_output(
                 system_msgs, summary_text, recent, reused=False, limit=limit,
-                omitted=len(middle))
+                omitted=middle_count, latest_prompt=latest_prompt)
             if out is None:
                 return await self.compact(original, limit)
             self._summary_failed_at = 0.0
@@ -346,6 +398,7 @@ class CompactionPipeline:
     def _build_summary_output(
         self, system_msgs: list[Any], summary_text: str, recent: list[Any], *,
         reused: bool, limit: int, omitted: int = 0,
+        latest_prompt: Any | None = None,
     ) -> list[Any] | None:
         """Arma system + handoff + resumen + recent, recortando recent al limite."""
         prefix: list[Any] = list(system_msgs)
@@ -371,10 +424,38 @@ class CompactionPipeline:
             if budget <= 16:
                 break
         kept.reverse()
+        if latest_prompt is not None and not any(
+            m is latest_prompt or m == latest_prompt for m in kept
+        ):
+            # El pedido actual tiene prioridad sobre `recent`, pero si el solo
+            # no entra en el limite se recorta (con aviso) en vez de perderlo.
+            available = max(
+                32,
+                max(1, int(limit))
+                - _estimate_messages_tokens(prefix)
+                - _estimate_messages_tokens(kept),
+            )
+            if _estimate_one(latest_prompt) > available:
+                cut = max(16, available * 4 - 32)
+                latest_prompt = _replace_msg_content(
+                    latest_prompt,
+                    _msg_content(latest_prompt)[:cut]
+                    + "\n[...prompt recortado para entrar en el resumen]",
+                )
+            kept.insert(0, latest_prompt)
         out = prefix + kept
-        if _estimate_messages_tokens(out) > max(1, int(limit)) * 2:
+        # Garantia dura: el output del resumen tambien pasa por proyeccion.
+        # Antes solo se rechazaba si superaba 2x el limite, asi que un resumen
+        # "valido" podia disparar overflow en el request siguiente.
+        projection = build_budget_projection(
+            out,
+            target_tokens=max(1, int(limit)),
+            policy_intent="agentic_summary",
+            estimate_message_tokens=_estimate_one,
+        )
+        if projection.status != "ok":
             return None
-        return out
+        return projection.messages
 
     def summary_budget(self, limit: int) -> int:
         """Presupuesto: max(min_tokens, limit*ratio), con techo max_tokens."""
@@ -483,6 +564,12 @@ class CompactionPipeline:
         if len(rest) <= self.keep_recent:
             return messages
         start = len(rest) - self.keep_recent
+        # Nunca cortar el ultimo prompt tipado (invariante de Cline
+        # `findCutIndex`): si el loop lleva muchas tools desde que el usuario
+        # hablo, el snip ciego lo mandaba al medio y el resumen se lo comia.
+        latest_prompt = find_latest_typed_user_message_index(rest)
+        if latest_prompt >= 0 and start > latest_prompt:
+            start = latest_prompt
         # Nunca dejar un `tool` huérfano: si el primer mensaje retenido es un
         # resultado, retrocedemos hasta su `assistant(tool_calls)` (si no, el
         # proveedor rechaza el historial o el resultado queda sin contexto).
@@ -596,6 +683,18 @@ class CompactionPipeline:
                     continue
         target = int(limit * 0.60) if limit else 8000
         compacted, _ = await self.compact(messages, target)
+        # Cline exige que el request de recovery sea ESTRICTAMENTE menor antes
+        # de reintentar: reintentar con el mismo tamano vuelve a fallar y quema
+        # un turno. Longitud serializada es un proxy lineal suficiente.
+        try:
+            before = len(json.dumps(messages, ensure_ascii=False, default=str))
+            after = len(json.dumps(compacted, ensure_ascii=False, default=str))
+        except Exception:
+            before = after = 0
+        if before and after >= before:
+            raise RuntimeError(
+                "reactive_compact no pudo reducir el request; no se reintenta "
+                "(nada recortable fuera de las protecciones)")
         return compacted
 
     def estimate_tokens_for_messages(self, messages: list[dict]) -> int:

@@ -160,6 +160,9 @@ compaction:
     min_tokens: 2000
     ratio: 0.20
     max_tokens: 12000
+    # Techo del material enviado al summarizer (Cline agentic-compaction).
+    # Evita overflowear al modelo barato cuando el historial es enorme.
+    input_max_tokens: 24000
     # No re-resumir si hubo poco progreso desde el resumen anterior.
     minimum_progress_messages: 2
     # Tras un fallo del LLM de resumen, no reintentar por 10 min.

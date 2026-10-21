@@ -3523,7 +3523,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         start = max(0, int(offset or 0))
         n = max(0, int(limit or 0))
         if start == 0 and n == 0:
-            return text
+            from src.core.text_limits import truncate_head_tail
+            return truncate_head_tail(text, 48000, label=f"contenido de {path}")
         lines = text.splitlines(keepends=True)
         chunk = lines[start:start + n] if n > 0 else lines[start:]
         end = start + len(chunk)
@@ -3531,7 +3532,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if start + len(chunk) < len(lines):
             header += f"; seguí con offset={end}"
         header += "]\n"
-        return header + "".join(chunk)
+        from src.core.text_limits import truncate_head_tail
+        return header + truncate_head_tail(
+            "".join(chunk), 48000, label=f"lectura de {path}")
 
     def write_file_tool(path: str, content: str) -> str:
         """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
@@ -3596,7 +3599,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             if crlf:
                 new_text = new_text.replace("\n", "\r\n")
             p.write_text(new_text, encoding="utf-8")
-            return f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+            from src.core.diffutil import line_diff
+            _diff = line_diff(text, new_text)
+            _res = f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+            return f"{_res}\n{_diff}" if _diff else _res
 
         if _auto_apply_mode(cfg) == "approve":
             _ctx = getattr(registry, "approval", None)
@@ -3688,20 +3694,19 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
     async def exec_tool(command: str, cwd: str = "", timeout: int = 15) -> str:
         """Ejecuta un shell command jail-ado en cwd (strip + Scope). Usa la blocklist unica. Devuelve stdout+stderr."""
-        import subprocess as _sp
+        from src.core.process_tree import run_shell_capture
         cmd = _validate_command(command)
         cwd_p = _resolve_exec_cwd(cwd)
         _jail = _exec_jail(cmd, cwd_p, scope)
         if _jail is not None:
             raise PermissionError(_jail)
         timeout = max(1, min(60, int(timeout)))
-        proc = await asyncio.to_thread(_sp.run, cmd, shell=True, cwd=str(cwd_p), capture_output=True, text=True, timeout=timeout)
-        out = (proc.stdout or "") + (proc.stderr or "")
-        if len(out) > 20000:
-            out = out[:20000] + "\n... [truncado]"
-        if proc.returncode != 0 and not out.strip():
-            out = f"[exit {proc.returncode}]"
-        return out or f"[exit {proc.returncode} sin salida]"
+        rc, out = await run_shell_capture(cmd, cwd_p, timeout)
+        from src.core.text_limits import truncate_head_tail
+        out = truncate_head_tail(out, 20000, label="salida del comando")
+        if rc != 0 and not out.strip():
+            out = f"[exit {rc}]"
+        return out or f"[exit {rc} sin salida]"
 
     registry.register_function(read_file_tool, name="read_file",
         description="Lee un archivo de texto y devuelve su contenido. Para archivos grandes usá offset/limit (paginado por líneas).",
@@ -3729,66 +3734,133 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "required": ["path", "old", "new"], "additionalProperties": False})
 
     def apply_patch_tool(patch: str, dry_run: bool = False, confirm: bool = False) -> str:
-        """Aplica un parche multi-archivo de forma ATÓMICA.
+        """Aplica un parche multi-archivo de forma ATÓMICA (port de Cline).
 
-        Formato: `*** Begin Patch` + uno o más `*** Update File: <ruta>` con hunks que
-        empiezan en `@@` y líneas ` `/`-`/`+`. Valida TODOS los hunks antes de escribir;
-        si uno falla no toca nada. dry_run=true solo valida.
+        Formato: `*** Begin Patch` + `*** Update File:`, `*** Add File:`,
+        `*** Delete File:` y `*** Move to:`. Los hunks empiezan en `@@`. El
+        matching de contexto es difuso (puntuacion Unicode, espacios finales,
+        similitud >= 0.66) y se reporta fuzz. Valida TODOS los archivos antes de
+        escribir; si uno falla no toca nada. dry_run=true solo valida.
         """
         import json as _json
-        scope.check_tool("apply_patch", {"patch": patch, "confirm": confirm})
-        blocks = _parse_apply_patch(patch or "")
-        if not blocks:
-            raise ValueError("parche vacío o sin bloques '*** Update File:'")
+        from src.core.apply_patch import (
+            DiffError,
+            PatchActionType,
+            compute_patch_changes,
+            patch_operation_paths,
+        )
 
-        # Fase 1: validar todo en memoria (sin escribir).
-        staged: dict[str, tuple] = {}
-        for path, hunks in blocks:
-            p = scope.check_path(path)
-            if not p.is_file():
-                raise FileNotFoundError(f"no existe o no es archivo: {path}")
-            text = p.read_text(encoding="utf-8", errors="replace")
-            crlf = "\r\n" in text
-            cur = text.replace("\r\n", "\n")
-            for i, (old, new) in enumerate(hunks, 1):
-                old_c = old.replace("\r\n", "\n")
-                new_c = new.replace("\r\n", "\n")
-                cnt = cur.count(old_c)
-                if cnt != 1:
-                    raise ValueError(
-                        f"{path} hunk #{i}: el bloque OLD coincide {cnt} veces (se requiere 1). "
-                        f"Leé el archivo y agregá contexto; no se escribió nada.")
-                cur = cur.replace(old_c, new_c, 1)
-            staged[path] = (p, cur.replace("\n", "\r\n") if crlf else cur)
+        scope.check_tool("apply_patch", {"patch": patch, "confirm": confirm})
+        if not (patch or "").strip():
+            raise ValueError("parche vacío")
+        try:
+            operations = patch_operation_paths(patch)
+        except DiffError as e:
+            raise ValueError(str(e)) from e
+        if not operations:
+            raise ValueError(
+                "parche sin bloques '*** Update File:', '*** Add File:' ni "
+                "'*** Delete File:'")
+
+        # Fase 1: resolver scope + leer el estado actual (sin escribir).
+        resolved: dict[str, Path] = {}
+        current_files: dict[str, str] = {}
+        for op, rel_path in operations:
+            p = scope.check_path(rel_path)
+            resolved[rel_path] = p
+            if op in (PatchActionType.UPDATE, PatchActionType.DELETE):
+                if not p.is_file():
+                    raise FileNotFoundError(f"no existe o no es archivo: {rel_path}")
+                current_files[rel_path] = p.read_text(
+                    encoding="utf-8", errors="replace", newline="")
+            elif op is PatchActionType.ADD and p.is_file():
+                # El parser rechaza Add sobre un archivo existente; necesita verlo.
+                current_files[rel_path] = p.read_text(
+                    encoding="utf-8", errors="replace", newline="")
+
+        try:
+            result = compute_patch_changes(patch, current_files)
+        except DiffError as e:
+            # ValueError => el endpoint/tool devuelve 400 con el detalle exacto.
+            raise ValueError(str(e)) from e
+
+        # Movimientos: validar el destino tambien contra scope y no pisar archivos.
+        moves: dict[str, Path] = {}
+        for rel_path, change in result.changes.items():
+            if not change.move_path:
+                continue
+            target = scope.check_path(change.move_path)
+            if target.exists() and target.resolve() != resolved[rel_path].resolve():
+                raise FileExistsError(
+                    f"Move to: el destino ya existe: {change.move_path}")
+            moves[rel_path] = target
 
         if dry_run:
-            return _json.dumps({"ok": True, "dry_run": True, "files": list(staged),
-                                "hunks": sum(len(h) for _, h in blocks)}, ensure_ascii=False)
+            return _json.dumps({
+                "ok": True,
+                "dry_run": True,
+                "files": list(result.changes),
+                "operations": {path: change.type.value for path, change in result.changes.items()},
+                "moves": {src: str(dst) for src, dst in moves.items()},
+                "fuzz": result.fuzz,
+            }, ensure_ascii=False)
 
         # Fase 2: checkpoint + escritura; rollback completo si algo falla.
         from src.core.checkpoints import snapshot, restore
-        done: list[tuple] = []
+        written: list[tuple[Path, str]] = []
+        created: list[Path] = []
         try:
-            for path, (p, new_text) in staged.items():
-                cid = snapshot(session_id, p)
-                done.append((p, cid))
-                p.write_text(new_text, encoding="utf-8")
+            for rel_path, change in result.changes.items():
+                p = resolved[rel_path]
+                if change.type is PatchActionType.DELETE:
+                    cid = snapshot(session_id, p)
+                    written.append((p, cid))
+                    p.unlink()
+                elif change.type is PatchActionType.ADD:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    created.append(p)
+                    p.write_text(change.new_content or "", encoding="utf-8", newline="")
+                else:
+                    target = moves.get(rel_path, p)
+                    cid = snapshot(session_id, p)
+                    written.append((p, cid))
+                    if target != p and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        created.append(target)
+                    target.write_text(
+                        change.new_content or "", encoding="utf-8", newline="")
+                    if target != p:
+                        p.unlink()
         except Exception as e:
-            for p, cid in reversed(done):
+            for target in reversed(created):
+                try:
+                    if target.exists():
+                        target.unlink()
+                except Exception:
+                    pass
+            for original_path, cid in reversed(written):
                 if cid:
                     try:
                         restore(session_id, cid)
                     except Exception:
                         pass
             raise RuntimeError(f"apply_patch falló y se revirtió todo: {e}") from e
-        return _json.dumps({"ok": True, "files": list(staged),
-                            "hunks": sum(len(h) for _, h in blocks)}, ensure_ascii=False)
+
+        return _json.dumps({
+            "ok": True,
+            "files": list(result.changes),
+            "operations": {path: change.type.value for path, change in result.changes.items()},
+            "moves": {src: str(dst) for src, dst in moves.items()},
+            "fuzz": result.fuzz,
+        }, ensure_ascii=False)
 
     registry.register_function(apply_patch_tool, name="apply_patch",
         description=("Aplica un parche multi-archivo atómico (formato '*** Begin Patch' / "
-                     "'*** Update File: ruta' / hunks '@@' con líneas ' ', '-' y '+'). "
-                     "Valida todos los hunks antes de escribir; si uno falla, no cambia nada. "
-                     "dry_run=true solo valida."),
+                     "'*** Update File: ruta' / '*** Add File: ruta' / '*** Delete File: ruta' / "
+                     "'*** Move to: ruta' / hunks '@@' con líneas ' ', '-' y '+'). "
+                     "El contexto matchea difuso (puntuación Unicode, espacios finales, "
+                     "similitud >= 0.66) y devuelve `fuzz`. Valida todos los archivos antes "
+                     "de escribir; si uno falla, no cambia nada. dry_run=true solo valida."),
         category="local",
         parameters={"type": "object", "properties": {
             "patch": {"type": "string", "description": "Parche completo en formato *** Begin Patch"},

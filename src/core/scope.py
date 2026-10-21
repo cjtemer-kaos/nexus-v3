@@ -102,6 +102,11 @@ NETWORK_TOOLS = frozenset({
     "fetch", "webfetch", "brave_search", "websearch",
 })
 
+# En read_only permitimos estas tools SOLO si el guard determina que el comando
+# no modifica archivos (port de command-guard de Cline). No incluye pty_exec:
+# una shell interactiva puede mutar por caminos que el guard no ve.
+SHELL_TOOLS = frozenset({"exec", "terminal", "bash", "sh", "run_command"})
+
 # Secretos que NINGÚN preset (ni siquiera `permission: full`) puede leer.
 # Se UNEN a `deny_patterns` en vez de reemplazarse: si config.yaml define su
 # propia lista, antes dejaba fuera .ssh/.aws/*.pem y el agente podía leer claves.
@@ -306,7 +311,21 @@ class Scope:
         # Permission preset gate — harness parity (Read Only / Workspace Write / Full access)
         perm = self.permission
         if perm == "read_only" and tool_name not in IDEMPOTENT_TOOLS:
-            raise ScopeDenied(f"permission read_only: herramienta bloqueada {tool_name!r} (solo lectura)")
+            if tool_name in SHELL_TOOLS:
+                # Plan mode mantiene la shell para investigar, pero solo con
+                # comandos que no escriben (git status, grep, ls...). El jail
+                # de exec sigue prohibiendo encadenar/redirigir en read_only.
+                from .command_guard import (
+                    find_file_editing_command,
+                    format_plan_mode_blocked_error,
+                )
+                raw_command = args.get("command") or args.get("cmd") or ""
+                reason = find_file_editing_command(str(raw_command))
+                if reason:
+                    raise ScopeDenied(format_plan_mode_blocked_error(reason))
+            else:
+                raise ScopeDenied(
+                    f"permission read_only: herramienta bloqueada {tool_name!r} (solo lectura)")
         # Mutating gate (opt-in): exige confirm=true en args cuando require_confirm_mutating.
         # read_only ya bloquea arriba; esto agrega confirmacion explicita a las mutantes.
         if tool_name in MUTATING_TOOLS and getattr(self.cfg, "require_confirm_mutating", False):

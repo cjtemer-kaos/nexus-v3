@@ -45,6 +45,36 @@ _READONLY_TOOLS = {
 def _parallel_tools_on() -> bool:
     return _os.environ.get("NEXUS_PARALLEL_TOOLS", "1").lower() not in ("0", "false", "no")
 
+
+# ---------------------------------------------------------------------------
+# Calibracion del estimador de tokens (port de Cline `MAX_INPUT_UNDERESTIMATE_FACTOR`).
+# El estimador `len/4` subcuenta en CJK, minificado y JSON denso. Cuando el
+# provider reporta `prompt_tokens` para el request que acabamos de mandar,
+# guardamos el factor real `actual/estimado` por sesion. El proximo turno usa
+# un presupuesto de contexto dividido por ese factor (cap 4x). Nunca afloja:
+# factor < 1 se ignora. Module-level porque AgentLoop se instancia por request.
+# ---------------------------------------------------------------------------
+_CALIBRATION: dict[str, float] = {}
+_CALIBRATION_MAX = 512
+UNDERESTIMATE_CAP = 4.0
+
+
+def record_usage_calibration(session_id: str, estimated: int, actual: int) -> None:
+    """Registra el factor de subestimacion del request recien enviado."""
+    try:
+        if not session_id or estimated <= 0 or actual <= 0:
+            return
+        factor = min(UNDERESTIMATE_CAP, max(1.0, float(actual) / float(estimated)))
+        if len(_CALIBRATION) >= _CALIBRATION_MAX and session_id not in _CALIBRATION:
+            _CALIBRATION.pop(next(iter(_CALIBRATION)), None)
+        _CALIBRATION[session_id] = factor
+    except Exception:
+        return
+
+
+def get_underestimate_factor(session_id: str) -> float:
+    return _CALIBRATION.get(session_id, 1.0)
+
 logger = logging.getLogger("nexus-agent-loop")
 
 # Re-export for callers
@@ -173,6 +203,19 @@ class AgentLoop:
         # Per-task retry/replan counters
         self._retry_counts: dict[str, int] = {}
         self._replan_counts: dict[str, int] = {}
+
+    def _effective_context_max_tokens(self, session_id: str) -> int:
+        """Presupuesto de contexto corregido por subestimacion del tokenizer.
+
+        Cline escala TODO el presupuesto (trigger, target y costos), no solo el
+        trigger: si solo bajara el trigger, la compactacion arrancaria antes pero
+        retendria demasiado y volveria a overflowear. Piso 1024 para que un
+        factor grande no deje el contexto inutilizable.
+        """
+        factor = get_underestimate_factor(session_id)
+        if factor <= 1.0:
+            return self.context_max_tokens
+        return max(1024, int(self.context_max_tokens / factor))
 
     def _persist_compaction_summary(self, session_id: str, dict_msgs: list[dict]) -> None:
         """Guarda el resumen L4 como mensaje real (durable entre reinicios)."""
@@ -734,8 +777,9 @@ class AgentLoop:
         if self.compaction is not None:
             try:
                 dict_msgs = self._to_dicts(messages)
-                # Use router to decide if we need compaction via token estimate
-                max_tokens = self.context_max_tokens
+                # Use router to decide if we need compaction via token estimate.
+                # Presupuesto corregido por el usage real del provider (Cline).
+                max_tokens = self._effective_context_max_tokens(session_id)
                 if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
                     await self._distill(session_id)
                     _limit = int(max_tokens * self.compact_threshold)
@@ -818,6 +862,13 @@ class AgentLoop:
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
                 # Poda SOLO el payload: cabeza+cola de tool results viejos.
                 _payload = self._prune_payload(messages)
+                _request_estimate = 0
+                if self.compaction is not None:
+                    try:
+                        _request_estimate = self.compaction.estimate_tokens_for_messages(
+                            self._to_dicts(_payload))
+                    except Exception:
+                        _request_estimate = 0
                 # Router.chat con fallback (o streaming token-a-token si hay on_delta)
                 if getattr(self, "_on_delta", None) is not None and hasattr(self.router, "stream"):
                     llm_resp = await self._stream_turn(_payload, openai_tools, hint, force_tools, require_vision=bool(images))
@@ -865,6 +916,12 @@ class AgentLoop:
             # 2-4 turnos y corte el run prematuramente (bug). total_tokens = observabilidad.
             usage = getattr(llm_resp, "usage", {}) or {}
             _completion = int(usage.get("completion_tokens", 0) or 0)
+            # Calibracion: el provider cuenta el prompt real (incluye tools y
+            # overhead). Si supera nuestra estimacion, el proximo presupuesto
+            # se divide por ese factor (cap 4x) para compactar a tiempo.
+            _prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            if _prompt_tokens > 0 and _request_estimate > 0:
+                record_usage_calibration(session_id, _request_estimate, _prompt_tokens)
             if not _completion:
                 _completion = len((llm_resp.content or "")) // 4
             turn_tokens = int(usage.get("total_tokens", 0) or _completion)
@@ -993,7 +1050,11 @@ class AgentLoop:
                 await _close_turn("stop")
                 break
             # ---- ACT: pre-dispatch paralelo de herramientas de SOLO LECTURA ----
-            # Las de escritura/exec quedan secuenciales (preservan orden + efectos).
+            # Solo se solapa un PREFIJO CONTIGUO de tools de lectura. Una tool
+            # mutante es una barrera: si el batch es [write, read], el read NO
+            # puede ejecutarse antes del write (Cline: executionMode + grupos
+            # adyacentes). Antes se pre-despachaban todas las read-only del batch
+            # aunque estuvieran después de una mutante, reordenando efectos.
             _pre: dict[int, Any] = {}
             try:
                 if len(_tcs) > 1 and _parallel_tools_on() and self.tools is not None:
@@ -1002,7 +1063,7 @@ class AgentLoop:
                     for _i, _tc in enumerate(_tcs):
                         _n = (_tc.name or "").lower()
                         if _n not in _READONLY_TOOLS:
-                            continue  # fail-closed: las mutantes se saltan y corren serial en orden
+                            break  # barrera: lo que sigue corre serial, en orden
                         _a = _tc.arguments
                         if isinstance(_a, str):
                             try:
@@ -1190,7 +1251,7 @@ class AgentLoop:
             if self.compaction is not None and len(messages) > 10:
                 try:
                     dict_msgs = self._to_dicts(messages)
-                    max_tokens = self.context_max_tokens
+                    max_tokens = self._effective_context_max_tokens(session_id)
                     if self.compaction.maybe_compact(dict_msgs, max_tokens):
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes

@@ -11,6 +11,43 @@ def unified(a: str, b: str, name_a: str = "a", name_b: str = "b", context: int =
     return "\n".join(difflib.unified_diff(al, bl, fromfile=name_a, tofile=name_b, lineterm="", n=context))
 
 
+def line_diff(old: str, new: str, max_lines: int = 80) -> str:
+    """Diff compacto y numerado para devolverle al modelo tras un edit.
+
+    Port de `createLineDiff` (Cline, editor.ts): recorta prefijo/sufijo comun
+    para emitir solo la region cambiada (un compare posicional ingenuo desalinea
+    todo despues de un cambio de cantidad de lineas) y reparte el presupuesto
+    entre borrados y agregados. Devuelve "" si no hay cambios.
+    """
+    old_lines = (old or "").splitlines()
+    new_lines = (new or "").splitlines()
+    start = 0
+    while (start < len(old_lines) and start < len(new_lines)
+           and old_lines[start] == new_lines[start]):
+        start += 1
+    old_end, new_end = len(old_lines), len(new_lines)
+    while (old_end > start and new_end > start
+           and old_lines[old_end - 1] == new_lines[new_end - 1]):
+        old_end -= 1
+        new_end -= 1
+    removed, added = old_end - start, new_end - start
+    if removed == 0 and added == 0:
+        return ""
+    removed_budget, added_budget = removed, added
+    if removed + added > max_lines:
+        # Reparto justo: ningun lado se come todo el presupuesto del otro.
+        removed_budget = min(removed, max((max_lines + 1) // 2, max_lines - added))
+        added_budget = min(added, max_lines - removed_budget)
+    out = ["```diff"]
+    out.extend(f"-{i + 1}: {old_lines[i]}" for i in range(start, start + removed_budget))
+    out.extend(f"+{i + 1}: {new_lines[i]}" for i in range(start, start + added_budget))
+    omitted = (removed - removed_budget) + (added - added_budget)
+    if omitted:
+        out.append(f"... diff truncado ({omitted} lineas omitidas) ...")
+    out.append("```")
+    return "\n".join(out)
+
+
 def checkpoint_diff(session_id: str, checkpoint_id: str) -> dict:
     """Diff entre el contenido del checkpoint (original) y el archivo actual."""
     from src.core.checkpoints import list_checkpoints
