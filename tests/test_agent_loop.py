@@ -69,6 +69,23 @@ def test_final_answer_no_tools():
     asyncio.run(run())
 
 
+def test_loop_result_expone_modelo_usado():
+    async def run():
+        router = ProviderRouter()
+        router.register_provider("mock", FinalAnswerProvider())
+        router.register_model(ModelRoute(id="final", provider_name="mock", tier=5))
+        loop = AgentLoop(
+            provider_router=router,
+            tool_registry=ToolRegistry(),
+            budget=IterationBudget(max_iterations=3),
+        )
+        loop.session_log = None
+        res = await loop.run(task="Hola", session_id="s", hint="simple")
+        assert res.model == "final"
+
+    asyncio.run(run())
+
+
 def test_tool_then_final():
     async def run():
         slog2 = SessionLog(":memory:")

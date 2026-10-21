@@ -170,12 +170,14 @@ GEMA_PROFILES: dict[str, GemaProfile] = {
     "scholar": GemaProfile(
         name="scholar",
         description="Investiga web, encuentra fuentes, resume.",
-        tools=("web_search", "web_navigate", "web_fetch"),
+        tools=("web_search", "web_fetch", "recall", "learn"),
         system_prompt_suffix=(
             "Eres un investigador academico. Patron citation-first:\n"
             "1. Busca primero, afirma despues.\n"
             "2. Cada hecho lleva fuente (URL, fecha).\n"
-            "3. Sintetiza multiples fuentes; no copies una sola."
+            "3. Sintetiza multiples fuentes; no copies una sola.\n"
+            "4. Antes de investigar, recupera contexto previo con recall.\n"
+            "5. Al cerrar, persisti hallazgos durables con learn (topic_key estable)."
         ),
         temperature=0.3,
     ),

@@ -148,3 +148,12 @@ def test_gema_field_and_catalog():
     assert hint_for_gema("code") == "coding"
     assert "ingeniero" in system_prompt_for_gema("code").lower()
     assert hint_for_gema("no-existe") is None
+
+
+def test_scholar_usa_tools_reales_y_persiste_hallazgos():
+    from src.core.gema_profiles import GEMA_PROFILES
+
+    prof = GEMA_PROFILES["scholar"]
+    assert "web_navigate" not in prof.tools
+    assert {"web_search", "web_fetch", "recall", "learn"} <= set(prof.tools)
+    assert "learn" in prof.system_prompt_suffix

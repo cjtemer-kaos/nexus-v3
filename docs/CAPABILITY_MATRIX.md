@@ -187,7 +187,8 @@ Implementado en la misma ronda (portabilidad: sin supuestos de hardware ni de pr
   `memory.auto_extract.enabled: false`.
 - **Subconjunto de tools por sub-agente** (`SubAgentSpec.allowed_tools`): `sub_agent(tools="a,b")`
   acota el registro del hijo; si no se especifica, se aplica un set curado por gema
-  (`scholar` = solo lectura+web, `code`/`engineer` = FS+shell, `debugger` = lectura+shell).
+  (`scholar` = lectura+web+memoria (`recall`/`learn`), `code`/`engineer` = FS+shell,
+  `debugger` = lectura+shell).
   El executor del spawner transporta el dato de forma **compatible**: solo pasa `allowed_tools`
   si la firma lo declara. Menos tools = menos superficie de error y menos tokens de esquema.
 

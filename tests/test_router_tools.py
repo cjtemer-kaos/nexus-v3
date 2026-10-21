@@ -25,6 +25,17 @@ def test_resolve_never_picks_embedding_model():
     assert out.model != "nomic-embed-text"
 
 
+def test_research_rutea_a_scholar_y_no_al_director():
+    # Ids reales que registra Ollama (tag con ':'), no la variante con '-'.
+    r = _router_with(
+        ("deepseek-r1:8b", 5), ("qwen3.5-9b", 4), ("nexus-director-v6", 7),
+        ("qwen3-vl-8b", 8), ("nemotron-3-nano:4b", 1),
+    )
+    assert r.resolve(task_hint="research").model == "deepseek-r1:8b"
+    assert r.resolve(task_hint="reasoning").model == "deepseek-r1:8b"
+    assert r.resolve(task_hint="simple").model == "nemotron-3-nano:4b"
+
+
 def test_attempts_skip_embeddings_and_add_fallbacks():
     r = _router_with(("nomic-embed-text", 1), ("qwen3.5-9b", 3), ("nemotron-3-nano-4b", 3))
     att = r._attempts(None, "infer", False)

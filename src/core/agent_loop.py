@@ -133,6 +133,7 @@ class LoopResult:
     duration_ms: float = 0
     trajectory: Trajectory | None = None
     compact_metrics: Any | None = None
+    model: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -142,6 +143,7 @@ class LoopResult:
             "iterations": self.iterations,
             "total_tokens": self.total_tokens,
             "duration_ms": round(self.duration_ms, 1),
+            "model": self.model,
             "steps": [
                 {"iteration": s.iteration, "phase": s.phase, "content": s.content[:2000], "tool_used": s.tool_used, "result": s.result.output[:2000] if s.result else None}
                 for s in self.steps
@@ -610,6 +612,7 @@ class AgentLoop:
         except Exception:
             pass
         self._req_model = model  # type: ignore[attr-defined]
+        self._resp_model_last = ""  # type: ignore[attr-defined]
         self._on_delta = on_delta  # type: ignore[attr-defined]
         self._on_reasoning = on_reasoning  # type: ignore[attr-defined]
         # P0 prompt-cache stickiness: fija el modelo UNA vez por run (si no se pidió uno)
@@ -1043,6 +1046,8 @@ class AgentLoop:
 
             # Trajectory
             _resp_model = getattr(llm_resp, "model", "") or ""
+            if _resp_model:
+                self._resp_model_last = _resp_model  # type: ignore[attr-defined]
             if llm_resp.has_tool_calls:
                 for tc in llm_resp.tool_calls:
                     trajectory.append_assistant(assistant_content, iteration=iteration, tool_name=tc.name, tool_call_id=tc.id, tool_args=tc.arguments, turn=iteration, step="assistant", tokens=turn_tokens, model=_resp_model)
@@ -1344,6 +1349,7 @@ class AgentLoop:
             total_tokens=total_tokens,
             duration_ms=duration_ms,
             trajectory=trajectory,
+            model=self._resp_model_last or self._req_model or "",
         )
 
     def _classify_error(self, tool: str, err: str) -> ErrorAction:

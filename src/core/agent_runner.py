@@ -369,7 +369,7 @@ class AgentRunner:
         m = re.search(r'([a-z_]+)\s*\(([^)]*)\)', text, re.IGNORECASE)
         if m:
             tool_name = m.group(1)
-            known_tools = {"research_scholar", "web_search", "web_fetch", "read_file", "write_file",
+            known_tools = {"web_search", "web_fetch", "read_file", "write_file",
                           "execute_command", "list_dir", "search_files", "find_files", "browser"}
             if tool_name in known_tools:
                 args_str = m.group(2)
@@ -388,7 +388,7 @@ class AgentRunner:
         m = re.search(r'`([a-z_]+)`', text, re.IGNORECASE)
         if m:
             tool_name = m.group(1)
-            known_tools = {"research_scholar", "web_search", "web_fetch", "read_file", "write_file",
+            known_tools = {"web_search", "web_fetch", "read_file", "write_file",
                           "execute_command", "list_dir", "search_files", "find_files", "browser"}
             if tool_name in known_tools:
                 # Try to extract arguments from the text

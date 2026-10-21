@@ -4773,7 +4773,7 @@ async def _learning_record(task: str, session_id: str, result,
         await get_learning_service().record_turn(
             task=task,
             output=getattr(result, "final_output", "") or "",
-            model=model or hint or "unknown",
+            model=getattr(result, "model", "") or model or "unknown",
             success=bool(getattr(result, "success", False)),
             session_id=session_id,
             tokens=int(getattr(result, "total_tokens", 0) or 0),
@@ -5141,6 +5141,7 @@ async def chat(request: Request):
             "permission": perm_snap,
             "agent": (_agent_cfg or {}).get("id"),
             "success": result.success,
+            "model": result.model,
             "iterations": result.iterations,
             "steps": [
                 {"iteration": s.iteration, "phase": s.phase, "content": s.content, "tool_used": s.tool_used}

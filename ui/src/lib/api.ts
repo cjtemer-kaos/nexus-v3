@@ -21,12 +21,15 @@ export async function getBackendUrl(): Promise<string> {
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const base = await getBackendUrl();
   const url = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
+  // El backend local no manda Cache-Control: sin no-store Chromium reusa
+  // respuestas viejas (historial sin el último mensaje, sesiones ya borradas).
+  const opts: RequestInit = { cache: "no-store", ...init };
   // If base is window.location.origin and we are on :5174 with proxy, relative path is better for CORS
   // Prefer relative when base is current origin
   if (base === window.location.origin) {
-    return fetch(path, init);
+    return fetch(path, opts);
   }
-  return fetch(url, init);
+  return fetch(url, opts);
 }
 
 /** Mensaje legible de una respuesta no-ok: usa `detail` de FastAPI si existe. */

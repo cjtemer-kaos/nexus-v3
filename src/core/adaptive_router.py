@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 _ROUTER_STORAGE = data_home() / "router_state.json"
 
 
+def canonical_model_name(name: str) -> str:
+    """Unifica el alias `:latest` de Ollama con el id que registra el router.
+
+    El router registra `qwen3.5-9b` (id de config) pero Ollama responde
+    `qwen3.5-9b:latest`. Sin esto, Thompson aprende dos modelos distintos.
+    """
+    n = (name or "").strip()
+    return n[:-len(":latest")] if n.endswith(":latest") else n
+
+
 @dataclass
 class ModelOutcome:
     alpha: float = 1.0
@@ -54,7 +64,21 @@ class ModelOutcome:
 
     @classmethod
     def from_dict(cls, d: dict) -> ModelOutcome:
-        return cls(**{k: d.get(k, v) for k, v in cls.__dataclass_fields__.items()})
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+    def merge(self, other: "ModelOutcome") -> None:
+        """Fusiona dos historiales del MISMO modelo (p.ej. `x` y `x:latest`).
+
+        alpha/beta arrancan en 1.0 (prior Beta); al sumar se descuenta un prior
+        para no contarlo dos veces.
+        """
+        self.alpha += max(0.0, other.alpha - 1.0)
+        self.beta += max(0.0, other.beta - 1.0)
+        self.total_calls += other.total_calls
+        self.total_latency_ms += other.total_latency_ms
+        self.total_cost += other.total_cost
+        self.success_count += other.success_count
+        self.last_used = max(self.last_used, other.last_used)
 
 
 @dataclass
@@ -72,7 +96,7 @@ class ModelEntry:
 
     @classmethod
     def from_dict(cls, d: dict) -> ModelEntry:
-        return cls(**{k: d.get(k, v) for k, v in cls.__dataclass_fields__.items()})
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
 
 
 DEFAULT_CATALOG: dict[str, ModelEntry] = {
@@ -124,14 +148,14 @@ class ThompsonSampler:
 
     def score(self, name: str) -> float:
         """Muestra Beta(alpha,beta) del modelo (prior 1,1 si nunca se usó)."""
-        o = self._outcomes.get(name)
+        o = self._outcomes.get(canonical_model_name(name))
         if o is None:
             return random.betavariate(1.0, 1.0)
         return o.sample()
 
     def mean(self, name: str) -> float:
         """Media esperada alpha/(alpha+beta) — determinista (para tie-break)."""
-        o = self._outcomes.get(name)
+        o = self._outcomes.get(canonical_model_name(name))
         if o is None:
             return 0.5
         return o.alpha / (o.alpha + o.beta)
@@ -170,6 +194,7 @@ class ThompsonSampler:
         return best_model
 
     def record_outcome(self, model: str, reward: float, latency_ms: float = 0, cost: float = 0):
+        model = canonical_model_name(model)
         with self._lock:
             if model not in self._outcomes:
                 self._outcomes[model] = ModelOutcome()
@@ -215,7 +240,12 @@ class ThompsonSampler:
                 with open(_ROUTER_STORAGE) as f:
                     data = json.load(f)
                 for name, d in data.get("outcomes", {}).items():
-                    self._outcomes[name] = ModelOutcome.from_dict(d)
+                    canon = canonical_model_name(name)
+                    loaded = ModelOutcome.from_dict(d)
+                    if canon in self._outcomes:
+                        self._outcomes[canon].merge(loaded)
+                    else:
+                        self._outcomes[canon] = loaded
                 for name, d in data.get("catalog", {}).items():
                     if name in self._catalog:
                         self._catalog[name] = ModelEntry.from_dict(d)
