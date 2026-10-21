@@ -6,6 +6,7 @@ Single SQLite file: data/session.db with WAL + FTS5 + branching.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -105,6 +106,19 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
+
+CREATE TABLE IF NOT EXISTS compaction_state (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  updated_at TEXT NOT NULL,
+  tokens_before INTEGER DEFAULT 0,
+  tokens_after INTEGER DEFAULT 0,
+  saved INTEGER DEFAULT 0,
+  layers TEXT DEFAULT '[]',
+  actions INTEGER DEFAULT 0,
+  summary_message_id INTEGER,
+  summary TEXT DEFAULT '',
+  count INTEGER DEFAULT 1
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(
   content,
@@ -454,6 +468,65 @@ class SessionLog:
             return None
         return {"id": row[0], "role": row[1], "content": row[2], "tool_call_id": row[3],
                 "tool_name": row[4], "tokens": row[5], "model": row[6], "created_at": row[7]}
+
+    def save_compaction_state(self, session_id: str, *, tokens_before: int = 0,
+                              tokens_after: int = 0, saved: int = 0,
+                              layers: list[str] | None = None, actions: int = 0,
+                              summary: str = "",
+                              summary_message_id: int | None = None) -> dict:
+        """Persiste el estado de la ultima compactacion (sobrevive reinicios).
+
+        El resumen ya era durable como mensaje (`compact_mark`); esto agrega
+        metricas y un fallback de resumen para cuando el mensaje no se puede
+        recuperar (p.ej. sesion importada o mensaje purgado).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        layers_json = json.dumps([str(x) for x in (layers or [])], ensure_ascii=False)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO compaction_state(session_id, updated_at, tokens_before, tokens_after,"
+                " saved, layers, actions, summary_message_id, summary, count)"
+                " VALUES (?,?,?,?,?,?,?,?,?,1)"
+                " ON CONFLICT(session_id) DO UPDATE SET"
+                " updated_at=excluded.updated_at, tokens_before=excluded.tokens_before,"
+                " tokens_after=excluded.tokens_after, saved=excluded.saved,"
+                " layers=excluded.layers, actions=excluded.actions,"
+                " summary_message_id=COALESCE(excluded.summary_message_id,"
+                " compaction_state.summary_message_id),"
+                " summary=CASE WHEN excluded.summary<>'' THEN excluded.summary"
+                " ELSE compaction_state.summary END,"
+                " count=compaction_state.count+1",
+                (session_id, now, int(tokens_before), int(tokens_after), int(saved),
+                 layers_json, int(actions), summary_message_id, summary or ""),
+            )
+        return self.get_compaction_state(session_id) or {}
+
+    def get_compaction_state(self, session_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT session_id, updated_at, tokens_before, tokens_after, saved,"
+                " layers, actions, summary_message_id, summary, count"
+                " FROM compaction_state WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            layers = json.loads(row[5] or "[]")
+        except Exception:
+            layers = []
+        return {
+            "session_id": row[0],
+            "updated_at": row[1],
+            "tokens_before": row[2],
+            "tokens_after": row[3],
+            "saved": row[4],
+            "layers": layers if isinstance(layers, list) else [],
+            "actions": row[6],
+            "summary_message_id": row[7],
+            "summary": row[8] or "",
+            "count": row[9],
+        }
 
     def get_messages_from(self, session_id: str, after_id: int = 0,
                           limit: int = 10000) -> list[dict]:

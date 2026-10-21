@@ -12,6 +12,43 @@ from __future__ import annotations
 DEFAULT_MAX_CHARS = 20_000
 
 
+def cap_json_list(payload: dict, key: str, max_chars: int = 48_000,
+                  *, hint: str = "") -> str:
+    """Serializa un dict recortando la lista `key` desde el final.
+
+    A diferencia de `truncate_head_tail`, conserva JSON valido: el modelo puede
+    parsearlo. Se usa en list_dir/glob/code_search, donde una lista enorme
+    cuesta tokens en cada request posterior.
+    """
+    import json
+
+    def _dump(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+
+    text = _dump(payload)
+    if len(text) <= max_chars:
+        return text
+    items = payload.get(key)
+    if not isinstance(items, list) or not items:
+        return truncate_head_tail(text, max_chars, label=f"JSON ({key})")
+
+    lo, hi, best = 0, len(items), 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = {**payload, key: items[:mid], "truncated": True}
+        if hint:
+            candidate["hint"] = hint
+        if len(_dump(candidate)) <= max_chars:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    out = {**payload, key: items[:best], "truncated": True}
+    if hint:
+        out["hint"] = hint
+    return _dump(out)
+
+
 def truncate_head_tail(text: str, max_chars: int = DEFAULT_MAX_CHARS, *, label: str = "salida") -> str:
     """Recorta el medio y conserva inicio+final, con aviso accionable."""
     text = text or ""

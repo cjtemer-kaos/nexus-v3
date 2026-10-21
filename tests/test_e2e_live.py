@@ -39,7 +39,9 @@ def test_tools_registry_complete():
     tools = reg.to_openai_tools()
     names = [t["function"]["name"] for t in tools]
     for n in ["read_file", "write_file", "edit", "list_dir", "exec", "gema_run", "agent_run",
-              "agent_create", "gema_list", "agent_list", "learn", "recall", "web_search", "mcp_list", "mcp_call"]:
+              "agent_create", "gema_list", "agent_list", "learn", "recall", "web_search", "mcp_list", "mcp_call",
+              "apply_patch", "team_spawn", "team_await", "team_mailbox", "team_list",
+              "checkpoint_create", "checkpoint_list", "checkpoint_diff", "checkpoint_restore"]:
         assert n in names, n
     # schemas validos + tipos integer (from __future__ annotations)
     for t in tools:
@@ -324,6 +326,40 @@ def test_sub_agent_tools_registered():
     scope = _build_scope(cfg)
     names = [t.name for t in _build_registry(scope, "x", cfg).list()]
     assert "sub_agent" in names and "sub_agent_message" in names and "sub_agent_list" in names
+    assert {"team_spawn", "team_await", "team_mailbox", "team_list"} <= set(names)
+
+
+def test_hooks_and_git_checkpoints_endpoints():
+    r = client.get("/api/hooks")
+    assert r.status_code == 200
+    data = r.json()
+    assert "handlers" in data and "file_hooks" in data and "file_hooks_dir" in data
+
+    r = client.get("/api/checkpoints/git", params={"session_id": "sin-checkpoints"})
+    assert r.status_code == 200
+    assert r.json().get("checkpoints") == []
+
+    assert client.post("/api/checkpoints/git/restore", json={}).status_code == 400
+    r = client.post("/api/checkpoints/git/restore",
+                    json={"session_id": "sin-checkpoints", "checkpoint_id": "deadbeef", "confirm": True})
+    assert r.status_code == 404
+
+
+def test_compaction_state_endpoint_roundtrip():
+    from src.api.server import _session_log
+    log = _session_log()
+    sid = "e2e-compact-state"
+    if log.get_session(sid) is None:
+        log.create_session(project="test", session_id=sid)
+    log.save_compaction_state(sid, tokens_before=900, tokens_after=300, saved=600,
+                              layers=["snip", "summary"], summary="[resumen de contexto] e2e")
+    r = client.get("/api/compaction/state", params={"session_id": sid})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == sid
+    assert body["state"]["tokens_before"] >= 900
+    assert body["state"]["layers"] == ["snip", "summary"]
+    assert client.get("/api/compaction/state").status_code == 400
 
 
 def test_mcp_server_handle():

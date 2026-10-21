@@ -215,6 +215,13 @@ def _build_hooks(cfg: dict):
                         continue
                 return HookResult(action=HookAction.CONTINUE)
             hooks.on("pre_tool_use", _scan_tool)
+    try:
+        from src.core.file_hooks import install_file_hooks
+        count = install_file_hooks(hooks, _PROJECT_ROOT, (cfg or {}).get("hooks", {}) or {})
+        hooks.file_hooks_count = count  # type: ignore[attr-defined]
+        hooks.file_hooks_dir = str(((cfg or {}).get("hooks", {}) or {}).get("files", {}).get("dir", ".nexus/hooks"))  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.warning("hooks por archivo no cargados: %s", e)
     return hooks
 
 
@@ -2300,6 +2307,62 @@ async def checkpoints_diff(checkpoint_id: str, session_id: str = ""):
     return checkpoint_diff(session_id, checkpoint_id)
 
 
+@app.get("/api/checkpoints/git")
+async def git_checkpoints_list(session_id: str = "", limit: int = 20):
+    from src.core.git_checkpoints import list_git_checkpoints
+    return {"checkpoints": list_git_checkpoints(
+        session_id, limit=max(1, min(200, int(limit or 20))))}
+
+
+@app.post("/api/checkpoints/git")
+async def git_checkpoints_create(request: Request):
+    body = await _json_body(request)
+    session_id = str(body.get("session_id") or "").strip()
+    message = str(body.get("message") or "").strip()
+    from src.core.git_checkpoints import create_git_checkpoint
+    res = create_git_checkpoint(session_id, message)
+    if not res.get("ok"):
+        raise HTTPException(status_code=500, detail=str(res.get("error") or "checkpoint falló"))
+    return res
+
+
+@app.post("/api/checkpoints/git/restore")
+async def git_checkpoints_restore(request: Request):
+    body = await _json_body(request)
+    session_id = str(body.get("session_id") or "").strip()
+    checkpoint_id = str(body.get("checkpoint_id") or "").strip()
+    if not body.get("confirm"):
+        raise HTTPException(status_code=400, detail="confirm=true required")
+    from src.core.git_checkpoints import restore_git_checkpoint
+    res = restore_git_checkpoint(session_id, checkpoint_id, clean=bool(body.get("clean")))
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=str(res.get("error") or "no se pudo restaurar"))
+    return res
+
+
+@app.get("/api/compaction/state")
+async def compaction_state(session_id: str = ""):
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    try:
+        log = _session_log()
+        sess = log.get_session(session_id)
+        state = log.get_compaction_state(session_id)
+        return {"session_id": session_id,
+                "compact_count": getattr(sess, "compact_count", 0) if sess else 0,
+                "state": state}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo leer el estado: {e}")
+
+
+@app.get("/api/hooks")
+async def hooks_status():
+    try:
+        return _build_hooks(_load_config_safe()).stats()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudieron leer los hooks: {e}")
+
+
 @app.post("/api/diff")
 async def diff_endpoint(request: Request):
     body = await _json_body(request)
@@ -3428,6 +3491,30 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
     return sp
 
 
+_TEAM_RUNTIMES: dict = {}
+
+
+def _recent_context(session_id: str, per_msg: int = 300, limit: int = 6) -> str:
+    """Contexto compacto de los ultimos turnos del padre para sembrar un hijo."""
+    try:
+        recent = _session_log().get_messages(session_id, limit=limit)
+        return "\n".join(f"[{m.role}] {(m.content or '')[:per_msg]}"
+                         for m in recent if (m.content or "").strip())
+    except Exception:
+        return ""
+
+
+def _get_team(session_id: str, router, scope, cfg=None):
+    """TeamRuntime por sesion, atado al spawner vigente."""
+    from src.core.team import TeamRuntime
+    sp = _get_spawner(session_id, router, scope, cfg)
+    rt = _TEAM_RUNTIMES.get(session_id)
+    if rt is None or rt.spawner is not sp:
+        rt = TeamRuntime(sp)
+        _TEAM_RUNTIMES[session_id] = rt
+    return rt
+
+
 def _parse_apply_patch(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
     """Parsea formato `*** Begin Patch` (subconjunto de `*** Update File:`).
 
@@ -3648,8 +3735,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
             if len(entries) >= cap:
                 break
-        return _json.dumps({"path": path, "entries": entries, "truncated": len(entries) >= cap},
-                           ensure_ascii=False, indent=2)
+        from src.core.text_limits import cap_json_list
+        return cap_json_list(
+            {"path": path, "entries": entries, "truncated": len(entries) >= cap},
+            "entries", 48000,
+            hint="usá recursive=false, un subdirectorio más específico o limit menor",
+        )
 
     def glob_tool(pattern: str, path: str = ".") -> str:
         """Busca archivos por patrón glob (ej: '**/*.py') dentro del scope."""
@@ -3664,8 +3755,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             found.append(_rel(f))
             if len(found) >= 500:
                 break
-        return _json.dumps({"pattern": pattern, "path": path, "matches": found,
-                            "truncated": len(found) >= 500}, ensure_ascii=False, indent=2)
+        from src.core.text_limits import cap_json_list
+        return cap_json_list(
+            {"pattern": pattern, "path": path, "matches": found,
+             "truncated": len(found) >= 500},
+            "matches", 48000,
+            hint="afiná el patrón (ej: 'src/**/*.py') o usá code_search",
+        )
 
     def _resolve_exec_cwd(cwd: str):
         """cwd por defecto: la RAÍZ del proyecto (consistente con write_file)."""
@@ -3805,6 +3901,19 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 "fuzz": result.fuzz,
             }, ensure_ascii=False)
 
+        # Checkpoint global (tracked + untracked) antes de tocar varios archivos.
+        # Best-effort: si git no está o falla, sigue el checkpoint por archivo.
+        git_checkpoint = ""
+        try:
+            gcfg = (((cfg or {}).get("checkpoints", {}) or {}).get("git", {}) or {})
+            if gcfg.get("enabled", True) and gcfg.get("auto_before_apply_patch", True):
+                from src.core.git_checkpoints import create_git_checkpoint
+                cp = create_git_checkpoint(session_id, "before apply_patch")
+                if cp.get("ok"):
+                    git_checkpoint = str(cp.get("id") or "")
+        except Exception as e:
+            logger.debug("git checkpoint antes de apply_patch falló: %s", e)
+
         # Fase 2: checkpoint + escritura; rollback completo si algo falla.
         from src.core.checkpoints import snapshot, restore
         written: list[tuple[Path, str]] = []
@@ -3848,10 +3957,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
         return _json.dumps({
             "ok": True,
+            "dry_run": False,
             "files": list(result.changes),
             "operations": {path: change.type.value for path, change in result.changes.items()},
             "moves": {src: str(dst) for src, dst in moves.items()},
             "fuzz": result.fuzz,
+            "git_checkpoint": git_checkpoint,
         }, ensure_ascii=False)
 
     registry.register_function(apply_patch_tool, name="apply_patch",
@@ -3868,12 +3979,87 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "confirm": {"type": "boolean", "description": "Confirmación explícita si el scope la exige"}},
             "required": ["patch"], "additionalProperties": False})
 
+    def checkpoint_create_tool(message: str = "") -> str:
+        """Crea un checkpoint git global (tracked + untracked) de la sesión."""
+        import json as _json
+        scope.check_tool("checkpoint_create", {})
+        from src.core.git_checkpoints import create_git_checkpoint
+        return _json.dumps(create_git_checkpoint(session_id, message), ensure_ascii=False)
+
+    def checkpoint_list_tool(limit: int = 20) -> str:
+        """Lista los checkpoints git de la sesión (más nuevos primero)."""
+        import json as _json
+        from src.core.git_checkpoints import list_git_checkpoints
+        return _json.dumps({"checkpoints": list_git_checkpoints(
+            session_id, limit=max(1, min(200, int(limit or 20))))}, ensure_ascii=False)
+
+    def checkpoint_diff_tool(checkpoint_id: str) -> str:
+        """Muestra el diff entre el work-tree actual y un checkpoint git."""
+        import json as _json
+        from src.core.git_checkpoints import diff_git_checkpoint
+        return _json.dumps(diff_git_checkpoint(session_id, checkpoint_id),
+                           ensure_ascii=False, default=str)
+
+    def checkpoint_restore_tool(checkpoint_id: str, clean: bool = False,
+                                confirm: bool = False) -> str:
+        """Restaura el work-tree a un checkpoint git. Exige confirm=true."""
+        import json as _json
+        if not confirm:
+            raise PermissionError(
+                "checkpoint_restore requiere confirm=true (restaura archivos y, "
+                "con clean=true, borra los posteriores)")
+        scope.check_tool("checkpoint_restore", {"confirm": confirm})
+        from src.core.git_checkpoints import restore_git_checkpoint
+        return _json.dumps(restore_git_checkpoint(session_id, checkpoint_id, clean=clean),
+                           ensure_ascii=False)
+
+    registry.register_function(
+        checkpoint_create_tool, name="checkpoint_create",
+        description=("Crea un checkpoint git GLOBAL (incluye archivos untracked, "
+                     "respeta .gitignore y exclusiones) en un repo sombra, sin tocar "
+                     "el repo del usuario. Sirve como red de seguridad antes de cambios grandes."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "message": {"type": "string", "description": "Etiqueta del checkpoint"}},
+            "additionalProperties": False})
+    registry.register_function(
+        checkpoint_list_tool, name="checkpoint_list",
+        description="Lista los checkpoints git de la sesión (id, fecha, mensaje).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "limit": {"type": "integer", "description": "Máximo de checkpoints (default 20)"}},
+            "additionalProperties": False})
+    registry.register_function(
+        checkpoint_diff_tool, name="checkpoint_diff",
+        description="Diff entre el work-tree actual y un checkpoint git (incluye untracked).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "checkpoint_id": {"type": "string"}},
+            "required": ["checkpoint_id"], "additionalProperties": False})
+    registry.register_function(
+        checkpoint_restore_tool, name="checkpoint_restore",
+        description=("Restaura el work-tree al checkpoint. confirm=true obligatorio. "
+                     "clean=true borra archivos que no existían en el checkpoint "
+                     "(las exclusiones se respetan)."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "checkpoint_id": {"type": "string"},
+            "clean": {"type": "boolean", "description": "Borrar archivos posteriores (default false)"},
+            "confirm": {"type": "boolean", "description": "Confirmación explícita"}},
+            "required": ["checkpoint_id", "confirm"], "additionalProperties": False})
+
     async def code_search_tool(query: str, path: str = ".", include: str = "", limit: int = 20) -> str:
         """Busca código (ripgrep/grep) en un directorio; devuelve coincidencias archivo:línea."""
         import json as _j
         p = scope.check_path(path or ".")
         from src.tools.code_search import code_search as _cs
         res = await _cs(query, path=str(p), include=include, limit=max(1, min(50, int(limit or 20))))
+        from src.core.text_limits import cap_json_list
+        if isinstance(res, dict) and isinstance(res.get("results"), list):
+            return cap_json_list(
+                res, "results", 48000,
+                hint="bajá limit o afiná query/include para ver menos coincidencias",
+            )
         return _j.dumps(res, ensure_ascii=False)
     registry.register_function(code_search_tool, name="code_search",
                                description="Busca código (regex/texto) en el proyecto; devuelve coincidencias con archivo:línea.",
@@ -4405,6 +4591,92 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
+
+    def team_spawn_tool(task: str, name: str = "", gema: str = "auto",
+                        context: str = "", tools: str = "",
+                        mode: str = "continuable") -> str:
+        """Lanza un hijo en BACKGROUND y devuelve team_id de inmediato.
+
+        A diferencia de sub_agent (bloqueante), permite lanzar varios y seguir
+        trabajando; se recogen con team_await y se conversa con team_mailbox.
+        """
+        if router is None:
+            raise RuntimeError("team_spawn requiere router (helpers=True)")
+        import json as _json
+        from src.core.sub_agent_spawner import SubAgentSpec
+        rt = _get_team(session_id, router, scope, cfg)
+        spec = SubAgentSpec(
+            task=task, gem=gema, context=(context or _recent_context(session_id)),
+            mode=mode if mode in ("one-shot", "continuable") else "continuable",
+            allowed_tools=tuple(t.strip() for t in (tools or "").split(",") if t.strip()),
+        )
+        return _json.dumps(rt.spawn(spec, name=name), ensure_ascii=False, default=str)
+
+    async def team_await_tool(team_id: str, timeout: int = 120) -> str:
+        """Espera el resultado de un hijo lanzado con team_spawn (timeout 0 = sin límite)."""
+        import json as _json
+        if router is None:
+            raise RuntimeError("team_await requiere router (helpers=True)")
+        rt = _get_team(session_id, router, scope, cfg)
+        limit = None if int(timeout or 0) <= 0 else max(1, min(600, int(timeout)))
+        return _json.dumps(await rt.await_member(team_id, limit),
+                           ensure_ascii=False, default=str)
+
+    def team_mailbox_tool(team_id: str, message: str = "") -> str:
+        """Envía un mensaje al hijo (message no vacío) o lee su buzón (vacío)."""
+        import json as _json
+        if router is None:
+            raise RuntimeError("team_mailbox requiere router (helpers=True)")
+        rt = _get_team(session_id, router, scope, cfg)
+        if (message or "").strip():
+            return _json.dumps(rt.send(team_id, message), ensure_ascii=False)
+        return _json.dumps(rt.inbox(team_id), ensure_ascii=False)
+
+    def team_list_tool() -> str:
+        """Lista los miembros del equipo de la sesión (team_id, child_id, estado)."""
+        import json as _json
+        rt = _TEAM_RUNTIMES.get(session_id)
+        return _json.dumps(rt.list_members() if rt else [], ensure_ascii=False, default=str)
+
+    registry.register_function(
+        team_spawn_tool, name="team_spawn",
+        description=("Lanza un sub-agente en BACKGROUND (no bloquea) y devuelve team_id. "
+                     "Usá team_await para el resultado y team_mailbox para mensajes. "
+                     "Ideal para paralelizar investigación/implementación."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "task": {"type": "string"},
+            "name": {"type": "string", "description": "team_id legible (opcional)"},
+            "gema": {"type": "string"},
+            "context": {"type": "string", "description": "Contexto semilla (vacío = últimos turnos)"},
+            "tools": {"type": "string", "description": "Tools permitidas separadas por coma"},
+            "mode": {"type": "string", "enum": ["continuable", "one-shot"]}},
+            "required": ["task"], "additionalProperties": False},
+    )
+    registry.register_function(
+        team_await_tool, name="team_await",
+        description="Espera el resultado de un team_spawn (timeout en segundos, 0 = sin límite).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "team_id": {"type": "string"},
+            "timeout": {"type": "integer", "description": "Segundos (default 120)"}},
+            "required": ["team_id"], "additionalProperties": False},
+    )
+    registry.register_function(
+        team_mailbox_tool, name="team_mailbox",
+        description="Envía un mensaje al hijo (message no vacío) o lee su buzón (message vacío).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "team_id": {"type": "string"},
+            "message": {"type": "string"}},
+            "required": ["team_id"], "additionalProperties": False},
+    )
+    registry.register_function(
+        team_list_tool, name="team_list",
+        description="Lista los miembros del equipo (team_id, child_id, estado, tarea).",
+        category="local",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    )
     async def image_generate_tool(prompt: str, mode: str = "t2i", image: str = "", steps: int = 20,
                             cfg_scale: float = 2.5, negative: str = "", width: int = 1024,
                             height: int = 1024, lightning: bool = False) -> str:
@@ -4473,7 +4745,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     )
     # Sub-agentes: no registrar en hijos (evita recursión infinita).
     if not include_subagents:
-        for _n in ("sub_agent", "sub_agent_message", "sub_agent_list"):
+        for _n in ("sub_agent", "sub_agent_message", "sub_agent_list",
+                   "team_spawn", "team_await", "team_mailbox", "team_list"):
             try:
                 registry.remove(_n)
             except Exception:

@@ -156,4 +156,6 @@ class HooksEngine:
             "phases_enabled": sorted(self._phases_enabled),
             "handlers": {k: len(v) for k, v in self._handlers.items()},
             "total_handlers": self.handler_count(),
+            "file_hooks": int(getattr(self, "file_hooks_count", 0) or 0),
+            "file_hooks_dir": str(getattr(self, "file_hooks_dir", "") or ""),
         }

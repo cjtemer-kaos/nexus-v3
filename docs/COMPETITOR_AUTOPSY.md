@@ -114,3 +114,11 @@ integrada en `compaction.py`), **`apply_patch` difuso** con Add/Delete/Move y ro
 de procesos** (`src/core/process_tree.py`), barrera de paralelismo por prefijo contiguo,
 diff numerado en `edit` y truncado head+tail en `exec`/`read_file`. Detalle, invariantes y
 tests en **[`AUTOPSY_CLINE.md`](./AUTOPSY_CLINE.md)** §8.
+
+En el segundo lote se cerraron los 6 pendientes: **hooks por archivo**
+(`src/core/file_hooks.py`), **checkpoints git con untracked** en repo sombra
+(`src/core/git_checkpoints.py`), **estado de compactación persistido**
+(`compaction_state` en `session.db`), **team tools** (`src/core/team.py`),
+**UI de `apply_patch`** (`ApplyPatchResult.tsx`) y **output-limits en search/glob**
+(`cap_json_list`). Detalle, invariantes y tests en
+**[`AUTOPSY_CLINE.md`](./AUTOPSY_CLINE.md)** §8 y §10.

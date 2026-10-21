@@ -223,6 +223,22 @@ hooks:
   - session_start
   - session_end
   security_gate: true
+  # Hooks por archivo (port de Cline): scripts en .nexus/hooks/<fase>/ o
+  # .nexus/hooks/<fase>.py. Reciben el payload JSON por stdin; exit 2 bloquea.
+  # Si el directorio no existe, no se ejecuta nada.
+  files:
+    enabled: true
+    dir: .nexus/hooks
+    timeout_s: 10
+    # true = un hook que falla/timeout tambien bloquea (fail-closed).
+    fail_closed: false
+checkpoints:
+  git:
+    # Checkpoints globales en un repo sombra (incluye untracked, no toca el
+    # repo del usuario). Herramientas: checkpoint_create/list/diff/restore.
+    enabled: true
+    # Crear uno antes de apply_patch (multi-archivo). Best-effort.
+    auto_before_apply_patch: true
 reminders:
   min_every_s: 300
   max_active: 50

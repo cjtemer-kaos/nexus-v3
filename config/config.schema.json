@@ -613,6 +613,44 @@
         },
         "security_gate": {
           "type": "boolean"
+        },
+        "files": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "dir": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 120
+            },
+            "fail_closed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "checkpoints": {
+      "type": "object",
+      "properties": {
+        "git": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "auto_before_apply_patch": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

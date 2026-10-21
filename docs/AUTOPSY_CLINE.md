@@ -38,8 +38,8 @@ Eso es exactamente lo que a nexus-v3 le faltaba. La tabla siguiente prioriza por
 | 7 | `command-guard` para plan mode (shell read-only real) | `extensions/tools/command-guard.ts:479` | Plan mode bloquea `exec` entero o lo deja mutar | **Portado** |
 | 8 | Cap duro de salida de tools (head+tail con aviso accionable) | `extensions/tools/executors/output-limits.ts:18` | Outputs gigantes reenviados en cada request (costo cuadrático) | **Portado (exec)** |
 | 9 | Grupos **adyacentes** de tools paralelas; una secuencial es barrera | `agents/src/agent-runtime.ts:2343-2372` | Ejecutar en paralelo algo que dependía del resultado anterior | Ya corregido en nexus |
-| 10 | Hooks por archivo con control JSON por stdout y timeout duro | `hooks/subprocess.ts:131`, `hooks/hook-file-hooks.ts` | Hooks solo in-process, sin extensibilidad por archivo | Pendiente |
-| 11 | Checkpoints git con transacción de restore (untracked incluidos) | `session/checkpoint-restore.ts:50` | Snapshots por archivo sin restore multi-archivo consistente | Pendiente |
+| 10 | Hooks por archivo con control JSON por stdout y timeout duro | `hooks/subprocess.ts:131`, `hooks/hook-file-hooks.ts` | Hooks solo in-process, sin extensibilidad por archivo | **Portado** |
+| 11 | Checkpoints git con transacción de restore (untracked incluidos) | `session/checkpoint-restore.ts:50` | Snapshots por archivo sin restore multi-archivo consistente | **Portado (repo sombra)** |
 | 12 | Compactación agentic con presupuesto propio del summarizer | `extensions/context/agentic-compaction.ts:31` | El request del resumen también puede overflowear | **Portado** |
 
 **Conclusión:** el lote de mayor ROI es 1–5 y 7, y es el que se portó. 6 también se portó
@@ -724,9 +724,14 @@ reconocidos y dentro de las raíces permitidas.
 - El control JSON se parsea con schema; campos desconocidos se ignoran.
 - `abort` se mapea a `agent_abort` (`:625`), no a error genérico.
 
-**nexus-v3** tiene `HooksEngine` in-process con 3 gates, pero no hooks por archivo. El
-port de 10 requeriría: descubrimiento, subprocess con timeout, schema de control y
-mapeo de eventos. Es un proyecto en sí; no se hizo en este lote.
+**nexus-v3 (implementado):** `src/core/file_hooks.py` descubre scripts en
+`.nexus/hooks/<fase>/` (o `.nexus/hooks/<fase>.<ext>`), los ejecuta con
+`run_process_capture` (stdin JSON, stdout JSON, timeout y kill de árbol) y los registra en
+`HooksEngine`. Convenciones: exit 2 = STOP; exit 0 sin JSON = CONTINUE; `fail_closed`
+configurable. El directorio es opcional y debe resolver dentro del workspace. Config:
+`hooks.files.{enabled,dir,timeout_s,fail_closed}`. Tests: `tests/test_file_hooks.py`.
+La diferencia con Cline es el vocabulario de fases (las 6 del engine, no los 18 eventos) y
+que el payload no incluye secretos ni credenciales.
 
 ---
 
@@ -778,12 +783,26 @@ archivos, también la conversación.
   checkpoint no puede leer `/etc/passwd`.
 - `compareCheckpointToWorkspace` (`:171`) devuelve solo los diffs con contenido distinto.
 
-### 6.4 Lo que no se portó
+### 6.4 Lo implementado en nexus-v3
 
-nexus-v3 tiene `checkpoints.py` con snapshots por archivo y restore por id. Es más simple
-y no maneja untracked ni transacciones multi-archivo. Portar el modelo git completo es un
-proyecto L; el riesgo de romper el restore actual es alto. Queda documentado como
-candidato, no como deuda urgente.
+`src/core/git_checkpoints.py` replica el concepto con un **repo sombra** en
+`data/git_checkpoints/<sesión>` (`NEXUS_GIT_CHECKPOINTS_DIR` para cambiarlo), sin tocar el
+repo del usuario:
+
+- `git add -A` sobre un work-tree que apunta a la raíz del proyecto captura tracked +
+  untracked, respetando `.gitignore` y una lista de exclusiones (`data/`, `brain/`,
+  `node_modules/`, venvs, builds, DBs, binarios y medios);
+- el commit se crea con `commit-tree` + `update-ref HEAD`, así que no hay commits en la
+  rama del usuario ni se mueve su índice;
+- `checkpoint_list/diff/restore` (tools y `/api/checkpoints/git`); `restore` exige
+  `confirm=true` y `clean=true` borra los archivos posteriores (las exclusiones se
+  respetan);
+- `apply_patch` crea un checkpoint best-effort antes de escribir varios archivos
+  (`checkpoints.git.auto_before_apply_patch`).
+
+No se portó el tercer padre del stash ni la transacción de restore con rollback: el repo
+sombra hace innecesario el stash y el checkpoint por archivo sigue cubriendo el undo fino.
+Tests: `tests/test_git_checkpoints.py`.
 
 ---
 
@@ -939,26 +958,34 @@ Implementación: `src/core/command_guard.py` (~330 líneas) + `Scope.check_tool`
      antes de serializarlo; el `input_target` tiene piso 1024.
    - Test: historial enorme ⇒ el summarizer recibe ≤ 6k chars con target 1024.
 
-### P1 — robustez de tools (S/M)
+### P1 — robustez de tools (S/M) — **hecho**
 
-4. **`apply_patch` en la UI**: mostrar `fuzz`, warnings y `dry_run` antes de aplicar.
-5. **`output-limits` unificado**: `read_file` ya usa head+tail (48k); falta search/glob.
+4. **`apply_patch` en la UI** ✅ — `ui/src/components/chat/ApplyPatchResult.tsx` parsea el
+   JSON y muestra dry-run/aplicado, archivos por operación, fuzz y checkpoint git.
+5. **`output-limits` unificado** ✅ — `list_dir`, `glob` y `code_search` usan
+   `cap_json_list` (recorta la lista manteniendo JSON válido) con aviso accionable.
 6. **Kill de árbol en `exec`** ✅ — `src/core/process_tree.py` (`taskkill /T /F` en Windows,
    `killpg` en POSIX) con salida parcial en el error. Test de timeout incluido.
 
-### P2 — extensibilidad (M/L)
+### P2 — extensibilidad (M/L) — **hecho**
 
-7. **Hooks por archivo**: descubrimiento, subprocess con timeout 120 s, control JSON,
-   `MAX_HOOK_CONTEXT_SIZE`.
-8. **Estado de compactación persistido** en SQLite, reutilizado al reabrir sesión.
-9. **Checkpoints git**: evaluar si conviene reemplazar el snapshot por archivo o convivir
-   (snapshot por archivo para ediciones, git para restore de workspace completo).
+7. **Hooks por archivo** ✅ — `src/core/file_hooks.py`: descubrimiento, subprocess con
+   timeout, control JSON, exit 2 = STOP y `fail_closed` configurable. Test:
+   `tests/test_file_hooks.py`.
+8. **Estado de compactación persistido** ✅ — tabla `compaction_state` en `session.db`
+   (`tokens_before/after`, `saved`, capas, resumen y contador); `AgentLoop` la escribe en
+   cada compactación y `_summary_state` la usa como fallback. Endpoint:
+   `GET /api/compaction/state?session_id=`. Test: `tests/test_compaction_state.py`.
+9. **Checkpoints git** ✅ — conviven: snapshot por archivo para undo fino y repo sombra
+   para restore del workspace completo (untracked incluidos). Ver §6.4.
 
 ### P3 — no urgente
 
-10. Team tools (mailbox, `await_runs`, outcomes) sobre el board actual.
+10. **Team tools** ✅ — `src/core/team.py` + tools `team_spawn` (background), `team_await`,
+    `team_mailbox` y `team_list` sobre `SubAgentSpawner`. Test: `tests/test_team.py`.
 11. Compactación con `displayRole`/`kind` para que la UI no muestre resúmenes como
-    mensajes del usuario.
+    mensajes del usuario. **Sigue pendiente** (requiere cambiar el schema de mensajes y
+    el render de la UI).
 
 ---
 

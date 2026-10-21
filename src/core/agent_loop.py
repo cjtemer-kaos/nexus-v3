@@ -237,6 +237,32 @@ class AgentLoop:
                 logger.debug("no se pudo persistir el resumen: %s", e)
             return
 
+    def _persist_compaction_state(self, session_id: str, metrics: Any,
+                                  dict_msgs: list[dict]) -> None:
+        """Guarda metricas de compactacion (tokens, capas, resumen) en la DB."""
+        if self.session_log is None or not hasattr(self.session_log, "save_compaction_state"):
+            return
+        try:
+            md = metrics.to_dict() if hasattr(metrics, "to_dict") else {}
+            prev = None
+            try:
+                prev = self.session_log.get_summary_message(session_id)
+            except Exception:
+                prev = None
+            layers = md.get("layers_applied") or []
+            self.session_log.save_compaction_state(
+                session_id,
+                tokens_before=int(md.get("original_tokens", 0) or 0),
+                tokens_after=int(md.get("compressed_tokens", 0) or 0),
+                saved=int(md.get("tokens_saved", 0) or 0),
+                layers=list(layers) if isinstance(layers, list) else [],
+                actions=len(layers) if isinstance(layers, list) else 0,
+                summary=self._compaction_summary(dict_msgs),
+                summary_message_id=int(prev["id"]) if prev else None,
+            )
+        except Exception as e:
+            logger.debug("no se pudo persistir el estado de compactacion: %s", e)
+
     async def _distill(self, session_id: str) -> None:
         """Destila la sesión al grafo ANTES de compactar (no perder conocimiento)."""
         if self.distill_hook is None:
@@ -261,6 +287,11 @@ class AgentLoop:
                 after = self.session_log.get_messages_from(
                     session_id, int(sm["id"]), limit=10000)
                 progress = len(after or [])
+            elif hasattr(self.session_log, "get_compaction_state"):
+                st = self.session_log.get_compaction_state(session_id)
+                if st and str(st.get("summary") or "").strip():
+                    prev = str(st["summary"]).strip()
+                    progress = len(self.session_log.get_messages(session_id, limit=10000) or [])
         except Exception:
             pass
         return prev, progress
@@ -791,6 +822,7 @@ class AgentLoop:
                     else:
                         dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, _limit)
                     self._persist_compaction_summary(session_id, dict_msgs)
+                    self._persist_compaction_state(session_id, cmetrics, dict_msgs)
                     await self._emit_compact_hook(
                         session_id, cmetrics, self._compaction_summary(dict_msgs))
                     messages = self._rebuild_messages(dict_msgs)
@@ -1264,6 +1296,7 @@ class AgentLoop:
                         else:
                             dict_msgs, _cmetrics = await self.compaction.compact(dict_msgs, _limit)
                         self._persist_compaction_summary(session_id, dict_msgs)
+                        self._persist_compaction_state(session_id, _cmetrics, dict_msgs)
                         await self._emit_compact_hook(
                             session_id, _cmetrics, self._compaction_summary(dict_msgs))
                         messages = self._rebuild_messages(dict_msgs)

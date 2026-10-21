@@ -88,6 +88,7 @@ IDEMPOTENT_TOOLS = frozenset({
     "browser_snapshot", "browser_console", "mcp_filesystem_read_file",
     "mcp_filesystem_list_directory", "mcp_filesystem_get_file_info",
     "glob", "grep", "search_observations", "repo_map", "code_search", "recall",
+    "checkpoint_list", "checkpoint_diff", "team_list", "team_await",
 })
 
 MUTATING_TOOLS = frozenset({
@@ -95,6 +96,7 @@ MUTATING_TOOLS = frozenset({
     "browser_click", "browser_type", "browser_press", "browser_navigate",
     "send_message", "delegate_task", "execute", "exec", "pty_exec", "job_start", "job_kill",
     "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run", "agent_create",
+    "team_spawn", "team_mailbox", "checkpoint_create", "checkpoint_restore",
 })
 
 NETWORK_TOOLS = frozenset({

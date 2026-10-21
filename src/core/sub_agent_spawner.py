@@ -177,6 +177,15 @@ class SubAgentSpawner:
         self._children[child_id].inbox.append(message)
         return True
 
+    def drain_inbox(self, child_id: str) -> List[str]:
+        """Saca y devuelve los mensajes pendientes del hijo (mailbox read)."""
+        msgs = list(self._inbox.get(child_id, []) or [])
+        self._inbox[child_id] = []
+        rec = self._children.get(child_id)
+        if rec is not None:
+            rec.inbox = []
+        return msgs
+
     def interrupt(self, child_id: str) -> bool:
         """Interrumpe un hijo (best-effort): marca flag y estado CANCELLED."""
         if child_id not in self._children:

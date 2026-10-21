@@ -47,6 +47,49 @@ async def _kill_tree(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
+async def run_process_capture(
+    args: list[str],
+    cwd: str | os.PathLike,
+    timeout_s: float,
+    stdin_text: str = "",
+) -> tuple[int, str, str]:
+    """Corre un ejecutable (sin shell) y devuelve (rc, stdout, stderr).
+
+    Pensado para hooks por archivo: el payload va por stdin y el script puede
+    responder JSON por stdout. Si vence el timeout se mata el arbol y se lanza
+    TimeoutError con la salida parcial.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=str(cwd),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        **_spawn_kwargs(),
+    )
+    try:
+        out, err = await asyncio.wait_for(
+            proc.communicate(input=(stdin_text or "").encode("utf-8")),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        await _kill_tree(proc)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        except Exception:
+            out, err = b"", b""
+        partial = ((out or b"") + (err or b"")).decode("utf-8", errors="replace")[-2000:]
+        detail = f"proceso excedio {timeout_s}s y se mato el arbol"
+        if partial.strip():
+            detail += f"; salida parcial:\n{partial}"
+        raise TimeoutError(detail) from None
+    return (
+        int(proc.returncode or 0),
+        (out or b"").decode("utf-8", errors="replace"),
+        (err or b"").decode("utf-8", errors="replace"),
+    )
+
+
 async def run_shell_capture(
     command: str,
     cwd: str | os.PathLike,

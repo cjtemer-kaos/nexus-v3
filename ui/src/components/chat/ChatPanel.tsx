@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
+import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 
 type Pending = { key: string; file: File; preview?: string }
 
@@ -15,6 +16,20 @@ const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.ra
 const summarize = (s: string) => {
   const first = (s || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '(sin salida)'
   return first.length > 90 ? first.slice(0, 88) + '…' : first
+}
+
+const summarizeTool = (name: string | undefined, content: string) => {
+  if (name === 'apply_patch') {
+    try {
+      const j = JSON.parse(content)
+      const n = Array.isArray(j.files) ? j.files.length : 0
+      const fuzz = Number(j.fuzz || 0)
+      return `${j.dry_run ? 'dry-run' : 'aplicado'} · ${n} archivo${n === 1 ? '' : 's'}${fuzz > 0 ? ` · fuzz ${fuzz}` : ''}`
+    } catch {
+      return summarize(content)
+    }
+  }
+  return summarize(content)
 }
 
 type SlashCommand = { name: string; description?: string; args?: string }
@@ -454,13 +469,13 @@ export function ChatPanel() {
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">
                 <Wrench className="h-3.5 w-3.5 shrink-0 text-[#FFB86B]" />
                 <span className="shrink-0 font-mono text-[#FFB86B]">{m.toolName || 'tool'}</span>
-                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(m.content)}</span>
+                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarizeTool(m.toolName, m.content)}</span>
                 <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
                 <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
               </button>
               {expanded.has(m.id) && (
                 <div className="max-h-80 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">
-                  {m.content}
+                  {m.toolName === 'apply_patch' ? <ApplyPatchResult content={m.content} /> : m.content}
                   <div className="mt-1.5">
                     <button onClick={() => { void navigator.clipboard.writeText(m.content).catch(()=>{}); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
                       className="text-[10px] text-[#8CC1FF] hover:underline">
