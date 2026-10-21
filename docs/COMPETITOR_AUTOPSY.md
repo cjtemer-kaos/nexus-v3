@@ -122,3 +122,7 @@ En el segundo lote se cerraron los 6 pendientes: **hooks por archivo**
 **UI de `apply_patch`** (`ApplyPatchResult.tsx`) y **output-limits en search/glob**
 (`cap_json_list`). Detalle, invariantes y tests en
 **[`AUTOPSY_CLINE.md`](./AUTOPSY_CLINE.md)** §8 y §10.
+
+En el tercer lote se cerró el último pendiente P3: **`kind`/`display_role` en mensajes**
+(`messages.kind`/`messages.display_role` con migración, `compact_mark` clasifica el
+resumen y la UI lo muestra como tarjeta de sistema, no como turno del usuario).

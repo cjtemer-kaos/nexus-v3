@@ -6,7 +6,7 @@ export type ModelOption = { id: string; provider: string; label: string; ctx: nu
 
 type View = 'chat' | 'graph' | 'editor' | 'terminal' | 'agents' | 'review' | 'board' | 'skills' | 'subagents' | 'approvals' | 'plan' | 'worktrees' | 'usage'
 
-export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool'; content: string; toolName?: string; timestamp: string; images?: string[] }
+export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool' | 'system'; content: string; toolName?: string; timestamp: string; images?: string[]; kind?: string; displayRole?: string }
 
 export type SessionMeta = { id: string; title: string; project?: string; summary?: string; source?: 'server' | 'local' }
 
@@ -238,13 +238,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       const raw = await sessionMessagesApi(sessionId)
       if (get().activeSession !== sessionId) return // carrera: la sesión cambió
       const mapped: ChatMessage[] = raw
-        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool' ||
+          (m.role === 'system' && (m.kind === 'compaction_summary' || m.display_role === 'system' ||
+            /^\[(resumen de |handoff\])/i.test(m.content || ''))))
         .map((m, i) => ({
-          id: `${sessionId}-${i}`,
-          role: m.role as ChatMessage['role'],
+          id: `${sessionId}-${m.id ?? i}`,
+          role: (m.display_role === 'system' || m.role === 'system' ? 'system' : m.role) as ChatMessage['role'],
           content: m.content ?? '',
           toolName: m.tool_name || undefined,
           timestamp: m.created_at ? fmtTime(m.created_at) : '',
+          kind: m.kind || undefined,
+          displayRole: m.display_role || undefined,
         }))
       // Merge: no pisar mensajes locales (recién enviados) que aún no están en el server.
       set((s) => {

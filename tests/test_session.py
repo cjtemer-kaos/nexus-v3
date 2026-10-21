@@ -101,6 +101,49 @@ def test_compact_mark(slog, session_with_msgs):
     assert s_after.summary == "final summary"
 
 
+def test_compact_mark_kind_y_display_role(slog, session_with_msgs):
+    mid = slog.compact_mark(session_with_msgs.id, "resumen clasificado")
+    summary = slog.get_summary_message(session_with_msgs.id)
+    assert summary["id"] == mid
+    assert summary["kind"] == "compaction_summary"
+    assert summary["display_role"] == "system"
+    row = next(m for m in slog.messages_with_ids(session_with_msgs.id) if m["id"] == mid)
+    assert row["kind"] == "compaction_summary"
+    assert row["display_role"] == "system"
+    # los mensajes normales no se marcan como sinteticos
+    normal = next(m for m in slog.messages_with_ids(session_with_msgs.id) if m["id"] != mid)
+    assert normal["kind"] == "" and normal["display_role"] == ""
+
+
+def test_migracion_kind_display_role(tmp_path):
+    """Una DB vieja sin las columnas se migra sin perder mensajes."""
+    import sqlite3
+    db = tmp_path / "vieja.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, project TEXT DEFAULT 'default',"
+        " parent_session_id TEXT, created_at TEXT, last_active TEXT, summary TEXT DEFAULT '',"
+        " compact_count INTEGER DEFAULT 0, total_tokens INTEGER DEFAULT 0);"
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,"
+        " role TEXT, content TEXT, tool_call_id TEXT DEFAULT '', tool_name TEXT DEFAULT '',"
+        " tokens INTEGER DEFAULT 0, model TEXT DEFAULT '', created_at TEXT);"
+        "INSERT INTO sessions(id, created_at, last_active) VALUES ('s1','t','t');"
+        "INSERT INTO messages(session_id, role, content, created_at) VALUES ('s1','user','hola','t');"
+    )
+    con.commit()
+    con.close()
+    slog = SessionLog(db)
+    try:
+        msgs = slog.messages_with_ids("s1")
+        assert len(msgs) == 1 and msgs[0]["content"] == "hola"
+        assert msgs[0]["kind"] == "" and msgs[0]["display_role"] == ""
+        mid = slog.compact_mark("s1", "resumen nuevo")
+        row = next(m for m in slog.messages_with_ids("s1") if m["id"] == mid)
+        assert row["kind"] == "compaction_summary"
+    finally:
+        slog.close()
+
+
 def test_stats_wal_fts_rebuild(slog, session_with_msgs):
     st = slog.get_stats()
     assert st["sessions"] >= 1

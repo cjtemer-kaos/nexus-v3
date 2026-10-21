@@ -32,6 +32,9 @@ const summarizeTool = (name: string | undefined, content: string) => {
   return summarize(content)
 }
 
+// El prefijo lo agrega el backend; en la tarjeta el titulo ya lo dice.
+const summaryBody = (s: string) => (s || '').replace(/^\[(?:resumen de [^\]]*|handoff)\]\s*/i, '').trim()
+
 type SlashCommand = { name: string; description?: string; args?: string }
 
 const SLASH_FALLBACK: SlashCommand[] = [
@@ -463,7 +466,23 @@ export function ChatPanel() {
           </div>
         )}
         {messages.map((m) => (
-          m.role === 'tool' ? (
+          (m.role === 'system' || m.kind === 'compaction_summary') ? (
+            <div key={m.id} className="mx-auto w-full max-w-[92%] overflow-hidden rounded-xl border border-[#4C9DFF]/25 bg-[#182233]">
+              <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-[#1C2840]">
+                <Database className="h-3.5 w-3.5 shrink-0 text-[#8CC1FF]" />
+                <span className="shrink-0 font-semibold text-[#8CC1FF]">Resumen de contexto</span>
+                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(summaryBody(m.content))}</span>
+                <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
+                <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
+              </button>
+              {expanded.has(m.id) && (
+                <div className="max-h-80 overflow-auto border-t border-[#4C9DFF]/20 px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">
+                  {summaryBody(m.content)}
+                </div>
+              )}
+            </div>
+          ) : m.role === 'tool' ? (
             <div key={m.id} className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
               <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">

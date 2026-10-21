@@ -501,6 +501,30 @@ def test_global_search_includes_session_id():
         client.delete(f"/api/sessions/{sid}")
 
 
+def test_messages_expone_kind_y_display_role():
+    """Los resumenes de compactacion llegan a la UI clasificados, no como turnos de usuario."""
+    from src.api.server import _session_log
+
+    sid = client.post("/api/sessions", json={"project": "pytest-kind"}).json()["id"]
+    try:
+        r = client.post(f"/api/sessions/{sid}/messages",
+                        json={"role": "system", "content": "[resumen de contexto]\nhechos 8801",
+                              "kind": "compaction_summary", "display_role": "system"})
+        assert r.status_code == 200
+        rows = client.get(f"/api/sessions/{sid}/messages").json()["messages"]
+        assert len(rows) == 1
+        assert rows[0]["role"] == "system"
+        assert rows[0]["kind"] == "compaction_summary"
+        assert rows[0]["display_role"] == "system"
+        # compact_mark (camino real del loop) tambien clasifica
+        mid = _session_log().compact_mark(sid, "resumen del loop 8802")
+        rows = client.get(f"/api/sessions/{sid}/messages").json()["messages"]
+        row = next(x for x in rows if x["id"] == mid)
+        assert row["kind"] == "compaction_summary" and row["display_role"] == "system"
+    finally:
+        client.delete(f"/api/sessions/{sid}")
+
+
 def test_session_branch_accepts_copy_messages_in_body():
     """El body JSON debe funcionar igual que el query (antes se ignoraba en silencio)."""
     from src.api.server import _session_log

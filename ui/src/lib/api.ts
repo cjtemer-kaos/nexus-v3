@@ -234,7 +234,7 @@ export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean
   return { ok: res.ok, deleted: res.ok, id: sessionId };
 }
 
-export type SessionMessage = { role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number }
+export type SessionMessage = { id?: number; role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number; kind?: string; display_role?: string }
 
 export async function sessionMessagesApi(sessionId: string, limit = 10000): Promise<SessionMessage[]> {
   const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`);

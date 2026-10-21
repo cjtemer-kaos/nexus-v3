@@ -983,9 +983,12 @@ Implementación: `src/core/command_guard.py` (~330 líneas) + `Scope.check_tool`
 
 10. **Team tools** ✅ — `src/core/team.py` + tools `team_spawn` (background), `team_await`,
     `team_mailbox` y `team_list` sobre `SubAgentSpawner`. Test: `tests/test_team.py`.
-11. Compactación con `displayRole`/`kind` para que la UI no muestre resúmenes como
-    mensajes del usuario. **Sigue pendiente** (requiere cambiar el schema de mensajes y
-    el render de la UI).
+11. **Compactación con `displayRole`/`kind`** ✅ — `messages` tiene `kind` y
+    `display_role` (migración `ALTER TABLE` incluida); `compact_mark` persiste el resumen
+    como `kind="compaction_summary"`, `display_role="system"` y la API los expone. La UI
+    lo renderiza como tarjeta colapsable "Resumen de contexto", nunca como burbuja del
+    usuario. Tests: `test_compact_mark_kind_y_display_role`, `test_migracion_kind_display_role`
+    y `test_messages_expone_kind_y_display_role`.
 
 ---
 

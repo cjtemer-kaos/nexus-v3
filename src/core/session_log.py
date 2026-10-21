@@ -29,6 +29,11 @@ class Message:
     tokens: int = 0
     model: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Clasificacion para la UI: `kind` distingue mensajes sinteticos (p.ej.
+    # compaction_summary) y `display_role` decide como se renderizan sin
+    # depender del rol crudo del provider.
+    kind: str = ""
+    display_role: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -39,6 +44,8 @@ class Message:
             "tokens": self.tokens,
             "model": self.model,
             "created_at": self.created_at,
+            "kind": self.kind,
+            "display_role": self.display_role,
         }
 
 
@@ -102,7 +109,9 @@ CREATE TABLE IF NOT EXISTS messages (
   tool_name TEXT DEFAULT '',
   tokens INTEGER DEFAULT 0,
   model TEXT DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  kind TEXT DEFAULT '',
+  display_role TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
@@ -181,6 +190,16 @@ class SessionLog:
                 _cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sessions)")}
                 if "summary_message_id" not in _cols:
                     self._conn.execute("ALTER TABLE sessions ADD COLUMN summary_message_id INTEGER")
+            except Exception:
+                pass
+            # Migracion: mensajes sinteticos (resumen de compactacion) necesitan
+            # kind/display_role para que la UI no los muestre como turnos del usuario.
+            try:
+                _mcols = {r[1] for r in self._conn.execute("PRAGMA table_info(messages)")}
+                if "kind" not in _mcols:
+                    self._conn.execute("ALTER TABLE messages ADD COLUMN kind TEXT DEFAULT ''")
+                if "display_role" not in _mcols:
+                    self._conn.execute("ALTER TABLE messages ADD COLUMN display_role TEXT DEFAULT ''")
             except Exception:
                 pass
             # Backfill FTS una vez (marcador user_version): en una tabla FTS5
@@ -285,9 +304,10 @@ class SessionLog:
     def append(self, session_id: str, msg: Message) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (session_id, msg.role, msg.content, msg.tool_call_id, msg.tool_name, msg.tokens, msg.model, msg.created_at),
+                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (session_id, msg.role, msg.content, msg.tool_call_id, msg.tool_name, msg.tokens,
+                 msg.model, msg.created_at, msg.kind, msg.display_role),
             )
             self._conn.execute(
                 "UPDATE sessions SET last_active=?, total_tokens=total_tokens+? WHERE id=?",
@@ -298,7 +318,7 @@ class SessionLog:
     def get_messages(self, session_id: str, limit: int = 100, offset: int = 0) -> list[Message]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at FROM messages"
+                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role FROM messages"
                 " WHERE session_id=? ORDER BY id ASC LIMIT ? OFFSET ?",
                 (session_id, limit, offset),
             ).fetchall()
@@ -308,12 +328,13 @@ class SessionLog:
         """Mensajes con id (para UI de rewind/edición). Shape completo."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role"
                 " FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
         return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
-                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7]} for r in rows]
+                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7],
+                 "kind": r[8] or "", "display_role": r[9] or ""} for r in rows]
 
     def rewind(self, session_id: str, message_id: int) -> int:
         """Borra los mensajes posteriores a message_id (exclusive). Devuelve cuántos borró."""
@@ -350,7 +371,7 @@ class SessionLog:
     def get_recent_messages(self, session_id: str, n: int = 10) -> list[Message]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at FROM messages"
+                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role FROM messages"
                 " WHERE session_id=? ORDER BY id DESC LIMIT ?",
                 (session_id, n),
             ).fetchall()
@@ -441,9 +462,10 @@ class SessionLog:
             content = f"[resumen de contexto]\n{content}".strip()
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (session_id, "system", content, "", "", 0, "", datetime.now(timezone.utc).isoformat()),
+                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (session_id, "system", content, "", "", 0, "", datetime.now(timezone.utc).isoformat(),
+                 "compaction_summary", "system"),
             )
             mid = cur.lastrowid
             self._conn.execute(
@@ -460,14 +482,15 @@ class SessionLog:
             return None
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role"
                 " FROM messages WHERE id=? AND session_id=?",
                 (int(sess.summary_message_id), session_id),
             ).fetchone()
         if not row:
             return None
         return {"id": row[0], "role": row[1], "content": row[2], "tool_call_id": row[3],
-                "tool_name": row[4], "tokens": row[5], "model": row[6], "created_at": row[7]}
+                "tool_name": row[4], "tokens": row[5], "model": row[6], "created_at": row[7],
+                "kind": row[8] or "", "display_role": row[9] or ""}
 
     def save_compaction_state(self, session_id: str, *, tokens_before: int = 0,
                               tokens_after: int = 0, saved: int = 0,
@@ -533,12 +556,13 @@ class SessionLog:
         """Mensajes con id > after_id (ASC), con shape completo."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at"
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role"
                 " FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?",
                 (session_id, int(after_id), int(limit)),
             ).fetchall()
         return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
-                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7]} for r in rows]
+                 "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7],
+                 "kind": r[8] or "", "display_role": r[9] or ""} for r in rows]
 
     def fork(self, session_id: str) -> Session:
         """Branch: nueva sesion con parent_session_id = session_id (OpenCode multi-session)."""

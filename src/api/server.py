@@ -1746,7 +1746,9 @@ async def append_message(session_id: str, request: Request):
         raise HTTPException(status_code=400, detail="content required")
     slog = _session_log()
     from src.core.session_log import Message
-    msg = Message(role=role, content=content, tool_call_id=body.get("tool_call_id", ""), tool_name=body.get("tool_name", ""))
+    msg = Message(role=role, content=content, tool_call_id=body.get("tool_call_id", ""),
+                  tool_name=body.get("tool_name", ""), kind=body.get("kind", "") or "",
+                  display_role=body.get("display_role", "") or "")
     mid = slog.append(session_id, msg)
     return {"id": mid, "session_id": session_id}
 
