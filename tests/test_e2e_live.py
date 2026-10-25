@@ -685,3 +685,31 @@ def test_escalera_de_permisos_endpoints(monkeypatch):
     assert "peldaño" in r.json().get("message", "")
     assert _SESSION_LEVELS.get(sid) == 2
     _SESSION_LEVELS.pop(sid, None)
+
+
+def test_mesa_redonda_endpoint(monkeypatch):
+    """POST /api/roundtable: valida el body y devuelve el contrato del consenso."""
+    import src.core.roundtable as rt
+
+    async def fake_convene(task, **kwargs):
+        res = rt.RoundTableResult(task=task, consensus=["hay que medir antes"],
+                                  disagreements=[{"topic": "cuándo", "positions": ["ya", "después"]}],
+                                  final="Medí y después decidí.", confidence=0.55)
+        res.seats = [rt.SeatResult(seat="code", model="m", ok=True, content="respuesta"),
+                     rt.SeatResult(seat="tester", model="m", ok=False, error="timeout")]
+        return res
+
+    monkeypatch.setattr(rt, "convene", fake_convene)
+
+    assert client.post("/api/roundtable", json={}).status_code == 400
+    assert client.post("/api/roundtable", json={"task": "x", "seats": "code"}).status_code == 400
+
+    r = client.post("/api/roundtable", json={"task": "¿medimos antes de decidir?"})
+    assert r.status_code == 200, r.text[:200]
+    data = r.json()
+    assert data["final"] == "Medí y después decidí."
+    assert data["consensus"] == ["hay que medir antes"]
+    assert data["disagreements"][0]["topic"] == "cuándo"
+    assert data["answered"] == 1
+    assert [s["seat"] for s in data["seats"]] == ["code", "tester"]
+    assert data["confidence"] == 0.55

@@ -89,6 +89,8 @@ IDEMPOTENT_TOOLS = frozenset({
     "mcp_filesystem_list_directory", "mcp_filesystem_get_file_info",
     "glob", "grep", "search_observations", "repo_map", "code_search", "recall",
     "checkpoint_list", "checkpoint_diff", "team_list", "team_await",
+    # La mesa redonda solo razona (no tools adentro): es seguro en read_only.
+    "roundtable", "gema_list", "agent_list",
 })
 
 MUTATING_TOOLS = frozenset({

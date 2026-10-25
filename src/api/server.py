@@ -3709,6 +3709,45 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {"text": {"type": "string"}},
                     "required": ["text"], "additionalProperties": False})
 
+    if router is not None:
+        async def roundtable_tool(task: str, seats: int = 3, timeout_s: int = 90) -> str:
+            """Sienta varias voces sobre el mismo problema y devuelve el consenso.
+
+            Util cuando la decision tiene trade-offs y una sola opinion no alcanza.
+            No toca archivos ni ejecuta nada: las voces solo razonan.
+            """
+            import json as _jr
+
+            from src.core.roundtable import DEFAULT_SEATS, convene
+
+            n = max(2, min(4, int(seats or 3)))
+            res = await convene(task, router=router, seats=list(DEFAULT_SEATS)[:n],
+                                timeout_s=max(20, min(240, int(timeout_s or 90))))
+            return _jr.dumps({
+                "answered": res.answered,
+                "consensus": res.consensus,
+                "disagreements": res.disagreements,
+                "final": res.final,
+                "confidence": res.confidence,
+                "overlap": res.overlap,
+                "seats": [{"seat": s.seat, "ok": s.ok, "model": s.model,
+                           "error": s.error} for s in res.seats],
+                "judge_error": res.judge_error,
+            }, ensure_ascii=False)
+
+        registry.register_function(
+            roundtable_tool, name="roundtable",
+            description=("Mesa redonda: varias voces (arquitecto, codigo, seguridad, tester) "
+                         "responden el mismo problema y un juez devuelve consenso, desacuerdos y "
+                         "una sintesis. Usala para decisiones con trade-offs, no para tareas simples."),
+            category="local",
+            parameters={"type": "object", "properties": {
+                "task": {"type": "string", "description": "el problema a discutir"},
+                "seats": {"type": "integer", "description": "cuantas voces (2-4, default 3)"},
+                "timeout_s": {"type": "integer", "description": "tope por voz en segundos (default 90)"},
+            }, "required": ["task"], "additionalProperties": False},
+        )
+
     def read_file_tool(path: str, offset: int = 0, limit: int = 0) -> str:
         """Lee un archivo dentro de allowed_roots (paginado por líneas).
 
@@ -5028,6 +5067,50 @@ def _memory_audit_close(session_id: str, batch: str, result) -> None:
         )
     except Exception as e:
         logger.debug("memoria: outcome no auditado (%s)", e)
+
+
+@app.post("/api/roundtable")
+async def roundtable_endpoint(request: Request):
+    """Mesa redonda: N voces sobre el mismo problema + resumen de consenso.
+
+    Body: { task, seats?: ["architect", ...], models?: ["..."], timeout_s?, judge_model? }
+    """
+    body = await _json_body(request)
+    task = str(body.get("task") or body.get("message") or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="task requerida")
+    cfg = _load_config_safe()
+    router = _get_router(cfg)
+    seats = body.get("seats")
+    if seats is not None and not isinstance(seats, list):
+        raise HTTPException(status_code=400, detail="seats debe ser una lista")
+    models = body.get("models")
+    if models is not None and not isinstance(models, list):
+        raise HTTPException(status_code=400, detail="models debe ser una lista")
+    try:
+        from src.core.roundtable import convene
+
+        result = await convene(
+            task,
+            router=router,
+            seats=seats,
+            models=[str(m) for m in (models or [])] or None,
+            timeout_s=float(body.get("timeout_s") or 90),
+            judge_timeout_s=(float(body["judge_timeout_s"]) if body.get("judge_timeout_s") else None),
+            judge_model=(str(body.get("judge_model") or "") or None),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"mesa redonda falló: {e}")
+    data = result.to_dict()
+    try:
+        _event_store().append_event(kind="roundtable", data={
+            "task": task[:400], "answered": result.answered,
+            "consensus": len(result.consensus), "disagreements": len(result.disagreements),
+            "confidence": result.confidence, "ms": result.ms,
+        })
+    except Exception:
+        pass
+    return JSONResponse(data)
 
 
 @app.get("/api/memory/audit")
