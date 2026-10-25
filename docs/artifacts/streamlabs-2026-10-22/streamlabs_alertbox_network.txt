@@ -1,0 +1,14 @@
+2. [POST] https://www.paypal.com/xoplatform/logger/api/logger
+99. [POST] https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/GenerateIT => [200] 
+100. [GET] https://streamlabs.com/api/v5/widget/config?token=6CE23E48EFAD926A38B4&profile=&widget=alert_box => [200] 
+101. [GET] https://streamlabs.com/api/v5/cloudbot/prime/bot/login?token=6CE23E48EFAD926A38B4 => [200] 
+102. [GET] https://streamlabs.com/workers/shared.worker-new.js?u=36071061&v=1.0.0
+103. [POST] https://o57603.ingest.us.sentry.io/api/1359824/envelope/?sentry_version=7&sentry_key=9d00e148206f4aa2bbfee136f056f04c&sentry_client=sentry.javascript.browser%2F8.55.1 => [200] 
+104. [GET] https://streamlabs.com/api/v5/helix/bits/cheermotes?broadcaster_id=429456419 => [200] 
+105. [GET] https://streamlabs.com/api/v5/tts/static/polly/voices => [200] 
+106. [GET] https://streamlabs.com/api/v5/tts/static/google/voices => [200] 
+107. [GET] https://streamlabs.com/api/v5/widget/settings?token=6CE23E48EFAD926A38B4&widget=donation_page => [200] 
+108. [GET] https://streamlabs.com/api/v5/widget/config?token=6CE23E48EFAD926A38B4&widget=media-sharing => [200] 
+111. [POST] https://streamlabs.com/api/v5/widgets/log => [200] 
+
+Note: 95 static requests not shown, run with "static" option to see them.

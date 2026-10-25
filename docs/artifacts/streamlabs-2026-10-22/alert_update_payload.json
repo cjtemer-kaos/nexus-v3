@@ -1,0 +1,1530 @@
+{
+  "platforms": {
+    "twitch": {
+      "follows": {
+        "follow_enabled": true,
+        "follow_layout": "side",
+        "follow_image_size": 50,
+        "follow_image_volume": 100,
+        "follow_positioning_mode": "preset",
+        "follow_image_x": 50,
+        "follow_image_y": 50,
+        "follow_text_x": 50,
+        "follow_text_y": 50,
+        "follow_show_animation": "fadeIn",
+        "follow_hide_animation": "fadeOut",
+        "follow_message_template": "{name}",
+        "follow_text_animation": "",
+        "follow_text_intro_animation": "",
+        "follow_text_outro_animation": "",
+        "follow_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_follow.gif",
+        "follow_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_follow.ogg",
+        "follow_sound_volume": 40,
+        "follow_alert_duration": 8000,
+        "follow_text_delay": 0,
+        "follow_custom_html_enabled": true,
+        "follow_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "follow_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "follow_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "follow_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "NUEVO SEGUIDOR"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "BIENVENIDO A KAOSMCS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "follow_font": "Exo",
+        "follow_font_size": 32,
+        "follow_font_weight": 700,
+        "follow_font_color": "#EAF7F7",
+        "follow_font_color2": "#17DFF2",
+        "follow_variations": []
+      },
+      "subscriptions": {
+        "sub_enabled": true,
+        "sub_layout": "side",
+        "sub_image_size": 50,
+        "sub_image_volume": 100,
+        "sub_positioning_mode": "preset",
+        "sub_image_x": 50,
+        "sub_image_y": 50,
+        "sub_text_x": 50,
+        "sub_text_y": 50,
+        "sub_show_animation": "fadeIn",
+        "sub_hide_animation": "fadeOut",
+        "prime_sub_enabled": true,
+        "sub_message_template": "{name}",
+        "sub_text_animation": "",
+        "sub_text_intro_animation": "",
+        "sub_text_outro_animation": "",
+        "sub_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+        "sub_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+        "sub_sound_volume": 40,
+        "sub_alert_duration": 8000,
+        "sub_text_delay": 0,
+        "sub_custom_html_enabled": true,
+        "sub_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "sub_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "sub_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "sub_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "SUSCRIPTOR"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "GRACIAS POR BANCAR"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "sub_font": "Exo",
+        "sub_font_size": 32,
+        "sub_font_weight": 700,
+        "sub_font_color": "#EAF7F7",
+        "sub_font_color2": "#17DFF2",
+        "show_resub_message": true,
+        "resub_message_allow_emotes": true,
+        "resub_message_font": "Open Sans",
+        "resub_message_font_size": "24px",
+        "resub_message_font_weight": 800,
+        "resub_message_font_color": "#4A54C3",
+        "resub_tts_enabled": false,
+        "resub_tts_language": "en-us",
+        "resub_tts_security": 1,
+        "resub_tts_repetition_block_length": 0,
+        "resub_tts_volume": 2,
+        "resub_tts_include_message_template": false,
+        "sub_variations": []
+      },
+      "bits": {
+        "bits_enabled": true,
+        "bits_layout": "side",
+        "bits_image_size": 50,
+        "bits_image_volume": 100,
+        "bits_positioning_mode": "preset",
+        "bits_image_x": 50,
+        "bits_image_y": 50,
+        "bits_text_x": 50,
+        "bits_text_y": 50,
+        "bits_show_animation": "fadeIn",
+        "bits_hide_animation": "fadeOut",
+        "bits_tts_enabled": false,
+        "bits_tts_min_amount": 0,
+        "bits_tts_language": "en-us",
+        "bits_tts_security": 1,
+        "bits_tts_repetition_block_length": 0,
+        "bits_tts_volume": 75,
+        "bits_tts_include_message_template": false,
+        "bits_alert_min_amount": 0,
+        "recent_events_bits_min_amount": 0,
+        "bits_message_template": "{name} · {amount} bits",
+        "bits_text_animation": "",
+        "bits_text_intro_animation": "",
+        "bits_text_outro_animation": "",
+        "bits_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_bits.gif",
+        "bits_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_bits.ogg",
+        "bits_sound_volume": 40,
+        "bits_alert_duration": 8000,
+        "bits_text_delay": 0,
+        "bits_custom_html_enabled": true,
+        "bits_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "bits_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "bits_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "bits_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "BITS"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "{amount} BITS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_bits_message": true,
+        "bits_message_allow_emotes": true,
+        "bits_alert_message_min_amount": 0,
+        "bits_message_font": "Open Sans",
+        "bits_message_font_size": "24px",
+        "bits_message_font_weight": 800,
+        "bits_message_font_color": "#4A54C3",
+        "bits_font": "Exo",
+        "bits_font_size": 32,
+        "bits_font_weight": 700,
+        "bits_font_color": "#EAF7F7",
+        "bits_font_color2": "#17DFF2",
+        "bit_variations": []
+      },
+      "power_ups": {
+        "power_up_enabled": true,
+        "power_up_layout": "side",
+        "power_up_image_size": 50,
+        "power_up_image_volume": 100,
+        "power_up_positioning_mode": "preset",
+        "power_up_image_x": 50,
+        "power_up_image_y": 50,
+        "power_up_text_x": 50,
+        "power_up_text_y": 50,
+        "power_up_show_animation": "fadeIn",
+        "power_up_hide_animation": "fadeOut",
+        "power_up_tts_enabled": false,
+        "power_up_tts_min_amount": 0,
+        "power_up_tts_language": "Salli",
+        "power_up_tts_security": 1,
+        "power_up_tts_repetition_block_length": 0,
+        "power_up_tts_volume": 75,
+        "power_up_tts_include_message_template": false,
+        "power_up_alert_min_amount": 0,
+        "recent_events_power_up_min_amount": 0,
+        "power_up_message_template": "{name} · {powerUpName}",
+        "power_up_text_animation": "",
+        "power_up_text_intro_animation": "",
+        "power_up_text_outro_animation": "",
+        "power_up_use_event_image": false,
+        "power_up_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_bits.gif",
+        "power_up_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_bits.ogg",
+        "power_up_sound_volume": 40,
+        "power_up_alert_duration": 8000,
+        "power_up_text_delay": 0,
+        "power_up_custom_html_enabled": true,
+        "power_up_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "power_up_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "power_up_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "power_up_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "POWER-UP"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "{powerUpName} · {bitsSpent} BITS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_power_up_message": true,
+        "power_up_message_allow_emotes": true,
+        "power_up_message_font": "Open Sans",
+        "power_up_message_font_size": "24px",
+        "power_up_message_font_weight": 400,
+        "power_up_message_font_color": "#FFFFFF",
+        "power_up_font": "Exo",
+        "power_up_font_size": 32,
+        "power_up_font_weight": 700,
+        "power_up_font_color": "#EAF7F7",
+        "power_up_font_color2": "#17DFF2",
+        "power_up_variations": [],
+        "power_up_disabled_ids": []
+      },
+      "raids": {
+        "raid_enabled": true,
+        "raid_layout": "side",
+        "raid_image_size": 50,
+        "raid_image_volume": 100,
+        "raid_positioning_mode": "preset",
+        "raid_image_x": 50,
+        "raid_image_y": 50,
+        "raid_text_x": 50,
+        "raid_text_y": 50,
+        "raid_show_animation": "fadeIn",
+        "raid_hide_animation": "fadeOut",
+        "raid_raider_minimum": 1,
+        "recent_events_raid_min_viewer_count": 2,
+        "raid_message_template": "{name} · {count}",
+        "raid_text_animation": "",
+        "raid_text_intro_animation": "",
+        "raid_text_outro_animation": "",
+        "raid_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_raid.gif",
+        "raid_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_raid.ogg",
+        "raid_sound_volume": 40,
+        "raid_alert_duration": 8000,
+        "raid_text_delay": 0,
+        "raid_custom_html_enabled": true,
+        "raid_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "raid_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "raid_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "raid_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "RAID"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "{count} ESPECTADORES"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#FF3B30"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "raid_font": "Exo",
+        "raid_font_size": 32,
+        "raid_font_weight": 700,
+        "raid_font_color": "#EAF7F7",
+        "raid_font_color2": "#FF3B30",
+        "raid_variations": []
+      },
+      "twitch_charity": {
+        "twitchcharitydonation_enabled": true,
+        "twitchcharitydonation_layout": "side",
+        "twitchcharitydonation_image_size": 50,
+        "twitchcharitydonation_image_volume": 100,
+        "twitchcharitydonation_positioning_mode": "preset",
+        "twitchcharitydonation_image_x": 50,
+        "twitchcharitydonation_image_y": 50,
+        "twitchcharitydonation_text_x": 50,
+        "twitchcharitydonation_text_y": 50,
+        "twitchcharitydonation_show_animation": "fadeIn",
+        "twitchcharitydonation_hide_animation": "fadeOut",
+        "twitchcharitydonation_tts_enabled": false,
+        "twitchcharitydonation_tts_min_amount": 0,
+        "twitchcharitydonation_tts_language": "Salli",
+        "twitchcharitydonation_tts_security": 1,
+        "twitchcharitydonation_tts_repetition_block_length": 0,
+        "twitchcharitydonation_tts_volume": 75,
+        "twitchcharitydonation_tts_include_message_template": false,
+        "twitchcharitydonation_alert_min_amount": 0,
+        "recent_events_twitchcharitydonation_min_amount": 0,
+        "auto_twitchcharitydonation_enabled": false,
+        "twitchcharitydonation_viewer_minimum": 0,
+        "twitchcharitydonation_gif_enabled": false,
+        "twitchcharitydonation_message_template": "{name} · {amount}",
+        "twitchcharitydonation_text_animation": "",
+        "twitchcharitydonation_text_intro_animation": "",
+        "twitchcharitydonation_text_outro_animation": "",
+        "twitchcharitydonation_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_donation.gif",
+        "twitchcharitydonation_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_donation.ogg",
+        "twitchcharitydonation_sound_volume": 40,
+        "twitchcharitydonation_alert_duration": 8000,
+        "twitchcharitydonation_text_delay": 0,
+        "twitchcharitydonation_custom_html_enabled": true,
+        "twitchcharitydonation_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "twitchcharitydonation_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "twitchcharitydonation_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "twitchcharitydonation_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "DONACIÓN BENÉFICA"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "{amount}"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#FF3B30"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "twitchcharitydonation_font": "Exo",
+        "twitchcharitydonation_font_size": 32,
+        "twitchcharitydonation_font_weight": 700,
+        "twitchcharitydonation_font_color": "#EAF7F7",
+        "twitchcharitydonation_font_color2": "#FF3B30",
+        "show_twitchcharitydonation_message": true,
+        "twitchcharitydonation_alert_message_min_amount": 0,
+        "twitchcharitydonation_message_font": "Open Sans",
+        "twitchcharitydonation_message_font_size": "24px",
+        "twitchcharitydonation_message_font_weight": 800,
+        "twitchcharitydonation_message_font_color": "#4A54C3",
+        "twitchcharitydonation_variations": [],
+        "twitchcharitydonation_gifs_min_amount_to_share": 1,
+        "twitchcharitydonation_gif_library_enabled": true,
+        "twitchcharitydonation_gif_animation": "before",
+        "twitchcharitydonation_max_gif_duration": 4
+      }
+    },
+    "youtube": {
+      "subscribers": {
+        "subscriber_enabled": true,
+        "subscriber_layout": "side",
+        "subscriber_image_size": 50,
+        "subscriber_image_volume": 100,
+        "subscriber_positioning_mode": "preset",
+        "subscriber_image_x": 50,
+        "subscriber_image_y": 50,
+        "subscriber_text_x": 50,
+        "subscriber_text_y": 50,
+        "subscriber_show_animation": "fadeIn",
+        "subscriber_hide_animation": "fadeOut",
+        "subscriber_message_template": "{name}",
+        "subscriber_text_animation": "",
+        "subscriber_text_intro_animation": "",
+        "subscriber_text_outro_animation": "",
+        "subscriber_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_follow.gif",
+        "subscriber_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_follow.ogg",
+        "subscriber_sound_volume": 40,
+        "subscriber_alert_duration": 8000,
+        "subscriber_text_delay": 0,
+        "subscriber_custom_html_enabled": true,
+        "subscriber_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "subscriber_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "subscriber_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "subscriber_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "NUEVO SUSCRIPTOR"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "BIENVENIDO A KAOSMCS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "subscriber_font": "Exo",
+        "subscriber_font_size": 32,
+        "subscriber_font_weight": 700,
+        "subscriber_font_color": "#EAF7F7",
+        "subscriber_font_color2": "#17DFF2",
+        "subscriber_variations": []
+      },
+      "members": {
+        "sponsor_enabled": true,
+        "sponsor_layout": "side",
+        "sponsor_image_size": 50,
+        "sponsor_image_volume": 100,
+        "sponsor_positioning_mode": "preset",
+        "sponsor_image_x": 50,
+        "sponsor_image_y": 50,
+        "sponsor_text_x": 50,
+        "sponsor_text_y": 50,
+        "sponsor_show_animation": "fadeIn",
+        "sponsor_hide_animation": "fadeOut",
+        "sponsor_tts_enabled": false,
+        "sponsor_tts_min_amount": 0,
+        "sponsor_tts_language": "Salli",
+        "sponsor_tts_security": 1,
+        "sponsor_tts_repetition_block_length": 0,
+        "sponsor_tts_volume": 75,
+        "sponsor_tts_include_message_template": false,
+        "sponsor_message_template": "{name}",
+        "sponsor_text_animation": "",
+        "sponsor_text_intro_animation": "",
+        "sponsor_text_outro_animation": "",
+        "sponsor_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_member.gif",
+        "sponsor_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_member.ogg",
+        "sponsor_sound_volume": 40,
+        "sponsor_alert_duration": 8000,
+        "sponsor_text_delay": 0,
+        "sponsor_custom_html_enabled": true,
+        "sponsor_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "sponsor_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "sponsor_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "sponsor_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "MIEMBRO"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "BIENVENIDO A LA COLMENA"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_sponsor_message": false,
+        "sponsor_message_font": "Open Sans",
+        "sponsor_message_font_size": "24px",
+        "sponsor_message_font_weight": 800,
+        "sponsor_message_font_color": "#4A54C3",
+        "sponsor_font": "Exo",
+        "sponsor_font_size": 32,
+        "sponsor_font_weight": 700,
+        "sponsor_font_color": "#EAF7F7",
+        "sponsor_font_color2": "#17DFF2",
+        "member_gift_message_template": "{gifter} has gifted {amount} memberships to viewers!",
+        "member_gift_message_level_template": "{gifter} has gifted {amount} ({levelName}) memberships to viewers!",
+        "member_gif_image_href": "https://uploads.twitchalerts.com/image-defaults/5ec6dc0e2bf09.gif",
+        "member_gift_sound_href": "https://uploads.twitchalerts.com/sound-defaults/positive-win-game-sound-5.ogg",
+        "sponsor_variations": []
+      },
+      "super_chats": {
+        "fanfunding_enabled": true,
+        "fanfunding_layout": "side",
+        "fanfunding_image_size": 50,
+        "fanfunding_image_volume": 100,
+        "fanfunding_positioning_mode": "preset",
+        "fanfunding_image_x": 50,
+        "fanfunding_image_y": 50,
+        "fanfunding_text_x": 50,
+        "fanfunding_text_y": 50,
+        "fanfunding_show_animation": "fadeIn",
+        "fanfunding_hide_animation": "fadeOut",
+        "fanfunding_tts_enabled": false,
+        "fanfunding_tts_min_amount": 0,
+        "fanfunding_tts_language": "en-us",
+        "fanfunding_tts_security": 1,
+        "fanfunding_tts_repetition_block_length": 0,
+        "fanfunding_tts_volume": 75,
+        "fanfunding_tts_include_message_template": false,
+        "fanfunding_alert_min_amount": 0,
+        "recent_events_fanfunding_min_amount": 0,
+        "fanfunding_ignore_currency_conversion": false,
+        "fanfunding_message_template": "{name} · {amount}",
+        "fanfunding_text_animation": "",
+        "fanfunding_text_intro_animation": "",
+        "fanfunding_text_outro_animation": "",
+        "fanfunding_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_superchat.gif",
+        "fanfunding_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_superchat.ogg",
+        "fanfunding_sound_volume": 40,
+        "fanfunding_alert_duration": 8000,
+        "fanfunding_text_delay": 0,
+        "fanfunding_custom_html_enabled": true,
+        "fanfunding_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "fanfunding_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "fanfunding_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "fanfunding_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "SUPER CHAT"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{amount}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "DE {name}"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#FF3B30"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_fanfunding_message": true,
+        "fanfunding_alert_message_min_amount": 0,
+        "fanfunding_message_font": "Open Sans",
+        "fanfunding_message_font_size": "24px",
+        "fanfunding_message_font_weight": 800,
+        "fanfunding_message_font_color": "#4A54C3",
+        "fanfunding_font": "Exo",
+        "fanfunding_font_size": 32,
+        "fanfunding_font_weight": 700,
+        "fanfunding_font_color": "#EAF7F7",
+        "fanfunding_font_color2": "#FF3B30",
+        "fanfunding_variations": []
+      },
+      "jewel_gifts": {
+        "jewel_gift_enabled": true,
+        "jewel_gift_layout": "side",
+        "jewel_gift_image_size": 50,
+        "jewel_gift_image_volume": 100,
+        "jewel_gift_positioning_mode": "preset",
+        "jewel_gift_image_x": 50,
+        "jewel_gift_image_y": 50,
+        "jewel_gift_text_x": 50,
+        "jewel_gift_text_y": 50,
+        "jewel_gift_show_animation": "fadeIn",
+        "jewel_gift_hide_animation": "fadeOut",
+        "jewel_gift_tts_enabled": false,
+        "jewel_gift_tts_min_jewels": 0,
+        "jewel_gift_tts_language": "Salli",
+        "jewel_gift_tts_security": 1,
+        "jewel_gift_tts_repetition_block_length": 0,
+        "jewel_gift_tts_volume": 75,
+        "jewel_gift_tts_include_message_template": false,
+        "jewel_gift_alert_min_jewels": 0,
+        "recent_events_jewel_gift_min_jewels": 0,
+        "jewel_gift_message_template": "{name}",
+        "jewel_gift_text_animation": "",
+        "jewel_gift_text_intro_animation": "",
+        "jewel_gift_text_outro_animation": "",
+        "jewel_gift_use_gift_image": false,
+        "jewel_gift_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_gift.gif",
+        "jewel_gift_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_gift.ogg",
+        "jewel_gift_sound_volume": 40,
+        "jewel_gift_alert_duration": 8000,
+        "jewel_gift_text_delay": 0,
+        "jewel_gift_custom_html_enabled": true,
+        "jewel_gift_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "jewel_gift_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "jewel_gift_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "jewel_gift_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "REGALO DE JOYAS"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "REGALO ESPECIAL"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_jewel_gift_message": true,
+        "jewel_gift_alert_message_min_jewels": 0,
+        "jewel_gift_message_font": "Open Sans",
+        "jewel_gift_message_font_size": "24px",
+        "jewel_gift_message_font_weight": 400,
+        "jewel_gift_message_font_color": "#FFFFFF",
+        "jewel_gift_font": "Exo",
+        "jewel_gift_font_size": 32,
+        "jewel_gift_font_weight": 700,
+        "jewel_gift_font_color": "#EAF7F7",
+        "jewel_gift_font_color2": "#17DFF2",
+        "jewel_gift_variations": []
+      },
+      "super_stickers": {
+        "super_sticker_enabled": true,
+        "super_sticker_layout": "side",
+        "super_sticker_image_size": 50,
+        "super_sticker_image_volume": 100,
+        "super_sticker_positioning_mode": "preset",
+        "super_sticker_image_x": 50,
+        "super_sticker_image_y": 50,
+        "super_sticker_text_x": 50,
+        "super_sticker_text_y": 50,
+        "super_sticker_show_animation": "fadeIn",
+        "super_sticker_hide_animation": "fadeOut",
+        "super_sticker_tts_enabled": false,
+        "super_sticker_tts_min_amount": 0,
+        "super_sticker_tts_language": "Salli",
+        "super_sticker_tts_security": 1,
+        "super_sticker_tts_repetition_block_length": 0,
+        "super_sticker_tts_volume": 75,
+        "super_sticker_tts_include_message_template": false,
+        "super_sticker_alert_min_amount": 0,
+        "recent_events_super_sticker_min_amount": 0,
+        "super_sticker_ignore_currency_conversion": false,
+        "super_sticker_message_template": "{name}",
+        "super_sticker_text_animation": "",
+        "super_sticker_text_intro_animation": "",
+        "super_sticker_text_outro_animation": "",
+        "super_sticker_use_sticker_image": false,
+        "super_sticker_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_superchat.gif",
+        "super_sticker_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_superchat.ogg",
+        "super_sticker_sound_volume": 40,
+        "super_sticker_alert_duration": 8000,
+        "super_sticker_text_delay": 0,
+        "super_sticker_custom_html_enabled": true,
+        "super_sticker_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "super_sticker_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "super_sticker_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "super_sticker_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "SUPER STICKER"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "STICKER ESPECIAL"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#FF3B30"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_super_sticker_message": true,
+        "super_sticker_alert_message_min_amount": 0,
+        "super_sticker_message_font": "Open Sans",
+        "super_sticker_message_font_size": "24px",
+        "super_sticker_message_font_weight": 400,
+        "super_sticker_message_font_color": "#FFFFFF",
+        "super_sticker_font": "Exo",
+        "super_sticker_font_size": 32,
+        "super_sticker_font_weight": 700,
+        "super_sticker_font_color": "#EAF7F7",
+        "super_sticker_font_color2": "#FF3B30",
+        "super_sticker_variations": []
+      }
+    },
+    "kick": {
+      "follows": {
+        "kick_follow_enabled": true,
+        "kick_follow_layout": "side",
+        "kick_follow_image_size": 50,
+        "kick_follow_image_volume": 100,
+        "kick_follow_positioning_mode": "preset",
+        "kick_follow_image_x": 50,
+        "kick_follow_image_y": 50,
+        "kick_follow_text_x": 50,
+        "kick_follow_text_y": 50,
+        "kick_follow_show_animation": "fadeIn",
+        "kick_follow_hide_animation": "fadeOut",
+        "kick_follow_message_template": "{name}",
+        "kick_follow_text_animation": "",
+        "kick_follow_text_intro_animation": "",
+        "kick_follow_text_outro_animation": "",
+        "kick_follow_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_follow.gif",
+        "kick_follow_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_follow.ogg",
+        "kick_follow_sound_volume": 40,
+        "kick_follow_alert_duration": 8000,
+        "kick_follow_text_delay": 0,
+        "kick_follow_custom_html_enabled": true,
+        "kick_follow_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "kick_follow_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "kick_follow_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "kick_follow_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "NUEVO SEGUIDOR"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "BIENVENIDO A KAOSMCS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "kick_follow_font": "Exo",
+        "kick_follow_font_size": 32,
+        "kick_follow_font_weight": 700,
+        "kick_follow_font_color": "#EAF7F7",
+        "kick_follow_font_color2": "#17DFF2",
+        "kick_follow_variations": []
+      },
+      "subscriptions": {
+        "kick_sub_enabled": true,
+        "kick_sub_layout": "side",
+        "kick_sub_image_size": 50,
+        "kick_sub_image_volume": 100,
+        "kick_sub_positioning_mode": "preset",
+        "kick_sub_image_x": 50,
+        "kick_sub_image_y": 50,
+        "kick_sub_text_x": 50,
+        "kick_sub_text_y": 50,
+        "kick_sub_show_animation": "fadeIn",
+        "kick_sub_hide_animation": "fadeOut",
+        "kick_sub_message_template": "{name}",
+        "kick_sub_text_animation": "",
+        "kick_sub_text_intro_animation": "",
+        "kick_sub_text_outro_animation": "",
+        "kick_sub_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+        "kick_sub_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+        "kick_sub_sound_volume": 40,
+        "kick_sub_alert_duration": 8000,
+        "kick_sub_text_delay": 0,
+        "kick_sub_custom_html_enabled": true,
+        "kick_sub_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "kick_sub_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "kick_sub_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "kick_sub_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "SUSCRIPTOR"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "GRACIAS POR BANCAR"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_kick_resub_message": true,
+        "kick_resub_message_font": "Open Sans",
+        "kick_resub_message_font_size": "24px",
+        "kick_resub_message_font_weight": 800,
+        "kick_resub_message_font_color": "#4A54C3",
+        "kick_resub_tts_enabled": false,
+        "kick_resub_tts_language": "Salli",
+        "kick_resub_tts_security": 1,
+        "kick_resub_tts_repetition_block_length": 0,
+        "kick_resub_tts_volume": 75,
+        "kick_resub_tts_include_message_template": false,
+        "kick_sub_font": "Exo",
+        "kick_sub_font_size": 32,
+        "kick_sub_font_weight": 700,
+        "kick_sub_font_color": "#EAF7F7",
+        "kick_sub_font_color2": "#17DFF2",
+        "kick_resub_message_allow_emotes": true,
+        "kick_sub_variations": [
+          {
+            "uuid": "d3fc38c7-59af-42c1-aead-36f284a1ad94",
+            "name": "Resub",
+            "conditions": [
+              {
+                "type": "RANDOM",
+                "description": "Randomly"
+              },
+              {
+                "type": "MIN_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is at least <months>"
+              },
+              {
+                "type": "EXACT_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is exactly <months>"
+              },
+              {
+                "type": "SUBSCRIPTION_GIFT",
+                "description": "When subscription is a gift"
+              },
+              {
+                "type": "ANON_SUBSCRIPTION_GIFT",
+                "description": "When an anonymous user gifts a subscription"
+              },
+              {
+                "type": "MIN_COMMUNITY_GIFTS",
+                "description": "When a user gifts at least <amount> subs to the community at once"
+              },
+              {
+                "type": "MIN_ANON_COMMUNITY_GIFTS",
+                "description": "When an anonymous user gifts at least <amount> subs to the community at once"
+              }
+            ],
+            "condition": "MIN_MONTHS_SUBSCRIBED",
+            "conditionData": 2,
+            "settings": {
+              "layout": "side",
+              "positioningMode": "preset",
+              "showAnimation": "fadeIn",
+              "hideAnimation": "fadeOut",
+              "text": {
+                "format": "{name} renovó por {months} meses",
+                "animation": "",
+                "introAnimation": "",
+                "outroAnimation": "",
+                "font": "Exo",
+                "size": 32,
+                "thickness": 700,
+                "color": "#EAF7F7",
+                "color2": "#17DFF2",
+                "x": 50,
+                "y": 50
+              },
+              "image": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+                "size": 50,
+                "x": 50,
+                "y": 50,
+                "volume": 100
+              },
+              "sound": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+                "volume": 40
+              },
+              "duration": 8000,
+              "textDelay": 0,
+              "customHtmlEnabled": true,
+              "customHtml": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+              "customJs": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+              "customCss": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+              "customJson": {
+                "AlertType": {
+                  "label": "Tipo de alerta",
+                  "type": "textfield",
+                  "value": "RENOVACIÓN"
+                },
+                "AlertInfo": {
+                  "label": "Nombre / monto",
+                  "type": "textfield",
+                  "value": "{name}"
+                },
+                "AlertSub": {
+                  "label": "Línea inferior",
+                  "type": "textfield",
+                  "value": "{months} MESES"
+                },
+                "AlertTypeColor": {
+                  "label": "Color del tipo",
+                  "type": "colorpicker",
+                  "value": "#17DFF2"
+                },
+                "AlertNameColor": {
+                  "label": "Color del nombre",
+                  "type": "colorpicker",
+                  "value": "#EAF7F7"
+                }
+              },
+              "donationClippingEnabled": true,
+              "merchUseCustomImage": false,
+              "superStickerUseStickerImage": false,
+              "jewelGiftUseGiftImage": false,
+              "powerUpUseEventImage": false
+            },
+            "type": "kick_sub",
+            "paused": false
+          },
+          {
+            "uuid": "c326891c-8ba6-4a31-a2d1-da8aa596c380",
+            "name": "Gift sub",
+            "conditions": [
+              {
+                "type": "RANDOM",
+                "description": "Randomly"
+              },
+              {
+                "type": "MIN_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is at least <months>"
+              },
+              {
+                "type": "EXACT_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is exactly <months>"
+              },
+              {
+                "type": "SUBSCRIPTION_GIFT",
+                "description": "When subscription is a gift"
+              },
+              {
+                "type": "ANON_SUBSCRIPTION_GIFT",
+                "description": "When an anonymous user gifts a subscription"
+              },
+              {
+                "type": "MIN_COMMUNITY_GIFTS",
+                "description": "When a user gifts at least <amount> subs to the community at once"
+              },
+              {
+                "type": "MIN_ANON_COMMUNITY_GIFTS",
+                "description": "When an anonymous user gifts at least <amount> subs to the community at once"
+              }
+            ],
+            "condition": "SUBSCRIPTION_GIFT",
+            "conditionData": 2,
+            "settings": {
+              "layout": "side",
+              "positioningMode": "preset",
+              "showAnimation": "fadeIn",
+              "hideAnimation": "fadeOut",
+              "text": {
+                "format": "{gifter} regaló una sub a {name}",
+                "animation": "",
+                "introAnimation": "",
+                "outroAnimation": "",
+                "font": "Exo",
+                "size": 32,
+                "thickness": 700,
+                "color": "#EAF7F7",
+                "color2": "#17DFF2",
+                "x": 50,
+                "y": 50
+              },
+              "image": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+                "size": 50,
+                "x": 50,
+                "y": 50,
+                "volume": 100
+              },
+              "sound": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+                "volume": 40
+              },
+              "duration": 8000,
+              "textDelay": 0,
+              "customHtmlEnabled": true,
+              "customHtml": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+              "customJs": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+              "customCss": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+              "customJson": {
+                "AlertType": {
+                  "label": "Tipo de alerta",
+                  "type": "textfield",
+                  "value": "SUB REGALADA"
+                },
+                "AlertInfo": {
+                  "label": "Nombre / monto",
+                  "type": "textfield",
+                  "value": "{name}"
+                },
+                "AlertSub": {
+                  "label": "Línea inferior",
+                  "type": "textfield",
+                  "value": "DE {gifter}"
+                },
+                "AlertTypeColor": {
+                  "label": "Color del tipo",
+                  "type": "colorpicker",
+                  "value": "#17DFF2"
+                },
+                "AlertNameColor": {
+                  "label": "Color del nombre",
+                  "type": "colorpicker",
+                  "value": "#EAF7F7"
+                }
+              },
+              "donationClippingEnabled": true,
+              "merchUseCustomImage": false,
+              "superStickerUseStickerImage": false,
+              "jewelGiftUseGiftImage": false,
+              "powerUpUseEventImage": false
+            },
+            "type": "kick_sub",
+            "paused": false
+          },
+          {
+            "uuid": "7fad6540-9675-4a99-ab53-b5e543c176d9",
+            "name": "Anonymous gift sub",
+            "conditions": [
+              {
+                "type": "RANDOM",
+                "description": "Randomly"
+              },
+              {
+                "type": "MIN_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is at least <months>"
+              },
+              {
+                "type": "EXACT_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is exactly <months>"
+              },
+              {
+                "type": "SUBSCRIPTION_GIFT",
+                "description": "When subscription is a gift"
+              },
+              {
+                "type": "ANON_SUBSCRIPTION_GIFT",
+                "description": "When an anonymous user gifts a subscription"
+              },
+              {
+                "type": "MIN_COMMUNITY_GIFTS",
+                "description": "When a user gifts at least <amount> subs to the community at once"
+              },
+              {
+                "type": "MIN_ANON_COMMUNITY_GIFTS",
+                "description": "When an anonymous user gifts at least <amount> subs to the community at once"
+              }
+            ],
+            "condition": "ANON_SUBSCRIPTION_GIFT",
+            "conditionData": 3,
+            "settings": {
+              "layout": "side",
+              "positioningMode": "preset",
+              "showAnimation": "fadeIn",
+              "hideAnimation": "fadeOut",
+              "text": {
+                "format": "Un anónimo regaló una sub a {name}",
+                "animation": "",
+                "introAnimation": "",
+                "outroAnimation": "",
+                "font": "Exo",
+                "size": 32,
+                "thickness": 700,
+                "color": "#EAF7F7",
+                "color2": "#17DFF2",
+                "x": 50,
+                "y": 50
+              },
+              "image": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+                "size": 50,
+                "x": 50,
+                "y": 50,
+                "volume": 100
+              },
+              "sound": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+                "volume": 40
+              },
+              "duration": 8000,
+              "textDelay": 0,
+              "customHtmlEnabled": true,
+              "customHtml": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+              "customJs": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+              "customCss": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+              "customJson": {
+                "AlertType": {
+                  "label": "Tipo de alerta",
+                  "type": "textfield",
+                  "value": "SUB REGALADA"
+                },
+                "AlertInfo": {
+                  "label": "Nombre / monto",
+                  "type": "textfield",
+                  "value": "{name}"
+                },
+                "AlertSub": {
+                  "label": "Línea inferior",
+                  "type": "textfield",
+                  "value": "DE UN ANÓNIMO"
+                },
+                "AlertTypeColor": {
+                  "label": "Color del tipo",
+                  "type": "colorpicker",
+                  "value": "#17DFF2"
+                },
+                "AlertNameColor": {
+                  "label": "Color del nombre",
+                  "type": "colorpicker",
+                  "value": "#EAF7F7"
+                }
+              },
+              "donationClippingEnabled": true,
+              "merchUseCustomImage": false,
+              "superStickerUseStickerImage": false,
+              "jewelGiftUseGiftImage": false,
+              "powerUpUseEventImage": false
+            },
+            "type": "kick_sub",
+            "paused": false
+          },
+          {
+            "uuid": "4e9ec8ba-0056-42ea-ab60-b6b2c103d0d0",
+            "name": "Community gift subs",
+            "conditions": [
+              {
+                "type": "RANDOM",
+                "description": "Randomly"
+              },
+              {
+                "type": "MIN_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is at least <months>"
+              },
+              {
+                "type": "EXACT_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is exactly <months>"
+              },
+              {
+                "type": "SUBSCRIPTION_GIFT",
+                "description": "When subscription is a gift"
+              },
+              {
+                "type": "ANON_SUBSCRIPTION_GIFT",
+                "description": "When an anonymous user gifts a subscription"
+              },
+              {
+                "type": "MIN_COMMUNITY_GIFTS",
+                "description": "When a user gifts at least <amount> subs to the community at once"
+              },
+              {
+                "type": "MIN_ANON_COMMUNITY_GIFTS",
+                "description": "When an anonymous user gifts at least <amount> subs to the community at once"
+              }
+            ],
+            "condition": "MIN_COMMUNITY_GIFTS",
+            "conditionData": 1,
+            "settings": {
+              "layout": "side",
+              "positioningMode": "preset",
+              "showAnimation": "fadeIn",
+              "hideAnimation": "fadeOut",
+              "text": {
+                "format": "{gifter} regaló {amount} subs a la comunidad",
+                "animation": "",
+                "introAnimation": "",
+                "outroAnimation": "",
+                "font": "Exo",
+                "size": 32,
+                "thickness": 700,
+                "color": "#EAF7F7",
+                "color2": "#17DFF2",
+                "x": 50,
+                "y": 50
+              },
+              "image": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+                "size": 50,
+                "x": 50,
+                "y": 50,
+                "volume": 100
+              },
+              "sound": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+                "volume": 40
+              },
+              "duration": 8000,
+              "textDelay": 0,
+              "customHtmlEnabled": true,
+              "customHtml": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+              "customJs": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+              "customCss": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+              "customJson": {
+                "AlertType": {
+                  "label": "Tipo de alerta",
+                  "type": "textfield",
+                  "value": "SUBS REGALADAS"
+                },
+                "AlertInfo": {
+                  "label": "Nombre / monto",
+                  "type": "textfield",
+                  "value": "{gifter}"
+                },
+                "AlertSub": {
+                  "label": "Línea inferior",
+                  "type": "textfield",
+                  "value": "{amount} SUBS A LA COMUNIDAD"
+                },
+                "AlertTypeColor": {
+                  "label": "Color del tipo",
+                  "type": "colorpicker",
+                  "value": "#17DFF2"
+                },
+                "AlertNameColor": {
+                  "label": "Color del nombre",
+                  "type": "colorpicker",
+                  "value": "#EAF7F7"
+                }
+              },
+              "donationClippingEnabled": true,
+              "merchUseCustomImage": false,
+              "superStickerUseStickerImage": false,
+              "jewelGiftUseGiftImage": false,
+              "powerUpUseEventImage": false
+            },
+            "type": "kick_sub",
+            "paused": false
+          },
+          {
+            "uuid": "27f186df-2322-4458-af43-8e029c575dcb",
+            "name": "Anonymous community gift subs",
+            "conditions": [
+              {
+                "type": "RANDOM",
+                "description": "Randomly"
+              },
+              {
+                "type": "MIN_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is at least <months>"
+              },
+              {
+                "type": "EXACT_MONTHS_SUBSCRIBED",
+                "description": "Months subscribed is exactly <months>"
+              },
+              {
+                "type": "SUBSCRIPTION_GIFT",
+                "description": "When subscription is a gift"
+              },
+              {
+                "type": "ANON_SUBSCRIPTION_GIFT",
+                "description": "When an anonymous user gifts a subscription"
+              },
+              {
+                "type": "MIN_COMMUNITY_GIFTS",
+                "description": "When a user gifts at least <amount> subs to the community at once"
+              },
+              {
+                "type": "MIN_ANON_COMMUNITY_GIFTS",
+                "description": "When an anonymous user gifts at least <amount> subs to the community at once"
+              }
+            ],
+            "condition": "MIN_ANON_COMMUNITY_GIFTS",
+            "conditionData": 1,
+            "settings": {
+              "layout": "side",
+              "positioningMode": "preset",
+              "showAnimation": "fadeIn",
+              "hideAnimation": "fadeOut",
+              "text": {
+                "format": "Un anónimo regaló {amount} subs a la comunidad",
+                "animation": "",
+                "introAnimation": "",
+                "outroAnimation": "",
+                "font": "Exo",
+                "size": 32,
+                "thickness": 700,
+                "color": "#EAF7F7",
+                "color2": "#17DFF2",
+                "x": 50,
+                "y": 50
+              },
+              "image": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_sub.gif",
+                "size": 50,
+                "x": 50,
+                "y": 50,
+                "volume": 100
+              },
+              "sound": {
+                "href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_sub.ogg",
+                "volume": 40
+              },
+              "duration": 8000,
+              "textDelay": 0,
+              "customHtmlEnabled": true,
+              "customHtml": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+              "customJs": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+              "customCss": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+              "customJson": {
+                "AlertType": {
+                  "label": "Tipo de alerta",
+                  "type": "textfield",
+                  "value": "SUBS REGALADAS"
+                },
+                "AlertInfo": {
+                  "label": "Nombre / monto",
+                  "type": "textfield",
+                  "value": "ANÓNIMO"
+                },
+                "AlertSub": {
+                  "label": "Línea inferior",
+                  "type": "textfield",
+                  "value": "{amount} SUBS A LA COMUNIDAD"
+                },
+                "AlertTypeColor": {
+                  "label": "Color del tipo",
+                  "type": "colorpicker",
+                  "value": "#17DFF2"
+                },
+                "AlertNameColor": {
+                  "label": "Color del nombre",
+                  "type": "colorpicker",
+                  "value": "#EAF7F7"
+                }
+              },
+              "donationClippingEnabled": true,
+              "merchUseCustomImage": false,
+              "superStickerUseStickerImage": false,
+              "jewelGiftUseGiftImage": false,
+              "powerUpUseEventImage": false
+            },
+            "type": "kick_sub",
+            "paused": false
+          }
+        ]
+      },
+      "kicks": {
+        "kick_kicks_enabled": true,
+        "kick_kicks_layout": "side",
+        "kick_kicks_image_size": 50,
+        "kick_kicks_image_volume": 100,
+        "kick_kicks_positioning_mode": "preset",
+        "kick_kicks_image_x": 50,
+        "kick_kicks_image_y": 50,
+        "kick_kicks_text_x": 50,
+        "kick_kicks_text_y": 50,
+        "kick_kicks_show_animation": "fadeIn",
+        "kick_kicks_hide_animation": "fadeOut",
+        "kick_kicks_tts_enabled": false,
+        "kick_kicks_tts_min_amount": 0,
+        "kick_kicks_tts_language": "Salli",
+        "kick_kicks_tts_security": 1,
+        "kick_kicks_tts_repetition_block_length": 0,
+        "kick_kicks_tts_volume": 75,
+        "kick_kicks_tts_include_message_template": false,
+        "kick_kicks_alert_min_amount": 0,
+        "recent_events_kicks_min_amount": 0,
+        "kick_kicks_message_template": "{name} · {amount}",
+        "kick_kicks_text_animation": "",
+        "kick_kicks_text_intro_animation": "",
+        "kick_kicks_text_outro_animation": "",
+        "kick_kicks_image_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_alert_kicks.gif",
+        "kick_kicks_sound_href": "https://cdn.streamlabs.com/users/36071061/library/kaos_battle_kicks.ogg",
+        "kick_kicks_sound_volume": 40,
+        "kick_kicks_alert_duration": 8000,
+        "kick_kicks_text_delay": 0,
+        "kick_kicks_custom_html_enabled": true,
+        "kick_kicks_custom_html": "<div id=\"kaos-card\" style=\"--accent:{AlertTypeColor};--name:{AlertNameColor};\">\n  <div id=\"alert-image\">{img}</div>\n  <div id=\"alert-type\"><span id=\"typeInner\">{AlertType}</span></div>\n  <div id=\"alertMessage\"><span id=\"alertMessageInner\">{AlertInfo}</span></div>\n  <div id=\"alertSub\"><span id=\"subInner\">{AlertSub}</span></div>\n</div>\n",
+        "kick_kicks_custom_js": "(function () {\n  const card = document.getElementById('kaos-card');\n  const type = document.getElementById('typeInner');\n  const name = document.getElementById('alertMessageInner');\n  const sub = document.getElementById('subInner');\n  const nameWrap = document.getElementById('alertMessage');\n  const subWrap = document.getElementById('alertSub');\n  if (!card || !type || !name || !sub) return;\n\n  function fitName() {\n    const len = (name.textContent || '').trim().length;\n    let size = 4.2;\n    if (len > 14) size = Math.max(2.2, 4.2 - (len - 14) * (2.0 / 12));\n    name.style.fontSize = size + 'vw';\n  }\n\n  const txt = (type.textContent || '').trim();\n  type.textContent = '';\n  [...txt].forEach(function (ch, i) {\n    const s = document.createElement('span');\n    s.textContent = ch === ' ' ? '\\u00A0' : ch;\n    type.appendChild(s);\n    setTimeout(function () {\n      s.style.opacity = '1';\n      s.style.transform = 'translateY(0)';\n    }, 220 + i * 35);\n  });\n\n  setTimeout(function () {\n    fitName();\n    nameWrap.style.opacity = '1';\n    name.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)';\n  }, 620);\n\n  setTimeout(function () {\n    subWrap.style.opacity = '1';\n    subWrap.style.transform = 'translateY(0)';\n  }, 980);\n\n  setTimeout(function () {\n    card.style.transition = 'opacity .4s ease';\n    card.style.opacity = '0';\n  }, 7200);\n})();\n",
+        "kick_kicks_custom_css": "@import url('https://fonts.googleapis.com/css2?family=Exo:ital,wght@0,600;0,700;0,900;1,700&display=swap');\n\nhtml, body {\n  margin: 0;\n  padding: 0;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: transparent;\n}\n\nbody {\n  font-family: 'Exo', sans-serif;\n}\n\n#kaos-card {\n  position: absolute;\n  left: 50%;\n  bottom: 8vh;\n  transform: translate(-50%, 0);\n  width: 62.5vw;\n  height: 20.833vw;\n  opacity: 0;\n  animation: cardIn .35s ease-out .05s forwards;\n}\n\n#alert-image {\n  position: absolute !important;\n  inset: 0 !important;\n  z-index: 1 !important;\n  background-size: contain !important;\n  background-position: center !important;\n  background-repeat: no-repeat !important;\n}\n\n#alert-image img {\n  display: none !important;\n}\n\n#alert-image video {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: contain !important;\n  display: block !important;\n}\n\n#alert-type {\n  position: absolute;\n  left: 31.8%;\n  top: 29.5%;\n  z-index: 3;\n  font-size: 1.7vw;\n  font-weight: 700;\n  letter-spacing: .18vw;\n  color: var(--accent, #17DFF2);\n  text-transform: uppercase;\n  white-space: nowrap;\n}\n\n#alert-type > #typeInner {\n  display: inline-block;\n  opacity: 1;\n  transform: none;\n}\n\n#typeInner > span {\n  display: inline-block;\n  opacity: 0;\n  transform: translateY(.5vw);\n  transition: opacity .18s ease, transform .18s ease;\n}\n\n#alertMessage {\n  position: absolute;\n  left: 31.8%;\n  top: 41.5%;\n  z-index: 4;\n  width: 64%;\n  height: 26%;\n  overflow: hidden;\n}\n\n#alertMessageInner {\n  display: block;\n  width: 100%;\n  font-size: 4.2vw;\n  font-weight: 900;\n  line-height: .95;\n  color: var(--name, #EAF7F7);\n  text-transform: uppercase;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);\n  transition: clip-path .55s cubic-bezier(.2, .8, .2, 1);\n}\n\n#alertSub {\n  position: absolute;\n  left: 31.8%;\n  top: 69%;\n  z-index: 3;\n  font-size: 1.55vw;\n  font-weight: 600;\n  letter-spacing: .12vw;\n  color: #9FB3B8;\n  text-transform: uppercase;\n  white-space: nowrap;\n  opacity: 0;\n  transform: translateY(.4vw);\n  transition: opacity .35s ease, transform .35s ease;\n}\n\n@keyframes cardIn {\n  from {\n    opacity: 0;\n    transform: translate(-50%, 1.2vw);\n  }\n  to {\n    opacity: 1;\n    transform: translate(-50%, 0);\n  }\n}\n",
+        "kick_kicks_custom_json": {
+          "AlertType": {
+            "label": "Tipo de alerta",
+            "type": "textfield",
+            "value": "KICKS"
+          },
+          "AlertInfo": {
+            "label": "Nombre / monto",
+            "type": "textfield",
+            "value": "{name}"
+          },
+          "AlertSub": {
+            "label": "Línea inferior",
+            "type": "textfield",
+            "value": "{amount} KICKS"
+          },
+          "AlertTypeColor": {
+            "label": "Color del tipo",
+            "type": "colorpicker",
+            "value": "#17DFF2"
+          },
+          "AlertNameColor": {
+            "label": "Color del nombre",
+            "type": "colorpicker",
+            "value": "#EAF7F7"
+          }
+        },
+        "show_kicks_message": true,
+        "kick_kicks_message_allow_emotes": true,
+        "kick_kicks_alert_message_min_amount": 0,
+        "kick_kicks_message_font": "Open Sans",
+        "kick_kicks_message_font_size": "24px",
+        "kick_kicks_message_font_weight": 800,
+        "kick_kicks_message_font_color": "#4A54C3",
+        "kick_kicks_font": "Exo",
+        "kick_kicks_font_size": 32,
+        "kick_kicks_font_weight": 700,
+        "kick_kicks_font_color": "#EAF7F7",
+        "kick_kicks_font_color2": "#17DFF2",
+        "kick_kicks_variations": []
+      }
+    }
+  }
+}
