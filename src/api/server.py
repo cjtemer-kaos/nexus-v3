@@ -2194,6 +2194,15 @@ async def slash_exec(request: Request):
     res = await slash_reg.execute(raw, ctx)
     if res.data.get("action") == "set_permission":
         perm = res.data.get("permission")
+        # El peldaño (#0..#4) queda pegado a la sesión; el preset se persiste
+        # igual que antes para que el default sobreviva al reinicio.
+        _sid = str(body.get("session_id") or ctx.get("session_id") or "")
+        _lvl = res.data.get("level")
+        if _sid and isinstance(_lvl, int):
+            from src.core.scope import level_name
+
+            _SESSION_LEVELS[_sid] = _lvl
+            res.message += f" (sesión {_sid[:8]}: #{_lvl} {level_name(_lvl)})"
         try:
             from src.core.config import load_raw_config, save_config
             cfg = load_raw_config()
@@ -2474,6 +2483,8 @@ async def status_endpoint():
         if kids:
             subs[sid] = kids
     modes = dict(_SESSION_MODES)
+    # Peldaño de permisos #0..#4 por sesión (la UI muestra en qué escalón corre).
+    levels = {sid: {"level": lvl, "name": _level_name(lvl)} for sid, lvl in _SESSION_LEVELS.items()}
     # Aprobaciones pendientes: la campana de la UI las muestra sin tener que
     # abrir la vista de Aprobaciones (antes solo contaba turnos y sub-agentes).
     try:
@@ -2482,6 +2493,7 @@ async def status_endpoint():
     except Exception:
         approvals_pending = 0
     return {"running": running, "sub_agents": subs, "modes": modes,
+            "permission_levels": levels,
             "approvals_pending": approvals_pending,
             "counts": {"running": len(running), "sessions_with_subagents": len(subs)}}
 
@@ -3248,21 +3260,29 @@ def _full_access_roots() -> tuple[str, ...]:
     return tuple(roots) or ("/",)
 
 
-def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: str | None = None):
+def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: str | None = None,
+                 level: int | None = None):
     """Scope jail desde config.scope (allowed_roots + deny_patterns + permission).
 
     Fase DECK: antes no se pasaba permission= y ScopeConfig quedaba en el default
     workspace_write -> 'full' no liberaba nada. Con permission=full se anaden
     todas las unidades y la red.
 
+    `level` es el peldaño #0..#4 del turno: manda sobre el preset (define permiso,
+    raíces y red) y ademas activa los gates de `Scope.check_tool` (#0 sin tools,
+    #3 con confirm). Un ayudante read_only nunca sube de #1.
+
     Aislamiento por ayudante: si agent_id, su workspace propio reemplaza ./workspace
     como raiz escribible (./data sigue compartido para sesiones/spill/cerebro).
     """
-    from src.core.scope import Scope, ScopeConfig
+    from src.core.scope import Scope, ScopeConfig, level_preset
     scope_cfg = cfg.get("scope", {})
     permission = str(scope_cfg.get("permission", "workspace_write"))
     if permission_override:
         permission = permission_override
+    turn_level = None if level is None else int(level)
+    if turn_level is not None and not permission_override:
+        permission = level_preset(turn_level)
     roots = list(scope_cfg.get("allowed_roots", ["./workspace", "./data"]))
     if agent_id:
         try:
@@ -3273,6 +3293,8 @@ def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: st
             # Un ayudante read_only no hereda escritura aunque el scope global sea full.
             if resolved.get("mode") == "read_only":
                 permission = "read_only"
+                if turn_level is None or turn_level > 1:
+                    turn_level = 1
         except Exception:
             pass
     roots = tuple(roots)
@@ -3300,7 +3322,7 @@ def _build_scope(cfg: dict, agent_id: str | None = None, permission_override: st
         allow_mutating_without_confirm=bool(scope_cfg.get("allow_mutating_without_confirm", False)) or permission == "full",
         require_confirm_mutating=bool(scope_cfg.get("require_confirm_mutating", False)) and permission != "full",
         permission=permission,
-    ), project_root=_PROJECT_ROOT)
+    ), project_root=_PROJECT_ROOT, turn_level=turn_level)
 
 
 async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None, cfg: dict, router, images: list | None = None) -> str:
@@ -3394,6 +3416,96 @@ def _save_session_modes() -> None:
 
 
 _SESSION_MODES: dict = _load_session_modes()  # session_id -> "act" | "plan"
+
+
+# ---------------------------------------------------------------------------
+# Escalera de permisos #0..#4: override por sesión y por mensaje.
+# ---------------------------------------------------------------------------
+# La sesión guarda un peldaño (lo fija `/permiso #3`); un mensaje puede bajar
+# su alcance para ESE turno con `permission_level` en el body. Subir por encima
+# del preset de config exige `permission_approved: true`: sin eso se recorta y
+# se avisa, en vez de fallar, para no cortar trabajo desatendido.
+_SESSION_LEVELS: dict[str, int] = {}
+
+
+def _level_name(level: int | None) -> str:
+    from src.core.scope import level_name
+
+    return level_name(level)
+
+
+def _session_level(session_id: str) -> int | None:
+    return _SESSION_LEVELS.get(str(session_id or ""))
+
+
+def _resolve_turn_level(requested, session_id: str, cfg: dict,
+                        approved: bool = False) -> tuple[int | None, str]:
+    """Peldaño del turno + aviso de recorte ('' si no hubo recorte)."""
+    from src.core.scope import (
+        level_from_permission,
+        level_name,
+        normalize_level,
+    )
+
+    scope_cfg = (cfg or {}).get("scope", {}) if isinstance(cfg, dict) else {}
+    ceiling = level_from_permission(scope_cfg.get("permission", "workspace_write"))
+    base = _SESSION_LEVELS.get(str(session_id or ""))
+    if base is not None:
+        ceiling = max(ceiling, int(base))
+    if requested is None or requested == "":
+        return base, ""
+    level = normalize_level(requested, default=ceiling)
+    if level <= ceiling or approved:
+        return level, ""
+    return ceiling, (f"nivel pedido #{level} ({level_name(level)}) supera el alcance "
+                     f"configurado; se usó #{ceiling} ({level_name(ceiling)}). "
+                     f"Para ese turno mandá permission_approved=true.")
+
+
+@app.get("/api/permission/levels")
+async def permission_levels(session_id: str = ""):
+    """La escalera completa + en qué peldaño corre la sesión."""
+    from src.core.scope import ladder_table, level_from_permission
+
+    cfg = _load_config_safe()
+    preset = str((cfg.get("scope") or {}).get("permission", "workspace_write"))
+    current = _SESSION_LEVELS.get(session_id)
+    effective = current if current is not None else level_from_permission(preset)
+    return {
+        "levels": ladder_table(),
+        "session_id": session_id,
+        "session_level": current,
+        "preset": preset,
+        "preset_level": level_from_permission(preset),
+        "effective_level": effective,
+        "effective_name": _level_name(effective),
+    }
+
+
+@app.post("/api/permission/level")
+async def permission_level_set(request: Request):
+    """Fija (o borra con null) el peldaño de la sesión."""
+    from src.core.scope import level_name, normalize_level
+
+    body = await _json_body(request)
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id requerido")
+    raw = body.get("level", body.get("permission_level"))
+    if raw is None or raw == "":
+        _SESSION_LEVELS.pop(session_id, None)
+        return {"ok": True, "session_id": session_id, "level": None}
+    _digits = str(raw).strip().lstrip("#")
+    if _digits.isdigit():
+        if not 0 <= int(_digits) <= 4:
+            raise HTTPException(status_code=400, detail="level debe ser #0..#4, 0..4 o un alias")
+        level = int(_digits)
+    else:
+        level = normalize_level(raw, default=-1)
+        if level < 0:
+            raise HTTPException(status_code=400, detail="level debe ser #0..#4, 0..4 o un alias")
+    _SESSION_LEVELS[session_id] = level
+    return {"ok": True, "session_id": session_id, "level": level, "name": level_name(level)}
 
 
 def _steer_drain(session_id: str) -> list:
@@ -5006,20 +5118,32 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                           model: str | None = None, force_tools: bool = False,
                           agent_id: str | None = None, on_delta=None, on_reasoning=None,
                           extract_memory: bool = True, interactive: bool = True,
-                          source: str = "chat"):
+                          source: str = "chat", level: int | None = None):
     """Un run de AgentLoop con la construccion estandar (config segura).
 
     `interactive=False` para clientes sin canal de aprobacion (p.ej. `/v1`):
     las acciones gateadas se deniegan de inmediato en vez de esperar 120 s.
+
+    `level` es el peldaño de permisos #0..#4 que manda en ESTE turno (lo resuelve
+    `_resolve_turn_level` desde la sesión o desde el mensaje); None = preset.
     """
     cfg = _load_config_safe()
     router = _get_router(cfg)
     # Plan mode: el turno corre con alcance read_only (sin mutaciones).
     _plan = _SESSION_MODES.get(session_id) == "plan"
-    scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
+    # Peldaño #0..#4 del turno (None = el preset de config manda).
+    _turn_level = None if _plan else level
+    scope = _build_scope(
+        cfg, agent_id,
+        permission_override="read_only" if _plan else None,
+        level=1 if _plan else _turn_level,
+    )
     _approval = _build_approval_context(cfg, session_id, source=source,
                                         interactive=interactive)
     registry = _build_registry(scope, session_id, cfg, router=router)
+    if scope.level == 0:
+        # #0 conversar: sin herramientas, ni esquemas en el prompt.
+        registry = registry.subset([])
     # Los handlers con gate propio (write_file/edit) leen este contexto para
     # fallar cerrado cuando no hay UI (subagentes/MCP).
     registry.approval = _approval
@@ -5144,9 +5268,17 @@ async def chat(request: Request):
 
         # Scope + tools (mismo helper que /v1, /ws y /stream)
         _plan = _SESSION_MODES.get(session_id) == "plan"
-        scope = _build_scope(cfg, agent_id, permission_override="read_only" if _plan else None)
+        _turn_level, _level_note = _resolve_turn_level(
+            body.get("permission_level"), session_id, cfg,
+            approved=bool(body.get("permission_approved")),
+        )
+        scope = _build_scope(cfg, agent_id,
+                             permission_override="read_only" if _plan else None,
+                             level=1 if _plan else _turn_level)
         _approval = _build_approval_context(cfg, session_id, source="chat", interactive=True)
         registry = _build_registry(scope, session_id, cfg, router=router)
+        if scope.level == 0:
+            registry = registry.subset([])
         registry.approval = _approval
 
         _gema = (_agent_cfg or {}).get("gema") or ""
@@ -5200,6 +5332,9 @@ async def chat(request: Request):
             "reply": result.final_output,
             "todos": _t,
             "permission": perm_snap,
+            "permission_level": scope.level,
+            "permission_level_name": _level_name(scope.level),
+            "permission_level_note": _level_note,
             "agent": (_agent_cfg or {}).get("id"),
             "success": result.success,
             "model": result.model,
@@ -5521,7 +5656,8 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
-def _sse_stream_response(message: str, session_id: str, model: str, agent_id: str = ""):
+def _sse_stream_response(message: str, session_id: str, model: str, agent_id: str = "",
+                         level: int | None = None, level_note: str = ""):
     async def gen():
         import json as _js3
         import asyncio as _aio
@@ -5558,6 +5694,7 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 on_reasoning=_on_reasoning,
                 interactive=True,
                 source="chat-stream",
+                level=level,
             ))
             while not task.done():
                 try:
@@ -5582,16 +5719,19 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 import contextlib as _ctx
                 with _ctx.suppress(BaseException):
                     await task
-        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id), 'success': ok, 'error': err or None}, ensure_ascii=False)}\n\n"
+        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id), 'success': ok, 'error': err or None, 'permission_level': level, 'permission_level_name': _level_name(level) if level is not None else None, 'permission_level_note': level_note or None}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.get("/api/chat/stream")
-async def sse_chat_get(message: str = "", model: str = "auto", session_id: str = "", agent_id: str = ""):
+async def sse_chat_get(message: str = "", model: str = "auto", session_id: str = "", agent_id: str = "",
+                       permission_level: str = ""):
     if not message.strip():
         raise HTTPException(status_code=400, detail="message required")
-    return _sse_stream_response(message, session_id, model, agent_id)
+    cfg = _load_config_safe()
+    lvl, note = _resolve_turn_level(permission_level or None, session_id, cfg)
+    return _sse_stream_response(message, session_id, model, agent_id, level=lvl, level_note=note)
 
 
 @app.post("/api/chat/stream")
@@ -5600,11 +5740,19 @@ async def sse_chat_post(request: Request):
     message = str(body.get("message", "") or "")
     if not message.strip():
         raise HTTPException(status_code=400, detail="message required")
+    session_id = str(body.get("session_id", "") or "")
+    cfg = _load_config_safe()
+    lvl, note = _resolve_turn_level(
+        body.get("permission_level"), session_id, cfg,
+        approved=bool(body.get("permission_approved")),
+    )
     return _sse_stream_response(
         message,
-        str(body.get("session_id", "") or ""),
+        session_id,
         str(body.get("model", "auto") or "auto"),
         str(body.get("agent_id", "") or ""),
+        level=lvl,
+        level_note=note,
     )
 
 @app.get("/{full_path:path}", include_in_schema=False)

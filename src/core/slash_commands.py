@@ -218,17 +218,44 @@ async def _h_goal(args, ctx):
     return SlashResult(ok=True, message=f"goal registrado: {objective[:120]}", data={"action": "goal_set", "objective": objective})
 
 async def _h_permission(args, ctx):
-    opts = ["read_only", "workspace_write", "full"]
+    from src.core.scope import LEVEL_ALIASES, PERMISSION_LADDER, level_from_permission, level_name
+
+    ladder = " | ".join(
+        f"#{lvl} {meta['name']}" for lvl, meta in sorted(PERMISSION_LADDER.items())
+    )
     if not args:
-        return SlashResult(ok=True, message=f"permisos: {', '.join(opts)} — uso: /permission <{('|').join(opts)}>",
-                           data={"action": "permission_list", "options": opts})
-    v = args[0].lower().replace("-", "_")
-    # alias friendly
-    alias = {"read": "read_only", "readonly": "read_only", "workspace": "workspace_write", "write": "workspace_write", "full_access": "full"}
-    v = alias.get(v, v)
+        return SlashResult(
+            ok=True,
+            message=(f"escalera: {ladder}\n"
+                     f"uso: /permiso #3 — el peldaño vale para esta sesión.\n"
+                     f"#0 sin herramientas · #1 solo lectura · #2 escribe en el workspace · "
+                     f"#3 toda la PC con confirm=true · #4 toda la PC sin frenos"),
+            data={"action": "permission_list", "levels": [
+                {"level": lvl, "name": str(meta["name"]), "hint": str(meta["hint"])}
+                for lvl, meta in sorted(PERMISSION_LADDER.items())
+            ]},
+        )
+    raw = str(args[0]).strip().lower()
+    # Acepta #3, 3, maquina, y los presets de siempre (read_only/workspace_write/full).
+    if raw.lstrip("#").isdigit() or raw in LEVEL_ALIASES:
+        lvl = int(raw.lstrip("#")) if raw.lstrip("#").isdigit() else LEVEL_ALIASES[raw]
+        if not 0 <= lvl <= 4:
+            return SlashResult(ok=False, message=f"peldaño fuera de rango: {raw} (0..4)")
+        return SlashResult(
+            ok=True,
+            message=f"peldaño #{lvl} ({level_name(lvl)}) para esta sesión: {PERMISSION_LADDER[lvl]['hint']}",
+            data={"action": "set_permission", "level": lvl,
+                  "permission": str(PERMISSION_LADDER[lvl]["preset"])},
+        )
+    opts = ["read_only", "workspace_write", "full"]
+    alias = {"read": "read_only", "readonly": "read_only", "workspace": "workspace_write",
+             "write": "workspace_write", "full_access": "full"}
+    v = alias.get(raw.replace("-", "_"), raw.replace("-", "_"))
     if v not in opts:
-        return SlashResult(ok=False, message=f"permiso inválido {v!r} — opciones: {', '.join(opts)}")
-    return SlashResult(ok=True, message=f"permiso -> {v}", data={"action": "set_permission", "permission": v})
+        return SlashResult(ok=False, message=f"permiso inválido {v!r} — opciones: {ladder}")
+    lvl = level_from_permission(v)
+    return SlashResult(ok=True, message=f"permiso -> {v} (peldaño #{lvl} {level_name(lvl)})",
+                       data={"action": "set_permission", "permission": v, "level": lvl})
 
 async def _h_export(args, ctx):
     return SlashResult(ok=True, message="export: descarga ZIP del log de sesión (GET /api/sessions/{id}/export)",
@@ -293,7 +320,7 @@ for spec in (
     SlashCommand("doctor",  ["dr"],                  "open the diagnostic endpoint",   "",            _h_doctor),
     SlashCommand("compact",   ["compactar"],         "info compactación 4 capas",      "",            _h_compact),
     SlashCommand("goal",      ["g", "objetivo"],     "gestiona objetivo largo (goal)", "[objetivo|status|clear]", _h_goal),
-    SlashCommand("permission", ["perm", "permiso"],  "cambia permiso (read_only|workspace_write|full)", "<perm>", _h_permission),
+    SlashCommand("permission", ["perm", "permiso"],  "peldaño de permisos (#0..#4 o read_only|workspace_write|full)", "<#0..#4>", _h_permission),
     SlashCommand("export",    ["exportar"],          "exporta log de sesión ZIP",      "",            _h_export),
     SlashCommand("feedback",  ["fb"],                "envía feedback",               "[texto]",     _h_feedback),
     SlashCommand("todo",      ["todos"],             "ver lista todo actual",          "",            _h_todo),

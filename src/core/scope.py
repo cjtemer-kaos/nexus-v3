@@ -145,6 +145,128 @@ SANDBOX_ALIASES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Escalera de permisos #0..#4 (por turno)
+# ---------------------------------------------------------------------------
+# Los tres presets de arriba son el FORMATO DE GUARDADO (config.yaml, UI,
+# `/permiso`): no se tocan. La escalera es una capa mas fina encima, para poder
+# bajar el alcance de UN mensaje sin cambiar la config persistente, y para
+# nombrar el peldaño en el que corre el turno.
+#
+#   0 conversar  ninguna herramienta: el turno es solo texto
+#   1 leer       read_only: lectura + shell que no escribe
+#   2 workspace  workspace_write: escribe dentro de las raices permitidas
+#   3 maquina    full, pero toda mutacion exige confirm=true (supervisado)
+#   4 total      full sin frenos (lo de siempre con permission: full)
+#
+# `secretos` (HARD_DENY_PATTERNS) y la red (`allow_network`) siguen mandando
+# aparte: ningun peldaño los saltea.
+PERMISSION_LADDER: dict[int, dict[str, Any]] = {
+    0: {
+        "name": "conversar",
+        "preset": "read_only",
+        "tools": False,
+        "confirm_mutating": False,
+        "hint": "sin herramientas: el turno es solo conversacion",
+    },
+    1: {
+        "name": "leer",
+        "preset": "read_only",
+        "tools": True,
+        "confirm_mutating": False,
+        "hint": "solo lectura; la shell solo corre comandos que no escriben",
+    },
+    2: {
+        "name": "workspace",
+        "preset": "workspace_write",
+        "tools": True,
+        "confirm_mutating": False,
+        "hint": "escribe dentro de las raices permitidas",
+    },
+    3: {
+        "name": "maquina",
+        "preset": "full",
+        "tools": True,
+        "confirm_mutating": True,
+        "hint": "toda la PC, pero cada mutacion necesita confirm=true",
+    },
+    4: {
+        "name": "total",
+        "preset": "full",
+        "tools": True,
+        "confirm_mutating": False,
+        "hint": "toda la PC sin frenos",
+    },
+}
+
+LEVEL_ALIASES: dict[str, int] = {
+    "#0": 0, "0": 0, "conversar": 0, "chat": 0, "solo-conversar": 0, "solo_conversar": 0,
+    "#1": 1, "1": 1, "leer": 1, "read": 1, "read_only": 1, "read-only": 1, "readonly": 1,
+    "#2": 2, "2": 2, "workspace": 2, "workspace_write": 2, "workspace-write": 2, "escribir": 2,
+    "#3": 3, "3": 3, "maquina": 3, "máquina": 3, "machine": 3, "supervisado": 3,
+    "#4": 4, "4": 4, "total": 4, "full": 4, "full-access": 4, "full_access": 4,
+    "danger-full-access": 4, "danger_full_access": 4,
+}
+
+_LEVEL_MIN, _LEVEL_MAX = 0, 4
+
+
+def normalize_level(value: Any, default: int = 2) -> int:
+    """Traduce '#3', '3', 'maquina', 'read_only'... a un peldaño 0..4.
+
+    `default` se usa cuando el valor no se reconoce: nunca se adivina un nivel
+    mas alto que el pedido.
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return min(_LEVEL_MAX, max(_LEVEL_MIN, value))
+    key = str(value or "").strip().lower()
+    if not key:
+        return default
+    if key.lstrip("#").isdigit():
+        return min(_LEVEL_MAX, max(_LEVEL_MIN, int(key.lstrip("#"))))
+    level = LEVEL_ALIASES.get(key)
+    return default if level is None else level
+
+
+def level_preset(level: int | None) -> str:
+    return str(PERMISSION_LADDER.get(normalize_level(level), PERMISSION_LADDER[2])["preset"])
+
+
+def level_name(level: int | None) -> str:
+    return str(PERMISSION_LADDER.get(normalize_level(level), PERMISSION_LADDER[2])["name"])
+
+
+def level_hint(level: int | None) -> str:
+    return str(PERMISSION_LADDER.get(normalize_level(level), PERMISSION_LADDER[2])["hint"])
+
+
+def level_from_permission(permission: str | None) -> int:
+    """Peldaño equivalente a un preset guardado (read_only->1, full->4)."""
+    perm = normalize_permission(permission)
+    if perm == "read_only":
+        return 1
+    if perm == "full":
+        return 4
+    return 2
+
+
+def ladder_table() -> list[dict[str, Any]]:
+    """La escalera en forma serializable (UI, /permiso, docs)."""
+    return [
+        {
+            "level": lvl,
+            "name": str(meta["name"]),
+            "preset": str(meta["preset"]),
+            "tools": bool(meta["tools"]),
+            "confirm_mutating": bool(meta["confirm_mutating"]),
+            "hint": str(meta["hint"]),
+        }
+        for lvl, meta in sorted(PERMISSION_LADDER.items())
+    ]
+
+
 def normalize_permission(value: str | None) -> str:
     """Alias tolerant (read-only, workspace-write, danger-full-access)."""
     key = str(value or "workspace_write").strip().lower()
@@ -192,10 +314,21 @@ class Scope:
     project_root: Path
     # Override runtime del ladder (solo escala hacia arriba, con aprobacion).
     runtime_permission: str = ""
+    # Peldaño #0..#4 que manda durante ESTE turno. None = usar el preset.
+    turn_level: int | None = None
 
     @property
     def permission(self) -> str:
+        if self.turn_level is not None:
+            return level_preset(self.turn_level)
         return normalize_permission(self.runtime_permission or self.cfg.permission)
+
+    @property
+    def level(self) -> int:
+        """Peldaño efectivo: el del turno si lo hay, si no el del preset."""
+        if self.turn_level is not None:
+            return normalize_level(self.turn_level)
+        return level_from_permission(self.runtime_permission or self.cfg.permission)
 
     def can_escalate_to(self, target: str | None) -> bool:
         return permission_level(target) >= permission_level(self.permission)
@@ -205,6 +338,10 @@ class Scope:
         new_perm = normalize_permission(target)
         old_level = permission_level(self.permission)
         new_level = permission_level(new_perm)
+        if self.turn_level is not None:
+            raise ScopeDenied(
+                f"el turno corre en el peldaño #{normalize_level(self.turn_level)}"
+                f" ({level_name(self.turn_level)}): el escalado se decide antes de arrancar")
         if new_level < old_level:
             raise ScopeDenied(
                 f"el sandbox solo escala hacia arriba: {self.permission} -> {new_perm}")
@@ -305,7 +442,17 @@ class Scope:
         - Path args: validates common path keys via check_path
         - Size gate: checks content length against max_read_bytes for writes
         - Mutating confirmation: raises if mutating tool without confirm
+
+        El peldaño del turno manda primero: #0 bloquea cualquier herramienta y
+        #3 exige confirm=true en las mutantes; los presets de config siguen
+        aplicando despues.
         """
+        # Peldaño del turno: #0 no da ninguna herramienta, #3 pide confirmacion.
+        _lvl = self.level
+        if _lvl == 0 and not PERMISSION_LADDER[0]["tools"]:
+            raise ScopeDenied(
+                f"peldaño #0 (conversar): el turno es solo texto, {tool_name!r} no esta disponible")
+
         # Network gate
         if not self.cfg.allow_network and tool_name in NETWORK_TOOLS:
             raise ScopeDenied(f"herramienta de red denegada: {tool_name} (permitir_red=false)")
@@ -328,6 +475,12 @@ class Scope:
             else:
                 raise ScopeDenied(
                     f"permission read_only: herramienta bloqueada {tool_name!r} (solo lectura)")
+        # Peldaño #3: toda la PC, pero cada mutacion se confirma a mano.
+        if (_lvl == 3 and PERMISSION_LADDER[3]["confirm_mutating"]
+                and tool_name in MUTATING_TOOLS and not args.get("confirm")):
+            raise ScopeDenied(
+                f"peldaño #3 (maquina): {tool_name!r} necesita confirm=true "
+                f"(para trabajo desatendido usa #2 o #4)")
         # Mutating gate (opt-in): exige confirm=true en args cuando require_confirm_mutating.
         # read_only ya bloquea arriba; esto agrega confirmacion explicita a las mutantes.
         if tool_name in MUTATING_TOOLS and getattr(self.cfg, "require_confirm_mutating", False):
@@ -379,4 +532,8 @@ class Scope:
             "allow_mutating_without_confirm": self.cfg.allow_mutating_without_confirm,
             "permission": self.permission,
             "permission_level": permission_level(self.permission),
+            "level": self.level,
+            "level_name": level_name(self.level),
+            "level_hint": level_hint(self.level),
+            "turn_level": self.turn_level,
         }

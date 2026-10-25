@@ -639,3 +639,49 @@ def test_memoria_auditada_endpoints(tmp_path, monkeypatch):
     r = client.get("/api/memory/audit")
     assert r.status_code == 200
     assert r.json()["totals"]["verdicts"] == 2
+
+
+def test_escalera_de_permisos_endpoints(monkeypatch):
+    """El peldaño #0..#4 se consulta, se fija por sesión y se ve en /api/status."""
+    from src.api.server import _SESSION_LEVELS
+
+    # `/permiso` persiste el preset en config.yaml: en el test eso no se toca.
+    monkeypatch.setattr("src.core.config.save_config", lambda *a, **k: None)
+
+    sid = "s-ladder-e2e"
+    _SESSION_LEVELS.pop(sid, None)
+
+    r = client.get("/api/permission/levels", params={"session_id": sid})
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert [l["level"] for l in body["levels"]] == [0, 1, 2, 3, 4]
+    assert [l["name"] for l in body["levels"]] == [
+        "conversar", "leer", "workspace", "maquina", "total"]
+    assert body["session_level"] is None
+    assert body["effective_level"] == body["preset_level"]
+
+    r = client.post("/api/permission/level", json={"session_id": sid, "level": "#3"})
+    assert r.status_code == 200, r.text[:200]
+    assert r.json() == {"ok": True, "session_id": sid, "level": 3, "name": "maquina"}
+
+    r = client.get("/api/permission/levels", params={"session_id": sid})
+    assert r.json()["session_level"] == 3
+    assert r.json()["effective_name"] == "maquina"
+
+    r = client.get("/api/status")
+    assert r.status_code == 200
+    assert r.json()["permission_levels"][sid]["level"] == 3
+
+    r = client.post("/api/permission/level", json={"session_id": sid, "level": None})
+    assert r.status_code == 200 and r.json()["level"] is None
+    assert sid not in _SESSION_LEVELS
+
+    assert client.post("/api/permission/level", json={"level": 2}).status_code == 400
+    assert client.post(
+        "/api/permission/level", json={"session_id": sid, "level": 9}).status_code == 400
+
+    r = client.post("/api/slash", json={"command": "/permiso #2", "ctx": {"session_id": sid}})
+    assert r.status_code == 200
+    assert "peldaño" in r.json().get("message", "")
+    assert _SESSION_LEVELS.get(sid) == 2
+    _SESSION_LEVELS.pop(sid, None)
