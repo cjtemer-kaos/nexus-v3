@@ -161,7 +161,9 @@ def create_git_checkpoint(session_id: str, message: str = "",
                 args += ["-p", parent]
             commit = _run(args, cwd=root_p, env=_checkpoint_env()).stdout.strip()
             _run(base + ["update-ref", "HEAD", commit], cwd=root_p)
-            names = _run(base + ["diff-tree", "--no-commit-id", "--name-only", "-r", commit],
+            # `--root` es lo que hace que el primer commit liste sus archivos
+            # (sin él, diff-tree no muestra nada del commit raíz y files daba 0).
+            names = _run(base + ["diff-tree", "--no-commit-id", "--root", "--name-only", "-r", commit],
                          cwd=root_p).stdout.splitlines()
             return {"ok": True, "id": commit, "changed": True,
                     "files": len([n for n in names if n.strip()]),

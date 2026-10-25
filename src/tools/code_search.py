@@ -29,7 +29,7 @@ async def code_search(
     
     Args:
         query: Search query (regex or plain text)
-        path: Directory to search in (default: cwd)
+        path: Directory or file to search in (default: cwd)
         include: File pattern to include (e.g., "*.py")
         limit: Max results
     
@@ -40,8 +40,12 @@ async def code_search(
     if not os.path.isabs(search_path):
         search_path = os.path.abspath(search_path)
     
-    if not os.path.isdir(search_path):
-        return {"error": f"Directory not found: {search_path}"}
+    if not os.path.exists(search_path):
+        return {"error": f"Path not found: {search_path}"}
+    # Los modelos pasan el archivo que quieren mirar, no el directorio. rg acepta
+    # un archivo como path: antes esto devolvía "Directory not found" y la tool
+    # parecía rota.
+    only_file = os.path.isfile(search_path)
     
     results = []
     
@@ -85,7 +89,9 @@ async def code_search(
         max_file_size = 1024 * 1024  # 1MB
         
         count = 0
-        for root, dirs, files in os.walk(search_path):
+        walk = ([(os.path.dirname(search_path), [], [os.path.basename(search_path)])]
+                if only_file else os.walk(search_path))
+        for root, dirs, files in walk:
             dirs[:] = [d for d in dirs if not d.startswith('.') and d not in exclude_dirs]
             for fname in files:
                 if fname.startswith('.'):

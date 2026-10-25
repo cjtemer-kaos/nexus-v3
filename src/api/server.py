@@ -4627,7 +4627,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
         async def gema_run(gema: str, task: str) -> str:
             """Delega una tarea a una gema especializada (sub-loop aislado, LLM auto-asignado)."""
-            return await _helper_run(task, gema=gema, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
+            from src.core.gema_profiles import GEMA_PROFILES
+            _g = (gema or "").strip()
+            # Fail-closed: antes una gema mal escrita corría igual con el prompt
+            # vacío y otro modelo, y el resultado decía "gema: no-existe".
+            if _g and _g not in GEMA_PROFILES:
+                raise ValueError(
+                    f"gema desconocida: {gema!r}. Válidas: {', '.join(sorted(GEMA_PROFILES))}")
+            return await _helper_run(task, gema=_g, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
         registry.register_function(
             gema_run, name="gema_run",
             description="Delega una tarea a una gema especializada. El LLM se asigna automáticamente según lo disponible. Usa gema_list para ver las gemas.",
@@ -4638,7 +4645,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
         async def agent_run(agent_id: str, task: str) -> str:
             """Delega una tarea a un ayudante configurado (su gema/prompt/LLM y workspace aislado)."""
-            return await _helper_run(task, agent_id=agent_id, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
+            _aid = (agent_id or "").strip()
+            # Fail-closed: resolve() cae al default para ids inexistentes, así que
+            # "coder_local" (typo) delegaba en silencio al agente default.
+            _ids = [str(a.get("id") or "") for a in _agent_registry().list()]
+            if _aid and _aid not in _ids:
+                raise ValueError(
+                    f"agente desconocido: {agent_id!r}. Válidos: {', '.join(sorted(i for i in _ids if i))}")
+            return await _helper_run(task, agent_id=_aid or agent_id, cfg=(cfg or {}), router=router, images=getattr(registry, "current_images", None))
         registry.register_function(
             agent_run, name="agent_run",
             description="Delega una tarea a un ayudante por id; usa su system prompt, su LLM y su workspace aislado. Usa agent_list para verlos.",
@@ -4713,8 +4727,15 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 "confirm": {"type": "boolean", "description": "Confirmación explícita si el scope la exige."},
             }, "required": ["name"], "additionalProperties": False},
         )
+    def _tools_csv(tools: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+        """Acepta lista o CSV: el schema declara array, pero los modelos chicos
+        igual mandan "read_file,glob" y validate_args lo deja pasar como string."""
+        if isinstance(tools, (list, tuple)):
+            return tuple(str(t).strip() for t in tools if str(t).strip())
+        return tuple(t.strip() for t in (tools or "").split(",") if t.strip())
+
     async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "",
-                             tools: str = "") -> str:
+                             tools: str | list[str] = "") -> str:
         """Delega una tarea a un sub-agente aislado (contexto propio, depth limit 3).
         mode='continuable' lo mantiene vivo para más mensajes vía sub_agent_message."""
         if router is None:
@@ -4733,7 +4754,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 context = ""
         spec = SubAgentSpec(task=task, gem=gema, context=context,
                             mode=mode if mode in ("one-shot", "continuable") else "one-shot",
-                            allowed_tools=tuple(t.strip() for t in (tools or "").split(",") if t.strip()))
+                            allowed_tools=_tools_csv(tools))
         res = await sp.spawn_child(spec)
         return _json.dumps({"child_id": res.child_id, "status": res.status.value,
                             "result": res.result, "error": res.error}, ensure_ascii=False, default=str)
@@ -4759,7 +4780,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "task": {"type": "string"},
             "mode": {"type": "string", "enum": ["one-shot", "continuable"]},
             "gema": {"type": "string"}, "context": {"type": "string"},
-            "tools": {"type": "string", "description": "Lista separada por comas con las tools permitidas al hijo (vacío = set curado según la gema)."}},
+            "tools": {"type": "array", "items": {"type": "string"},
+                      "description": "Nombres de las tools permitidas al hijo (vacío = set curado según la gema)."}},
             "required": ["task"], "additionalProperties": False},
     )
     registry.register_function(
@@ -4912,6 +4934,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         except _sp.TimeoutError:
             return "timeout: la generación excedió 20 min (ComfyUI lento/colgado)"
         out = ((p.stdout or "") + (p.stderr or "")).strip()
+        # El script externo grita "ERROR conectando a ComfyUI" por stderr y sale != 0.
+        # Antes eso volvía como texto de éxito y el agente creía que había una imagen.
+        if p.returncode != 0:
+            raise RuntimeError(f"image_generate falló (exit {p.returncode}): {out[-800:] or 'sin salida'}")
         return out[-2000:] or f"exit {p.returncode}"
 
     registry.register_function(
