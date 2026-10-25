@@ -3201,6 +3201,7 @@ def _build_router(cfg: dict):
 
 _CLOSE_TASKS: set = set()
 _RETIRED_ROUTERS: list = []
+_RETIRE_DELAY_S: float = 30.0
 
 
 def _close_router(router) -> None:
@@ -3231,24 +3232,45 @@ def _close_router(router) -> None:
             pass
 
 
-def _schedule_router_close(router, delay_s: float = 30.0) -> None:
-    """Cierra un router DIFERIDO: no cerrarlo mientras requests en vuelo lo usan."""
+def _retire_router(router, delay_s: float | None = None) -> None:
+    """Retira un router: se cierra DIFERIDO y se olvida al cerrarse.
+
+    Antes el router viejo se apilaba en `_RETIRED_ROUTERS` y no se cerraba
+    hasta el shutdown: cada cambio de proveedor/modelo dejaba abiertos los
+    AsyncClient httpx (sockets y FDs) de todos los routers anteriores. Ahora
+    se cierra a los `_RETIRE_DELAY_S` (tiempo de sobra para los requests en
+    vuelo) y sale de la lista; al shutdown los que queden se cierran igual
+    porque ese bloque corre antes de drenar `_CLOSE_TASKS`.
+    """
+    espera = _RETIRE_DELAY_S if delay_s is None else delay_s
+    _RETIRED_ROUTERS.append(router)
+
+    def _olvidar() -> None:
+        try:
+            _RETIRED_ROUTERS.remove(router)
+        except ValueError:
+            pass
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         _close_router(router)
+        _olvidar()
         return
 
     async def _later():
-        await asyncio.sleep(delay_s)
-        _close_router(router)
+        try:
+            await asyncio.sleep(espera)
+            _close_router(router)
+        finally:
+            _olvidar()
 
     try:
         _t = loop.create_task(_later())
         _CLOSE_TASKS.add(_t)
         _t.add_done_callback(_CLOSE_TASKS.discard)
     except Exception:
-        pass
+        _olvidar()
 
 
 def _get_router(cfg: dict):
@@ -3266,9 +3288,9 @@ def _get_router(cfg: dict):
     if cached is not None and _state.get("router_sig") == sig:
         return cached
     if cached is not None:
-        # RETIRAR sin cerrar: cerrar aqui mataba requests en vuelo (flap de firma).
-        # Los routers retirados se cierran al shutdown.
-        _RETIRED_ROUTERS.append(cached)
+        # RETIRAR sin cerrar en el acto: cerrarlo aca mataba requests en vuelo
+        # (flap de firma). _retire_router lo cierra a los 30 s y lo olvida.
+        _retire_router(cached)
     router = _build_router(cfg)
     _state["router"] = router
     _state["router_sig"] = sig
@@ -3279,7 +3301,7 @@ def _invalidate_router() -> None:
     r = _state.pop("router", None)
     _state.pop("router_sig", None)
     if r is not None:
-        _RETIRED_ROUTERS.append(r)
+        _retire_router(r)
 
 
 def _full_access_roots() -> tuple[str, ...]:
