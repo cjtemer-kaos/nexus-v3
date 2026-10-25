@@ -75,7 +75,6 @@ class QualityJudge:
         )
 
         # Accuracy: heuristic - no obvious contradictions
-        sentences = re.split(r"[.!?]+", response)
         contradictions = 0
         lower_resp = response.lower()
         contradiction_markers = ["however", "but actually", "contrary to", "not true"]

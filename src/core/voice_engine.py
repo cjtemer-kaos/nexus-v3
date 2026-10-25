@@ -702,7 +702,7 @@ class VoiceEngine:
         if self._recording:
             return False
         try:
-            import sounddevice as sd  # noqa: F401
+            import sounddevice as sd  # availability check; _record lo usa por closure
         except ImportError:
             logger.error("sounddevice not installed — la captura es desde el navegador (VoiceMic.tsx)")
             return False
@@ -712,7 +712,6 @@ class VoiceEngine:
 
         def _record():
             try:
-                import sounddevice as sd
                 with sd.InputStream(
                     samplerate=16000, channels=1, dtype="int16",
                     callback=self._audio_callback

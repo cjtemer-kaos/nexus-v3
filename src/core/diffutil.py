@@ -51,7 +51,6 @@ def line_diff(old: str, new: str, max_lines: int = 80) -> str:
 def checkpoint_diff(session_id: str, checkpoint_id: str) -> dict:
     """Diff entre el contenido del checkpoint (original) y el archivo actual."""
     from src.core.checkpoints import list_checkpoints
-    base = None
     orig = None
     for c in list_checkpoints(session_id, limit=10000):
         if c.get("id") == checkpoint_id:

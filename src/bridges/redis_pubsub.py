@@ -153,7 +153,7 @@ def redis_publish(channel: str, message: str, source: str = "opencode") -> str:
 
 def redis_subscribe(channel: str) -> str:
     try:
-        r = get_redis()
+        get_redis()  # solo verifica que el backend responda; el poll va por get_messages
         return json.dumps({"success": True, "channel": channel, "note": "Use get_messages to poll"})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})

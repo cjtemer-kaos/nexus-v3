@@ -133,7 +133,6 @@ class SchemaSanitizer:
         t = out.get("type")
         if isinstance(t, list):
             non_null = [x for x in t if x != "null"]
-            has_null = "null" in t
             if len(non_null) <= 1:
                 out["type"] = non_null[0] if non_null else "string"
             else:

@@ -114,7 +114,6 @@ def _is_duplicate(new_text: str, existing: List[Dict], threshold: float = DEDUP_
 
 def _is_identity_fact(text: str) -> bool:
     """Detecta si un hecho es de identidad (nombre, ubicación, etc.)."""
-    text_lower = text.lower()
     identity_patterns = [
         r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',  # Nombre propio
         r'(?:name is|called|named|my name)',
