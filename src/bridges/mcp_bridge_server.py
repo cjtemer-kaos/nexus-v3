@@ -1403,14 +1403,23 @@ async def describe_image(image_data: str, instruction: str = "Describe this imag
     import base64
     from src.core.environment import list_ollama_models, pick_model
 
-    vision_model = pick_model(
-        list_ollama_models(ollama_base_url()),
-        prefer=("gemma4", "qwen2.5vl", "qwen3-vl", "llava", "moondream", "janus"),
-    ) or "qwen2.5vl:7b"
+    # Familias que sí aceptan imágenes. `gemma4` estaba primero en la lista y
+    # Ollama lo rechaza con "model does not support multimodal requests": la tool
+    # fallaba siempre aunque hubiera qwen2.5vl instalado.
+    VISION_FAMILIES = ("qwen2.5vl", "qwen3-vl", "qwen3vl", "llava", "moondream",
+                       "janus", "minicpm-v", "gemma3")
+    instalados = list_ollama_models(ollama_base_url())
+    candidatos: list[str] = []
+    for familia in VISION_FAMILIES:
+        elegido = pick_model(instalados, prefer=(familia,))
+        if elegido and elegido not in candidatos:
+            candidatos.append(elegido)
+    if not candidatos:
+        candidatos = [pick_model(instalados) or "qwen2.5vl:7b"]
 
     result = {
         "provider": "vision-ollama",
-        "model": vision_model,
+        "model": candidatos[0],
         "instruction": instruction,
         "success": False,
         "error": "Vision analysis failed"
@@ -1422,29 +1431,32 @@ async def describe_image(image_data: str, instruction: str = "Describe this imag
         if img_clean.startswith("data:"):
             img_clean = img_clean.split(",", 1)[1]
 
-        # Use the vision process endpoint
-        url = f"{ollama_base_url()}/api/vision/process"
+        # `/api/vision/process` no existe en Ollama (404): la tool devolvía
+        # success=False siempre. El endpoint real que acepta `images` es /api/generate.
+        url = f"{ollama_base_url()}/api/generate"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json={
-                "model": vision_model,
-                "prompt": instruction,
-                "images": [img_clean],
-                "stream": False,
-                "provider": "vision-ollama"
-            })
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                result["success"] = True
-                result["response"] = data.get("response", "")
-                result["error"] = ""
-            else:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            for modelo in candidatos[:3]:
+                result["model"] = modelo
+                resp = await client.post(url, json={
+                    "model": modelo,
+                    "prompt": instruction,
+                    "images": [img_clean],
+                    "stream": False,
+                })
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result["success"] = True
+                    result["response"] = data.get("response", "")
+                    result["error"] = ""
+                    break
                 result["error"] = f"Vision API HTTP {resp.status_code}: {resp.text[:200]}"
-                
+                if "multimodal" not in resp.text.lower():
+                    break  # el error no es "este modelo no ve": no insistas
+
     except Exception as e:
         result["error"] = f"Vision analysis failed: {str(e)}"
-        
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 

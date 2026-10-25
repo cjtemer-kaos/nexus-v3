@@ -96,7 +96,7 @@ exus-v3`. Verbatim port, no reinventar.
 | 77 | `rag_engine.py` | 303 | **P1** | core |  |
 | 78 | `fts5_search.py` | 295 | **P1** | core | FTS5 default sin ChromaDB |
 | 79 | `gema_worker.py` | 267 | **P1** | core |  |
-| 80 | `tools/vision_gem_v2.py` | 255 | **P1** | tools |  |
+| 80 | `tools/vision_gem_v2.py` | 255 | **P1** | tools | descartado 2026-10-25: nadie lo importaba; visión va por `describe_image` + adjuntos del chat |
 | 81 | `hierarchical_memory.py` | 237 | **P1** | core |  |
 | 82 | `knowledge_vault.py` | 236 | **P1** | core |  |
 | 83 | `self_learning_loop.py` | 210 | **P1** | core |  |

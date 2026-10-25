@@ -43,7 +43,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 |---|---|---|
 | Multi-modelo local + cloud + BYOK | ✅ | `provider_router`, `provider_catalog`, providers ollama/cloud/llamacpp |
 | Routing por capacidad (tools / visión) | ✅ | `provider_router` (`supports_tools`/`supports_vision`) |
-| Multimodal (imagen / screenshots) | ✅ | `vision_gem_v2`, `/api/upload`, `supports_vision` |
+| Multimodal (imagen / screenshots) | ✅ | `/api/upload` → `AgentLoop(images=)` → modelo con `supports_vision`; `describe_image` (bridge MCP) para la gema `vision` |
 | Permisos / approval gates | ✅ | `scope`, `approval_gate`, `/api/permission` |
 | Sandbox de ejecución | ✅ | `sandbox_service` |
 | Streaming (SSE + WS) | ✅ | `/api/chat/stream`, `/ws/chat` |
@@ -140,7 +140,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 ### Código legacy absorbido (no es el camino del harness)
 
-`src/bridges/*`, `src/tools/codegraph_tool.py`, `src/tools/vision_gem_v2.py`, `src/core/gallery.py`,
+`src/bridges/*`, `src/tools/codegraph_tool.py`, `src/core/gallery.py`,
 `src/core/nexus_hive.py`, `src/core/llm_provider.py` y `src/core/dag_coordinator.py` vienen de
 proyectos anteriores (v2/autopsia). Los dos últimos ya tienen suite propia y sus bugs corregidos
 (deadlock de credenciales, DAG que no bloqueaba dependencias), pero el loop TDAO no los usa:
