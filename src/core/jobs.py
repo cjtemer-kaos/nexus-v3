@@ -85,7 +85,6 @@ class JobRegistry:
         start = max(0, int(cursor or 0))
         chunk = data[start:start + max(1, int(max_chars))]
         end = start + len(chunk)
-        state = self._state(rec)
         return {
             **self._public(rec),
             "cursor": end,

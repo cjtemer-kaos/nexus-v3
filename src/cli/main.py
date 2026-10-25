@@ -130,6 +130,9 @@ async def _probe_providers():
 
 
 def main(argv=None) -> int:
+    from src.core.runtime_guard import require_python
+
+    require_python()
     parser = argparse.ArgumentParser(prog="nexus-v3", description="CLI Arnés Nexus v3")
     parser.add_argument("--check-config", action="store_true", help="Validar config.yaml + enlace cerebro + pruebas humo imports")
     parser.add_argument("--probe-providers", action="store_true", help="Probar salud Ollama/llama.cpp/nube")

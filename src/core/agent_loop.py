@@ -845,7 +845,6 @@ class AgentLoop:
         # Main loop
         iteration = 0
         max_iters = self.budget.max_iterations
-        retry_budget = getattr(self.budget, "max_iterations", 25)  # fallback
         # Config error policy
         error_retry_limit = 3
         error_replan_limit = 2
@@ -1220,7 +1219,7 @@ class AgentLoop:
                         if cnt < error_replan_limit:
                             self._replan_counts[tool_name] = cnt + 1
                         else:
-                            tool_result_str += f" [presupuesto replanificación agotado]"
+                            tool_result_str += " [presupuesto replanificación agotado]"
                     elif action == ErrorAction.SKIP:
                         tool_result_str = f"[omitido {tool_name}: {err_str}]"
                         tool_success = True  # treat as non-fatal

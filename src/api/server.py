@@ -103,10 +103,16 @@ def _spawn_bg(coro) -> None:
     """Lanza una coroutine en background reteniendo su referencia."""
     try:
         _t = asyncio.create_task(coro)
-        _BG_TASKS.add(_t)
-        _t.add_done_callback(_BG_TASKS.discard)
-    except Exception:
-        pass
+    except RuntimeError:
+        # Sin loop corriendo no hay donde programarla: cerrarla evita el
+        # "coroutine was never awaited" y el aviso sale una sola vez.
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        logger.debug("_spawn_bg sin event loop: coroutine descartada")
+        return
+    _BG_TASKS.add(_t)
+    _t.add_done_callback(_BG_TASKS.discard)
 
 
 def _load_config_safe() -> dict:
@@ -765,7 +771,6 @@ async def providers_status(refresh: bool = False):
     # Build flat model list for UI: only from online providers
     models: list[dict] = []
     # ctx map: prefer config ctx for llamacpp, else default
-    ctx_default = 32768
     llamacpp_ctx = 40960
     try:
         if isinstance(cfg, dict):
@@ -1257,8 +1262,8 @@ def _load_graph_data(
         try:
             ci = int(community)
             filtered = [n for n in filtered if n["community"] == ci]
-        except:
-            pass
+        except (TypeError, ValueError):
+            logger.debug("community no numerico ignorado: %r", community)
     if min_importance > 0:
         filtered = [n for n in filtered if n["importance"] >= min_importance]
     if not include_isolated:
@@ -4963,16 +4968,6 @@ async def _learning_record(task: str, session_id: str, result,
 _BG_TASKS: set = set()
 
 
-def _spawn_bg(coro) -> None:
-    """Lanza una corrutina sin bloquear el turno, reteniendo la referencia."""
-    try:
-        task = asyncio.create_task(coro)
-    except RuntimeError:
-        return
-    _BG_TASKS.add(task)
-    task.add_done_callback(_BG_TASKS.discard)
-
-
 async def _memory_extract(cfg: dict, session_id: str, message: str, result) -> None:
     """Extracción automática de hechos duraderos al cerrar un turno.
 
@@ -5924,6 +5919,9 @@ def _ensure_local_brain() -> str:
 
 
 def main(argv=None):
+    from src.core.runtime_guard import require_python
+
+    require_python()
     args = parse_args(argv)
     if args.command == "setup":
         from src.core.onboarding import run_setup

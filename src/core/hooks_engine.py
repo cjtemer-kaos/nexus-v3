@@ -121,16 +121,23 @@ class HooksEngine:
         return last
 
     def emit_sync(self, phase: str, payload: dict[str, Any]) -> HookResult:
-        """Sync wrapper for non-async contexts."""
+        """Sync wrapper for non-async contexts.
+
+        Dentro de un loop ya corriendo no se pueden await-ear los handlers async.
+        Se saltean, pero avisando: un hook de STOP/COMPACT que desaparece en
+        silencio es peor que un error visible.
+        """
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             # No loop — run new loop
             return asyncio.run(self.emit(phase, payload))
         # Already in loop — caller should await; fallback to sync iteration without await
         last = HookResult(action=HookAction.CONTINUE)
+        salteados = 0
         for h in self._handlers.get(phase, []):
             if inspect.iscoroutinefunction(h):
+                salteados += 1
                 continue  # skip async handlers in sync context
             try:
                 res = h(phase, payload)  # type: ignore
@@ -140,6 +147,10 @@ class HooksEngine:
                     last = res  # type: ignore
             except Exception as e:
                 logger.error(f"error hook síncrono {phase}: {e}")
+        if salteados:
+            logger.warning(
+                "emit_sync(%s): %d handler(s) async salteados dentro de un loop; "
+                "usá emit() con await para que corran", phase, salteados)
         return last
 
     def has_handlers(self, phase: str) -> bool:

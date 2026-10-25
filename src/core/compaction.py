@@ -199,7 +199,7 @@ class CompactionPipeline:
             before = _estimate_messages_tokens(out)
             out = self._micro(out)
             after = _estimate_messages_tokens(out)
-            lm = LayerMetrics(name="micro", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail=f"placeholder collapsed")
+            lm = LayerMetrics(name="micro", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail="placeholder collapsed")
             metrics.layers.append(lm)
             metrics.layers_applied.append("micro")
 
@@ -633,7 +633,7 @@ class CompactionPipeline:
         for m in keep:
             c = _content_str(m)
             if estimate_tokens(c) > per_msg:
-                trimmed.append({**m, "content": c[: per_msg * 4] + f"\n[...truncado for budget]"})
+                trimmed.append({**m, "content": c[: per_msg * 4] + "\n[...truncado for budget]"})
             else:
                 trimmed.append(m)
         marker = {"role": "system", "content": f"[respaldo resumen emergencia: {len(rest)-len(keep)} mensajes descartados]"}

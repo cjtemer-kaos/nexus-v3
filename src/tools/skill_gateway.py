@@ -153,8 +153,8 @@ class SkillGateway:
         if readme_path.exists():
             try:
                 info["readme"] = readme_path.read_text(encoding="utf-8")[:2000]
-            except:
-                pass
+            except OSError as e:
+                logger.debug("README de %s ilegible: %s", skill_dir.name, e)
 
         return info
 

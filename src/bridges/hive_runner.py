@@ -11,6 +11,7 @@ All dispatch paths (REST, WS, MCP, UI) go through run_agent() here.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 HIVE_CONFIG = Path(__file__).resolve().parent.parent.parent / "hive_agents.json"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +70,7 @@ def _validate_registry(reg: dict[str, Any]) -> list[str]:
                 for legacy in _LEGACY_PROJECT_PATHS:
                     if legacy.lower() in v.lower():
                         warnings.append(
-                            f"agent '{agent_name}': {field}='{v}' points to a LEGACY project path ({legacy}). "
+                            f"agent '{agent_name}': {key}='{v}' points to a LEGACY project path ({legacy}). "
                             f"Use NEXUS_PROJECT_DIR instead."
                         )
         # Also scan args list (paths often hide there)
@@ -90,7 +93,9 @@ def load_registry() -> dict[str, Any]:
     On first call, validates all cwd/binary/args paths and caches any legacy-path warnings."""
     global _REGISTRY_WARNINGS
     if not HIVE_CONFIG.exists():
-        log.warning(f"hive_agents.json not found at {HIVE_CONFIG}")
+        # Antes esto era `log.warning` y `log` no existia: en vez de arrancar sin
+        # registro (que es lo que corresponde) tiraba NameError.
+        logger.warning("hive_agents.json not found at %s", HIVE_CONFIG)
         return {"agents": {}, "version": "2.0"}
     reg = json.loads(HIVE_CONFIG.read_text(encoding="utf-8"))
     if not _REGISTRY_WARNINGS:

@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 if __name__ == "__main__":
     import argparse
+    from src.core.runtime_guard import require_python
+    require_python()
     # If --dev flag, spawn both backend and vite via helper
     if "--dev" in sys.argv:
         import subprocess

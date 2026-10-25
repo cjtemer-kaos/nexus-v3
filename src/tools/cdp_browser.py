@@ -191,8 +191,8 @@ class CdpBrowser:
                         if not self._state.active_page_id:
                             self._state.active_page_id = pid
                     self._state.pages = pages
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("no se pudo refrescar la lista de pestañas: %s", e)
 
     async def navigate_page(self, url: str, page_id: str = "") -> CdpResult:
         start = time.time()
@@ -203,21 +203,31 @@ class CdpBrowser:
         ws_url = self._pages.get(target, {}).get("webSocketDebuggerUrl", "")
         if not ws_url:
             return CdpResult(error=f"Page {target} not found")
+        # Activar la pestaña es cosmético: si ese endpoint no contesta, se navega igual.
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(
-                    f"{self.browser_url}/json/activate/{target}")
-                if resp.status_code == 200:
-                    nav_resp = await client.get(
-                        f"{self.browser_url}/json/new?{url}")
-            self._state.url = url
-            self._state.active_page_id = target
-            await self._wait_for_page_ready()
-            return CdpResult(success=True, data={"url": url, "page_id": target},
-                             duration_ms=(time.perf_counter() - start) * 1000)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.get(f"{self.browser_url}/json/activate/{target}")
         except Exception as e:
-            return CdpResult(error=str(e))
+            logger.debug("no se pudo activar la pestaña %s: %s", target, e)
+        # Page.navigate sobre la pestaña elegida. Antes se pedía /json/new y se
+        # descartaba la respuesta: abría OTRA pestaña y aun así devolvía éxito
+        # diciendo que la activa (target) había navegado.
+        result = await self._send_cdp(ws_url, "Page.navigate", {"url": url})
+        if not result.success:
+            return result
+        data = result.data if isinstance(result.data, dict) else {}
+        error_text = str(data.get("errorText") or "")
+        if error_text:
+            return CdpResult(error=f"Page.navigate falló: {error_text}",
+                             duration_ms=(time.perf_counter() - start) * 1000)
+        self._state.url = url
+        self._state.active_page_id = target
+        await self._wait_for_page_ready()
+        return CdpResult(success=True,
+                         data={"url": url, "page_id": target,
+                               "frame_id": data.get("frameId", "")},
+                         duration_ms=(time.perf_counter() - start) * 1000)
 
     async def evaluate_script(self, script: str, page_id: str = "") -> CdpResult:
         start = time.time()

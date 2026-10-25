@@ -12,7 +12,6 @@ _port: int = _DEFAULT_PORT
 
 def get_port() -> int:
     """Retorna el puerto actual. Prioridad: set_port() > NEXUS_PORT env > 9000."""
-    global _port
     if _port != _DEFAULT_PORT:
         return _port
     return int(os.environ.get("NEXUS_PORT", str(_DEFAULT_PORT)))
