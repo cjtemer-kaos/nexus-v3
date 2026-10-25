@@ -4883,7 +4883,8 @@ def _new_agent_loop(cfg: dict | None = None, **kwargs):
 
 
 async def _knowledge_block(query: str, limit: int | None = None, session_id: str = "",
-                           cfg: dict | None = None, collect: dict | None = None) -> str:
+                           cfg: dict | None = None, collect: dict | None = None,
+                           batch: str = "") -> str:
     """Memoria automatica del grafo, con presupuesto y telemetria.
 
     Antes se hacia un unico FTS con AND sobre la frase completa, que en espanol
@@ -4894,10 +4895,64 @@ async def _knowledge_block(query: str, limit: int | None = None, session_id: str
         return await asyncio.to_thread(
             build_memory_context, query,
             session_id=session_id, limit=limit,
-            event_store=_event_store(), config=cfg, collect=collect,
+            event_store=_event_store(), config=cfg, collect=collect, batch=batch,
         )
     except Exception:
         return ""
+
+
+def _memory_audit_close(session_id: str, batch: str, result) -> None:
+    """Cierra el batch de memoria con el resultado real del turno."""
+    if not batch:
+        return
+    try:
+        from src.core.memory_audit import record_outcome
+
+        record_outcome(
+            session_id=session_id,
+            batch=batch,
+            status="ok" if bool(getattr(result, "success", False)) else "error",
+            note=str(getattr(result, "error", "") or "")[:300],
+        )
+    except Exception as e:
+        logger.debug("memoria: outcome no auditado (%s)", e)
+
+
+@app.get("/api/memory/audit")
+async def memory_audit_report(days: int = 30, limit: int = 20):
+    """Que memoria viajo, a que turnos y cual quedo castigada por veredictos."""
+    from src.core.memory_audit import get_memory_audit
+
+    try:
+        return JSONResponse(
+            await asyncio.to_thread(get_memory_audit().report, days, limit)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/memory/verdict")
+async def memory_verdict(request: Request):
+    """Marca un nodo: helpful / outdated / harmful / wrong."""
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        body = {}
+    from src.core.memory_audit import get_memory_audit
+
+    try:
+        res = await asyncio.to_thread(
+            get_memory_audit().add_verdict,
+            body.get("node_id"),
+            body.get("verdict"),
+            batch=str(body.get("batch") or ""),
+            note=str(body.get("note") or ""),
+            origin=str(body.get("origin") or "human"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(res)
 
 
 def _so_rules() -> str:
@@ -4989,9 +5044,11 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
         registry.current_memory_node_ids = []
     except Exception:
         pass
+    _batch = f"{session_id}:{int(__import__('time').time() * 1000)}" if session_id else ""
     try:
         _mem_ids: dict = {}
-        _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg, collect=_mem_ids)
+        _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg,
+                                     collect=_mem_ids, batch=_batch)
         # Para que `learn` cree aristas informed_by hacia lo que se inyecto.
         registry.current_memory_node_ids = list(_mem_ids.get("node_ids") or [])
         if _kb:
@@ -5008,6 +5065,7 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                             steer=(lambda: _steer_drain(session_id)) if session_id else None,
                             extra_system=(_extra or None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
+    _memory_audit_close(session_id, _batch, result)
     if extract_memory:
         _spawn_bg(_memory_extract(cfg, session_id, message, result))
     return result
@@ -5108,9 +5166,11 @@ async def chat(request: Request):
                                distill_hook=_build_distill_hook(cfg),
                                approval=_approval)
         _extra = ""
+        _batch = f"{session_id}:{int(__import__('time').time() * 1000)}" if session_id else ""
         try:
             _mem_ids: dict = {}
-            _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg, collect=_mem_ids)
+            _kb = await _knowledge_block(message, session_id=session_id, cfg=cfg,
+                                         collect=_mem_ids, batch=_batch)
             registry.current_memory_node_ids = list(_mem_ids.get("node_ids") or [])
             _extra = _kb or ""
         except Exception:
@@ -5125,6 +5185,7 @@ async def chat(request: Request):
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
                                model=body.get("model"))
+        _memory_audit_close(session_id, _batch, result)
         _spawn_bg(_memory_extract(cfg, session_id, message, result))
 
         # El asistente ya lo persiste el AgentLoop (session_log=slog). No duplicar.

@@ -5,6 +5,10 @@ cada uno por separado (el FTS de Nexus une con AND y una frase larga casi
 nunca matchea), fusiona por rango reciproco, recorta a presupuesto y registra
 uso real (`access_count` + evento `memory_used`).
 
+Cada inyeccion deja ademas un `batch` en `src/core/memory_audit.py`, para poder
+atar despues lo que viajo con el resultado real del turno; y la memoria que ya
+recibio veredictos malos se hunde o no viaja.
+
 El aprendizaje nunca puede romper un turno: todo fallo de memoria devuelve "".
 """
 from __future__ import annotations
@@ -137,6 +141,46 @@ def _semantic_rerank(query: str, hits: list[dict], mcfg: dict) -> tuple[list[dic
     return scored + hits[max_cand:], "semantic", int((time.monotonic() - t0) * 1000)
 
 
+def _apply_standing(hits: list[dict]) -> list[dict]:
+    """Hunde en el ranking la memoria que ya demostro perjudicar turnos.
+
+    El veredicto no borra el nodo: lo saca del turno. Un nodo sin veredictos
+    vale 1.0 y no se toca, asi que esto solo actua sobre lo que alguien o el
+    propio loop marco como malo.
+    """
+    if not hits:
+        return hits
+    try:
+        from src.core import memory_audit
+
+        if not memory_audit.audit_cfg().get("demote", True):
+            return hits
+        audit = memory_audit.get_memory_audit()
+        standing = audit.standing_map([h.get("id") for h in hits])
+        floor = audit.min_standing()
+    except Exception as e:
+        logger.debug("memory_context: standing omitido: %s", e)
+        return hits
+    if not standing:
+        return hits
+    kept: list[dict] = []
+    for hit in hits:
+        try:
+            mult = float(standing.get(int(hit.get("id")), 1.0))
+        except (TypeError, ValueError):
+            mult = 1.0
+        if mult < floor:
+            continue
+        item = dict(hit)
+        item["_standing"] = round(mult, 3)
+        if "_final" in item:
+            item["_final"] = round(float(item["_final"]) * mult, 6)
+        kept.append(item)
+    if any("_final" in h for h in kept):
+        kept.sort(key=lambda x: float(x.get("_final") or 0.0), reverse=True)
+    return kept
+
+
 def build_memory_context(
     query: str,
     *,
@@ -147,6 +191,7 @@ def build_memory_context(
     event_store: Any = None,
     config: Optional[dict] = None,
     collect: Optional[dict] = None,
+    batch: str = "",
 ) -> str:
     """Devuelve el bloque de memoria para el prompt, o "" si no hay nada util."""
     cfg = config if config is not None else _load_cfg()
@@ -193,6 +238,7 @@ def build_memory_context(
         return ""
 
     picked, rerank_status, rerank_ms = _semantic_rerank(text, picked, mcfg)
+    picked = _apply_standing(picked)
     picked = picked[:limit]
 
     lines = [
@@ -241,6 +287,19 @@ def build_memory_context(
         memory.touch_many(node_ids)
     except Exception as e:
         logger.debug("memory_context: touch omitido: %s", e)
+    try:
+        from src.core.memory_audit import record_recall
+
+        record_recall(
+            session_id=session_id,
+            batch=batch,
+            node_ids=node_ids,
+            terms=terms,
+            rerank=rerank_status,
+            injected_chars=used,
+        )
+    except Exception as e:
+        logger.debug("memory_context: recall no auditado: %s", e)
     if event_store is not None:
         try:
             event_store.append_event(

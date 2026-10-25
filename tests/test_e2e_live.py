@@ -613,3 +613,29 @@ def test_status_reporta_aprobaciones_pendientes():
     body = r.json()
     assert "approvals_pending" in body
     assert isinstance(body["approvals_pending"], int) and body["approvals_pending"] >= 0
+
+
+def test_memoria_auditada_endpoints(tmp_path, monkeypatch):
+    """El ledger de memoria se consulta y se marca sin tocar el brain real."""
+    monkeypatch.setenv("NEXUS_V3_MEMORY_AUDIT", str(tmp_path / "memory_audit.db"))
+
+    r = client.get("/api/memory/audit")
+    assert r.status_code == 200, r.text[:200]
+    data = r.json()
+    assert {"totals", "top_recalled", "penalized", "min_standing"} <= set(data)
+    assert data["totals"]["recalls"] == 0
+
+    r = client.post("/api/memory/verdict", json={"node_id": 1, "verdict": "helpful"})
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["standing"] > 1.0
+
+    r = client.post("/api/memory/verdict", json={"node_id": 1, "verdict": "nada"})
+    assert r.status_code == 400
+
+    r = client.post("/api/memory/verdict", json={"node_id": 2, "verdict": "wrong"})
+    assert r.status_code == 200
+    assert r.json()["standing"] < 1.0
+
+    r = client.get("/api/memory/audit")
+    assert r.status_code == 200
+    assert r.json()["totals"]["verdicts"] == 2
