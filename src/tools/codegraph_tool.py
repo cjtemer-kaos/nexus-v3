@@ -139,7 +139,7 @@ async def query_graph(query: str, top_k: int = 10) -> dict:
     """
     G = _get_graph()
     if G is None:
-        return {"error": "No graph found. Run build_graph first."}
+        return {"error": "No hay grafo de codigo. Requiere el paquete src/codegraph + networkx (no presentes en nexus-v3)."}
 
     from src.codegraph.query import GraphQuery
     q = GraphQuery(G)
@@ -166,7 +166,7 @@ async def get_neighbors(
     """
     G = _get_graph()
     if G is None:
-        return {"error": "No graph found. Run build_graph first."}
+        return {"error": "No hay grafo de codigo. Requiere el paquete src/codegraph + networkx (no presentes en nexus-v3)."}
     if node_id not in G:
         return {"error": f"Node not found: {node_id}"}
 
@@ -200,7 +200,7 @@ async def get_god_nodes(top_n: int = 10) -> dict:
     """
     G = _get_graph()
     if G is None:
-        return {"error": "No graph found. Run build_graph first."}
+        return {"error": "No hay grafo de codigo. Requiere el paquete src/codegraph + networkx (no presentes en nexus-v3)."}
 
     from src.codegraph.analyze import god_nodes
     nodes = god_nodes(G, top_n=top_n)
@@ -221,7 +221,7 @@ async def find_surprising(top_n: int = 5) -> dict:
     """
     G = _get_graph()
     if G is None:
-        return {"error": "No graph found. Run build_graph first."}
+        return {"error": "No hay grafo de codigo. Requiere el paquete src/codegraph + networkx (no presentes en nexus-v3)."}
 
     node_comm: dict[str, int] = {}
     for n, d in G.nodes(data=True):
@@ -252,7 +252,7 @@ async def find_cycles(max_length: int = 5, top_n: int = 20) -> dict:
     """
     G = _get_graph()
     if G is None:
-        return {"error": "No graph found. Run build_graph first."}
+        return {"error": "No hay grafo de codigo. Requiere el paquete src/codegraph + networkx (no presentes en nexus-v3)."}
 
     from src.codegraph.analyze import find_import_cycles
     cycles = find_import_cycles(G, max_cycle_length=max_length, top_n=top_n)

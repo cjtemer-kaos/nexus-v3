@@ -33,96 +33,187 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 class ExecuteCodeEngine:
+    """Ejecuta un snippet de Python en un PROCESO separado, con timeout real.
+
+    No es un sandbox de sistema operativo: el hijo corre con el mismo usuario y
+    ve el disco. Lo que si se controla:
+
+    - timeout de reloj (el proceso se mata; antes `timeout` se ignoraba y un
+      `while True` bloqueaba el event loop del server para siempre);
+    - imports acotados a una lista blanca (sin os/sys/subprocess/socket/shutil/
+      pathlib/importlib/ctypes/pickle);
+    - sin dunders, sin `eval/exec/compile/open/getattr/vars/globals/...`
+      (antes `().__class__.__subclasses__()` alcanzaba `subprocess.Popen`);
+    - `tools` no es invocable: los callables no cruzan a otro proceso. Si el
+      codigo lo usa, el error lo dice.
+
+    El `print` del snippet se captura en el hijo, asi que ya no se reemplaza
+    `sys.stdout` del server (dos ejecuciones concurrentes se pisaban la salida).
     """
-    Sandboxed Python execution that can call Hermes tools programmatically.
-    Collapses multi-step pipelines into a single LLM turn.
-    """
+
+    # Modulos permitidos en el snippet (puros, sin efectos sobre el SO).
+    _ALLOWED_IMPORTS = frozenset({
+        "json", "math", "re", "datetime", "statistics", "itertools", "functools",
+        "collections", "decimal", "fractions", "string", "textwrap", "uuid",
+        "random", "dataclasses", "typing", "enum", "unicodedata", "copy",
+    })
+    _BLOCKED_NAMES = frozenset({
+        "eval", "exec", "compile", "open", "globals", "locals", "vars", "dir",
+        "getattr", "setattr", "delattr", "__import__", "input", "breakpoint",
+        "help", "object", "type", "memoryview", "super", "classmethod",
+        "staticmethod", "property",
+    })
+    _RUNNER = r'''
+import io, json, sys, traceback
+
+class _Tools(dict):
+    def __missing__(self, name):
+        raise RuntimeError(
+            "tools[%r] no esta disponible: execute_code corre en un subproceso "
+            "aislado y no puede invocar las tools del server. Usa la tool MCP "
+            "directamente." % (name,))
+
+def main():
+    code = open(sys.argv[1], encoding="utf-8").read()
+    ns = {"__name__": "__main__", "result": None, "tools": _Tools()}
+    buf = io.StringIO()
+    old = sys.stdout
+    sys.stdout = buf
+    err = None
+    try:
+        exec(compile(code, "<execute_code>", "exec"), ns)
+    except BaseException as e:
+        err = {"error": str(e), "error_type": type(e).__name__,
+               "traceback": traceback.format_exc(limit=3)[-1200:]}
+    finally:
+        sys.stdout = old
+    out = {"output": buf.getvalue(), "error": err}
+    if err is None:
+        r = ns.get("result")
+        try:
+            json.dumps(r)
+            out["result"] = r
+        except Exception:
+            out["result"] = repr(r)
+    sys.stdout.write("\n<<<NEXUS_EXEC_RESULT>>>" + json.dumps(out))
+
+main()
+'''
 
     def __init__(self, tools_registry: dict[str, Callable] | None = None):
         self._tools = tools_registry or {}
         self._execution_history: list[dict] = []
 
     def register_tool(self, name: str, fn: Callable):
-        """Register a tool that can be called from execute_code scripts."""
+        """Compatibilidad: hoy los tools NO cruzan al subproceso (ver docstring)."""
         self._tools[name] = fn
 
-    async def execute(self, code: str, timeout: float = 30.0) -> dict:
-        """
-        Execute Python code in a sandboxed environment.
-        The code can call registered tools via self.tools['tool_name'](**args).
-        """
-        execution_id = f"exec_{int(time.time() * 1000)}"
-        start_time = time.time()
-
-        # Create a restricted globals dict with only safe builtins
-        safe_builtins = {
-            "print": print,
-            "len": len,
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "set": set,
-            "enumerate": enumerate,
-            "zip": zip,
-            "map": map,
-            "filter": filter,
-            "sorted": sorted,
-            "reversed": reversed,
-            "min": min,
-            "max": max,
-            "sum": sum,
-            "abs": abs,
-            "round": round,
-            "range": range,
-            "True": True,
-            "False": False,
-            "None": None,
-        }
-
-        # Build execution namespace
-        namespace = {
-            "__builtins__": safe_builtins,
-            "tools": self._tools,
-            "result": None,
-            "output": [],
-        }
-
-        # Capture print output
-        import io
-        captured_stdout = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = captured_stdout
+    def validate_code(self, code: str) -> None:
+        """Rechaza lo que permite salir del snippet. Lanza ValueError."""
+        import ast
 
         try:
-            # Execute with timeout
-            exec(compile(code, "<execute_code>", "exec"), namespace)
+            tree = ast.parse(code, "<execute_code>")
+        except SyntaxError as e:
+            raise ValueError(f"syntax error: {e.msg} (linea {e.lineno})") from e
 
-            result = {
-                "success": True,
-                "execution_id": execution_id,
-                "duration_ms": round((time.time() - start_time) * 1000),
-                "output": captured_stdout.getvalue(),
-                "result": namespace.get("result"),
-            }
+        # Cualquier dunder en el fuente: __class__, __globals__, __builtins__...
+        import re as _re
+        m = _re.search(r"__\w+__", code)
+        if m:
+            raise ValueError(f"dunder no permitido: {m.group(0)}")
 
-        except Exception as e:
-            result = {
-                "success": False,
-                "execution_id": execution_id,
-                "duration_ms": round((time.time() - start_time) * 1000),
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "output": captured_stdout.getvalue(),
-            }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    if root not in self._ALLOWED_IMPORTS:
+                        raise ValueError(
+                            f"import no permitido: {alias.name} "
+                            f"(permitidos: {', '.join(sorted(self._ALLOWED_IMPORTS))})")
+            elif isinstance(node, ast.ImportFrom):
+                root = (node.module or "").split(".")[0]
+                if node.level or root not in self._ALLOWED_IMPORTS:
+                    raise ValueError(f"import no permitido: {node.module or '.'}")
+            elif isinstance(node, ast.Name) and node.id in self._BLOCKED_NAMES:
+                raise ValueError(f"nombre no permitido: {node.id}")
+            elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+                raise ValueError(f"atributo privado/dunder no permitido: .{node.attr}")
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr in ("format", "format_map"):
+                # "{0.__class__}".format(x) es la otra via a los dunders.
+                raise ValueError("str.format no permitido en execute_code (usar f-strings)")
 
-        finally:
-            sys.stdout = old_stdout
+    async def execute(self, code: str, timeout: float = 30.0) -> dict:
+        """Corre el snippet. Devuelve {success, output, result|error, duration_ms}."""
+        execution_id = f"exec_{int(time.time() * 1000)}"
+        start_time = time.time()
+        base = {"execution_id": execution_id}
+
+        try:
+            self.validate_code(code)
+        except ValueError as e:
+            result = {**base, "success": False, "error": str(e),
+                      "error_type": "ValidationError", "output": "",
+                      "duration_ms": round((time.time() - start_time) * 1000)}
             self._execution_history.append(result)
+            return result
 
+        def _run() -> dict:
+            with tempfile.TemporaryDirectory(prefix="nxs_exec_") as d:
+                code_p = Path(d) / "user_code.py"
+                code_p.write_text(code, encoding="utf-8")
+                runner_p = Path(d) / "runner.py"
+                runner_p.write_text(self._RUNNER, encoding="utf-8")
+                proc = subprocess.run(
+                    [sys.executable, "-I", str(runner_p), str(code_p)],
+                    capture_output=True, text=True, timeout=max(1.0, float(timeout)),
+                    cwd=d, encoding="utf-8", errors="replace",
+                )
+                return {"proc_rc": proc.returncode, "stdout": proc.stdout,
+                        "stderr": proc.stderr}
+
+        try:
+            raw = await asyncio.to_thread(_run)
+        except subprocess.TimeoutExpired:
+            result = {**base, "success": False, "output": "",
+                      "error": f"timeout: el codigo excedio {timeout}s (proceso terminado)",
+                      "error_type": "TimeoutError",
+                      "duration_ms": round((time.time() - start_time) * 1000)}
+            self._execution_history.append(result)
+            return result
+        except Exception as e:
+            result = {**base, "success": False, "output": "", "error": str(e),
+                      "error_type": type(e).__name__,
+                      "duration_ms": round((time.time() - start_time) * 1000)}
+            self._execution_history.append(result)
+            return result
+
+        marker = "<<<NEXUS_EXEC_RESULT>>>"
+        stdout = raw.get("stdout") or ""
+        if marker not in stdout:
+            result = {**base, "success": False, "output": stdout[-4000:],
+                      "error": "el subproceso no devolvio resultado",
+                      "error_type": "RunnerError",
+                      "stderr": (raw.get("stderr") or "")[-1200:],
+                      "duration_ms": round((time.time() - start_time) * 1000)}
+            self._execution_history.append(result)
+            return result
+
+        payload = json.loads(stdout.split(marker, 1)[1])
+        result = {
+            **base,
+            "success": payload.get("error") is None,
+            "duration_ms": round((time.time() - start_time) * 1000),
+            "output": payload.get("output") or "",
+        }
+        if payload.get("error"):
+            result["error"] = payload["error"].get("error")
+            result["error_type"] = payload["error"].get("error_type")
+            result["traceback"] = payload["error"].get("traceback")
+        else:
+            result["result"] = payload.get("result")
+        self._execution_history.append(result)
         return result
 
     def get_history(self, limit: int = 10) -> list[dict]:

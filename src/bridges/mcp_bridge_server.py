@@ -529,9 +529,6 @@ async def execute_on_pc2(command: str) -> str:
     """PC2 not available on VPS. Returns error."""
     return '{"error": "PC2 not available on VPS"}'
 
-    """Alias for execute_on_remote_node. Mantiene compatibilidad con server.py."""
-    return await execute_on_remote_node(command)
-
 
 @mcp.tool()
 async def list_nodes() -> str:
@@ -696,29 +693,92 @@ async def optimize_prompt(prompt: str) -> str:
     }, indent=2, ensure_ascii=False)
 
 
+_TASK_CAPABILITY = {
+    "simple": "fast", "categorization": "fast", "fast": "fast",
+    "code": "code", "coding": "code", "test": "code",
+    "analysis": "reasoning", "reasoning": "reasoning", "research": "reasoning",
+    "design": "general", "general": "general", "creative": "general",
+    "vision": "vision", "local": "general",
+}
+
+
+def _modelos_configurados() -> list[dict]:
+    """Modelos realmente disponibles segun config.providers (nada hardcodeado).
+
+    Antes esta tool recomendaba 'sonnet ($3/1M)' con el cloud apagado: un modelo
+    que no existe en esta PC. Ahora lee lo que hay instalado/configurado.
+    """
+    from src.core.config import load_config
+
+    cfg = load_config()
+    provs = cfg.get("providers") or {}
+    out: list[dict] = []
+
+    ollama = provs.get("ollama") or {}
+    if ollama.get("enabled", True):
+        for m in ollama.get("models") or []:
+            out.append({"model": str(m), "provider": "ollama", "cost": "FREE (local)"})
+
+    cloud = provs.get("cloud") or {}
+    if cloud.get("enabled") and cloud.get("api_key"):
+        for m in cloud.get("models") or []:
+            out.append({"model": str(m), "provider": "cloud", "cost": "BYOK"})
+
+    for flavor, c in (provs.get("cli") or {}).items():
+        if isinstance(c, dict) and c.get("enabled"):
+            out.append({"model": str(c.get("model") or flavor), "provider": f"cli:{flavor}",
+                        "cost": f"cuota de {flavor}"})
+    return out
+
+
 @mcp.tool()
 async def select_model(task_type: str, complexity: str = "medium") -> str:
-    """Select the optimal model for a task based on type and complexity. Saves money by routing simple tasks to cheap models.
-    task_type: simple, categorization, coding, analysis, design, research, reasoning, local
-    complexity: low, medium, complex, deep"""
-    models = {
-        ("simple", "low"): {"model": "haiku", "cost": "$0.80/1M", "reason": "Simple task, cheapest model"},
-        ("categorization", "low"): {"model": "haiku", "cost": "$0.80/1M", "reason": "Classification doesn't need big model"},
-        ("coding", "medium"): {"model": "sonnet", "cost": "$3/1M", "reason": "Good balance for code"},
-        ("coding", "complex"): {"model": "sonnet", "cost": "$3/1M", "reason": "Sonnet handles complex code well"},
-        ("analysis", "medium"): {"model": "sonnet", "cost": "$3/1M", "reason": "Analysis needs reasoning"},
-        ("design", "medium"): {"model": "sonnet", "cost": "$3/1M", "reason": "Creative + technical"},
-        ("research", "deep"): {"model": "opus", "cost": "$15/1M", "reason": "Deep research needs max capability"},
-        ("reasoning", "complex"): {"model": "opus", "cost": "$15/1M", "reason": "Complex reasoning"},
-        ("local", "low"): {"model": "ollama/nemotron", "cost": "FREE", "reason": "Use local model, zero cost"},
-        ("local", "medium"): {"model": "ollama/qwen3.5-9b", "cost": "FREE", "reason": "Local coder via Ollama Q4 <8GB"},
-    }
-    key = (task_type, complexity)
-    result = models.get(key, {"model": "sonnet", "cost": "$3/1M", "reason": "Default balanced choice"})
-    result["task_type"] = task_type
-    result["complexity"] = complexity
-    result["tip"] = "Use 'local' task_type for FREE execution via Ollama"
-    return json.dumps(result, indent=2)
+    """Select the optimal model for a task among the providers ENABLED in this PC.
+
+    task_type: simple, categorization, code|coding, analysis, reasoning, research,
+               design, general, vision, local
+    complexity: low, medium, complex, deep
+    """
+    try:
+        from src.core.model_assign import capabilities_of
+        disponibles = [d for d in _modelos_configurados()
+                       if "embed" not in capabilities_of(d["model"])]
+    except Exception as e:
+        return json.dumps({"error": f"no pude leer config.providers: {e}"}, indent=2)
+
+    cap = _TASK_CAPABILITY.get((task_type or "").strip().lower())
+    if cap is None:
+        return json.dumps({"error": f"task_type desconocido: {task_type!r}",
+                           "valid_task_types": sorted(_TASK_CAPABILITY),
+                           "hint": "usar 'local' para forzar ejecucion gratuita"},
+                          indent=2, ensure_ascii=False)
+    if not disponibles:
+        return json.dumps({"error": "no hay modelos de chat habilitados en config.providers",
+                           "hint": "revisar providers.ollama.models / providers.cloud.enabled"},
+                          indent=2, ensure_ascii=False)
+
+    # Tareas livianas: si hay un modelo chico instalado, gana el chico.
+    if (complexity or "").lower() == "low" and cap not in ("code", "vision"):
+        if any("fast" in capabilities_of(d["model"]) for d in disponibles):
+            cap = "fast"
+
+    candidatos = [d for d in disponibles if cap in capabilities_of(d["model"])]
+    motivo = f"capacidad '{cap}' entre los proveedores habilitados"
+    if not candidatos:
+        candidatos = disponibles
+        motivo = f"no hay modelo con capacidad '{cap}'; primer modelo habilitado"
+
+    elegido = candidatos[0]
+    return json.dumps({
+        "model": elegido["model"],
+        "provider": elegido["provider"],
+        "cost": elegido["cost"],
+        "reason": motivo,
+        "task_type": task_type,
+        "complexity": complexity,
+        "alternatives": [c["model"] for c in candidatos[1:6]],
+        "available_models": [f"{d['provider']}/{d['model']}" for d in disponibles],
+    }, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -1969,23 +2029,43 @@ async def memory_hierarchical_stats() -> str:
     """Get HierarchicalMemory statistics — total items, tier distribution, capacities."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from src.core.hierarchical_memory import get_hierarchical_memory
-        mem = get_hierarchical_memory()
+        from src.core.hierarchical_memory import get_memory
+        mem = get_memory()
         return json.dumps({"hierarchical_memory": mem.get_stats()}, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
 
 
 @mcp.tool()
-async def memory_hierarchical_store(content: str, tags: str = "", importance: float = 0.5, tier: str = "working") -> str:
-    """Store an item in HierarchicalMemory. Tiers: working, episodic, semantic. Tags comma-separated."""
+async def memory_hierarchical_store(content: str, tags: str = "", importance: float = 0.5,
+                                    tier: str = "working", bypass_triage: bool = False) -> str:
+    """Store an item in HierarchicalMemory. Tiers: working, episodic, semantic. Tags comma-separated.
+
+    El triage descarta contenido sin densidad informativa (saludos, "ok") y PII.
+    bypass_triage=True guarda igual (para hechos que el triage no reconoce).
+    """
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from src.core.hierarchical_memory import get_hierarchical_memory
-        mem = get_hierarchical_memory()
+        from src.core.hierarchical_memory import MemoryTier, get_memory
+        validos = [t.value for t in MemoryTier]
+        if tier not in validos:
+            return json.dumps({"stored": False,
+                               "error": f"tier invalido: {tier!r}. Validos: {', '.join(validos)}"},
+                              indent=2)
+        mem = get_memory()
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-        item = mem.store(content, tags=tag_list, importance=importance, tier=tier)
-        return json.dumps({"id": item.id, "tier": item.tier, "importance": item.importance, "tags": item.tags}, indent=2)
+        item = mem.store(content, tags=tag_list, importance=importance, tier=tier,
+                         bypass_triage=bool(bypass_triage))
+        # store() devuelve None cuando el triage rechaza (trivial, duplicado o PII);
+        # antes el .id explotaba con AttributeError.
+        if item is None:
+            return json.dumps({"stored": False,
+                               "reason": ("rechazado por el triage de memoria (poco contenido "
+                                          "informativo, duplicado, o PII/secretos). "
+                                          "Usar bypass_triage=true para forzar.")},
+                              indent=2, ensure_ascii=False)
+        return json.dumps({"stored": True, "id": item.id, "tier": item.tier,
+                           "importance": item.importance, "tags": item.tags}, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
 
@@ -1995,8 +2075,8 @@ async def memory_hierarchical_search(query: str, tier: str = "", min_importance:
     """Search HierarchicalMemory across 3 tiers. Returns items with scores."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from src.core.hierarchical_memory import get_hierarchical_memory
-        mem = get_hierarchical_memory()
+        from src.core.hierarchical_memory import get_memory
+        mem = get_memory()
         tier_arg = tier if tier else None
         results = mem.search(query, tier=tier_arg, min_importance=min_importance, top_k=top_k)
         return json.dumps({
@@ -2366,20 +2446,53 @@ async def gallery_transform(img_id: str, operation: str, **params) -> str:
 
 @mcp.tool()
 async def scan_hardware_remote(remote_host: str, ssh_port: str = "22") -> str:
-    """Detectar hardware (GPU, RAM, disco) en maquina remota via SSH.
-    - remote_host: host SSH (user@ip o solo ip)
+    """Detectar hardware (GPU, RAM, disco) en una maquina remota via SSH.
+
+    - remote_host: host SSH (user@ip o solo ip). Vacio/local = esta maquina.
     - ssh_port: puerto SSH (default 22)
-    Retorna info de hardware remoto + recomendaciones de modelos.
+
+    OJO: RAM y disco SIEMPRE son de la maquina local (el upstream los mide aca);
+    del remoto solo puede venir la GPU. Si no se detecto GPU remota se devuelve
+    ok=false en vez de un 200 con hardware local disfrazado de remoto.
     """
     if not HTTPX_AVAILABLE:
         return json.dumps({"error": "httpx not installed"}, indent=2)
+    host = (remote_host or "").strip()
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=45) as client:
             r = await client.post(f"{NEXUS_API_BASE}/api/cookbook/scan",
-                                  json={"remote_host": remote_host, "ssh_port": ssh_port})
-            return json.dumps({"status_code": r.status_code, "result": r.json()}, indent=2, ensure_ascii=False)
+                                  json={"remote_host": host, "ssh_port": ssh_port})
     except Exception as e:
-        return json.dumps({"error": str(e), "remote_host": remote_host}, indent=2)
+        return json.dumps({"ok": False, "error": str(e), "remote_host": host,
+                           "upstream": NEXUS_API_BASE}, indent=2)
+    try:
+        data = r.json()
+    except Exception:
+        return json.dumps({"ok": False, "status_code": r.status_code, "remote_host": host,
+                           "error": "el upstream no devolvio JSON",
+                           "body": (r.text or "")[:400], "upstream": NEXUS_API_BASE},
+                          indent=2, ensure_ascii=False)
+    if r.status_code != 200 or not isinstance(data, dict):
+        return json.dumps({"ok": False, "status_code": r.status_code, "remote_host": host,
+                           "result": data, "upstream": NEXUS_API_BASE},
+                          indent=2, ensure_ascii=False)
+
+    hw = data.get("hardware") or {}
+    detectado = (hw.get("remote_host") or "").strip()
+    es_local = detectado in ("", "localhost", "127.0.0.1", "::1")
+    if host and not es_local and not hw.get("gpu_name") and not hw.get("vram_gb"):
+        # El endpoint devuelve 200 igual cuando el SSH falla: sin GPU detectada
+        # el "escaneo remoto" era la maquina local con la etiqueta del host.
+        return json.dumps({
+            "ok": False, "remote_host": host, "status_code": r.status_code,
+            "error": ("no se pudo detectar GPU en el host remoto (SSH inaccesible o sin "
+                      "nvidia-smi). El upstream devolvio hardware LOCAL: RAM y disco no "
+                      "son del remoto."),
+            "local_hardware": hw, "recommendations": data.get("recommended") or [],
+            "upstream": NEXUS_API_BASE,
+        }, indent=2, ensure_ascii=False)
+    return json.dumps({"ok": True, "status_code": r.status_code, "result": data},
+                      indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -2871,91 +2984,6 @@ async def agent_cu_execute(
         return json.dumps({"error": str(e)})
 
 
-# ============================================================
-# CodeGraph tools — code knowledge graph queries
-# ============================================================
-
-@mcp.tool()
-async def codegraph_build(source_dir: str = "src", force: bool = False) -> str:
-    """Build or rebuild the code knowledge graph from source files.
-    Returns node count, edge count, community count."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import build_graph
-        result = await build_graph(source_dir=source_dir, force=force)
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def codegraph_query(query: str, top_k: int = 10) -> str:
-    """Search the code graph for nodes matching a query (TF-IDF scoring).
-    Returns ranked matches with label, source_file, score."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import query_graph
-        result = await query_graph(query=query, top_k=top_k)
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def codegraph_neighbors(node_id: str, relation: str = "", max_depth: int = 1) -> str:
-    """Explore neighbors of a node in the code graph.
-    Returns connected nodes with their relationships."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import get_neighbors
-        result = await get_neighbors(node_id=node_id, relation=relation, max_depth=max_depth)
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def codegraph_god_nodes(top_n: int = 10) -> str:
-    """Find the most connected entities in the code graph (highest degree centrality)."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import get_god_nodes
-        result = await get_god_nodes(top_n=top_n)
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def codegraph_surprising(top_n: int = 5) -> str:
-    """Find surprising cross-community connections in the code graph."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import find_surprising
-        result = await find_surprising(top_n=top_n)
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def codegraph_cycles() -> str:
-    """Detect circular imports in the code graph."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from src.tools.codegraph_tool import find_cycles
-        result = await find_cycles()
-        return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
 @mcp.tool()
 async def dag_decompose(goal: str, use_llm: bool = True) -> str:
     """Decompose a natural language goal into a task DAG with dependencies.
@@ -3083,18 +3111,15 @@ async def skill_marketplace_stats() -> str:
 
 @mcp.tool()
 async def execute_code(code: str) -> str:
-    """Execute Python code programmatically. The code can call registered tools.
-    Collapses multi-step pipelines into a single inference call.
-    Example: result = tools['web_search']("query")"""
+    """Ejecuta un snippet de Python en un subproceso aislado (timeout 30 s).
+
+    Imports acotados (sin os/sys/subprocess/socket/...), sin dunders y sin acceso
+    a las tools del server. El snippet calcula y devuelve `result`.
+    """
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
         from src.core.hermes_tools import get_execute_code_engine
-        engine = get_execute_code_engine()
-        # Register available tools
-        engine.register_tool("web_search", lambda q: {"query": q, "note": "Use MCP web_search"})
-        engine.register_tool("read_file", lambda p: {"path": p, "note": "Use MCP read_file"})
-        engine.register_tool("write_file", lambda p, c: {"path": p, "note": "Written"})
-        result = await engine.execute(code)
+        result = await get_execute_code_engine().execute(code)
         return json.dumps(result, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
@@ -3152,9 +3177,9 @@ async def memory_nudge() -> str:
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
         from src.core.hermes_tools import get_memory_nudge
-        from src.core.hierarchical_memory import get_hierarchical_memory
+        from src.core.hierarchical_memory import get_memory
         nudge = get_memory_nudge()
-        mem = get_hierarchical_memory()
+        mem = get_memory()
         result = await nudge.nudge(hierarchical_memory=mem)
         return json.dumps(result, indent=2, ensure_ascii=False)
     except Exception as e:
@@ -3212,27 +3237,6 @@ async def tts_speak(text: str, voice: str = "") -> str:
         speaker = get_tts_speaker()
         result = await speaker.speak(text, voice=voice)
         return json.dumps(result, indent=2, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
-
-
-@mcp.tool()
-async def semantic_judge(content: str, topic: str, agent: str = "unknown") -> str:
-    """Judge if new content conflicts with existing memory using LLM.
-    Returns: NEW, CONTRADICTS, OVERWRITES, COMPLEMENTS, or DUPLICATE."""
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from src.brain.semantic_judger import SemanticJudger
-        judger = SemanticJudger()
-        conflict = judger.judge(content, topic, agent)
-        if conflict:
-            return json.dumps({
-                "judgment": conflict.judgment.value,
-                "reasoning": conflict.reasoning,
-                "confidence": conflict.confidence,
-                "existing_id": conflict.existing_id,
-            }, indent=2)
-        return json.dumps({"judgment": "new", "reasoning": "No similar content found", "confidence": 1.0}, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
 

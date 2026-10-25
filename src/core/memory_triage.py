@@ -54,6 +54,15 @@ VALUABLE_KEYWORDS = {
     "api", "endpoint", "schema", "migration", "deploy", "docker",
     "asyncio", "concurrent", "parallel", "distributed", "resilience",
     "circuit", "breaker", "retry", "timeout", "backoff", "fallback",
+    # Espanol: el harness escribe sus memorias en espanol, y con la lista solo
+    # en ingles una frase tecnica ("la arquitectura del router reintenta con
+    # backoff") puntuaba 0 y el triage la descartaba como trivial.
+    "patron", "patrones", "arquitectura", "algoritmo", "protocolo",
+    "implementacion", "diseno", "estrategia", "optimizacion", "seguridad",
+    "rendimiento", "base", "datos", "cola", "esquema", "migracion",
+    "despliegue", "concurrencia", "concurrente", "paralelo", "distribuido",
+    "resiliencia", "reintento", "reintentos", "respaldo", "caida",
+    "verificacion", "prueba", "pruebas", "configuracion",
 }
 
 

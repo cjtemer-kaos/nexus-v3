@@ -14,7 +14,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Edición quirúrgica (str_replace/replace_in_file) | ✅ | tool `edit` (reemplazo único, `replace_all` opcional) |
 | Autocompletado inline (Tab) | ❌ | Nexus es harness+UI propia, no plugin de editor |
 | Indexado semántico del código (RAG) | ✅ | `rag_engine`, `codebase_context`, `code_search`, `/api/rag/*` |
-| Búsqueda de símbolos/referencias | ⚠️ | `code_search`, `codegraph_tool` (sin LSP nativo) |
+| Búsqueda de símbolos/referencias | ⚠️ | `code_search` (regex) + `lsp_client` (pylsp) si está instalado; `codegraph_tool` NO sirve acá (su backend `src/codegraph/` no existe en v3) |
 | Gestión de contexto / compactación | ✅ | `compaction` (4 capas), `trajectory_compressor`, `session_distill` |
 | Plan mode | ✅ | `plan_mode`, `/api/plan` |
 | Iterar sobre errores (self-correct) | ✅ | `agent_loop` (replan, doom-loop guard) |
@@ -149,6 +149,12 @@ el camino del harness es `provider_router` + `agent_loop`. Sus dependencias opci
 **guardadas con try/except** o son lazy, así que su ausencia no rompe nada y el harness no las
 necesita para funcionar. Se dejan como referencia (regla: no borrar); si se cablean, declarar
 los extras en `pyproject.toml`.
+
+**codegraph (2026-10-25)**: `codegraph_tool.py` no se puede usar en v3 — `build_graph` importa
+`src.codegraph.builder`, paquete que **no existe** acá, y `_get_graph` necesita `networkx`, que no
+está instalado. Por eso se quitaron del bridge MCP las 6 tools `codegraph_*` que lo llamaban
+(anunciaban una capacidad que siempre fallaba). El archivo queda como referencia exportable
+(`EXPORT_GAP.md`, P0); si se quiere la feature, hay que traer `src/codegraph/` + `networkx`.
 
 ### Ronda de autopsia de harness (2026-10-19)
 
