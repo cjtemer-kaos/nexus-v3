@@ -560,6 +560,15 @@ async def _shutdown():
     except Exception as e:
         logger.warning(f"llama shutdown: {e}")
     try:
+        # Los jobs se lanzan con CREATE_NEW_PROCESS_GROUP: sobreviven al padre.
+        # Sin esto, cerrar la app dejaba builds/servers corriendo en background.
+        from src.core.jobs import get_jobs
+        _matados = get_jobs().kill_all()
+        if _matados:
+            logger.info(f"jobs shutdown: {_matados} job(s) terminados")
+    except Exception as e:
+        logger.warning(f"jobs shutdown: {e}")
+    try:
         # Cerrar el router AHORA (el cierre diferido no corre al parar el loop).
         r = _state.pop("router", None)
         _state.pop("router_sig", None)

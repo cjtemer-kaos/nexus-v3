@@ -62,6 +62,9 @@ let backendPort: number = 8765;
 let backendUrl: string = "";
 let isQuitting = false;
 let backendReady = false;
+// PIDs que estamos matando nosotros: evita reportar un "crash" al reiniciar
+// desde la bandeja (el flag global podía resetearse antes de que llegara `exit`).
+const killingPids = new Set<number>();
 
 // ——————————————————————————————————————————————
 // Backend log → data/backend.log (el stdout de Electron se PIERDE al abrir por
@@ -79,6 +82,24 @@ function blog(tag: string, s: string): void {
     }
     _blogStream.write(line + "\n");
   } catch { /* noop */ }
+}
+
+// ——————————————————————————————————————————————
+// Shell externo: solo esquemas inofensivos.
+// El contenido del modelo y de la web puede traer links; openExternal("file:///…")
+// abriría un ejecutable local con un clic. Allowlist explícita.
+// ——————————————————————————————————————————————
+function openExternalSafe(url: string): void {
+  try {
+    const proto = new URL(url).protocol;
+    if (proto === "http:" || proto === "https:" || proto === "mailto:") {
+      void shell.openExternal(url);
+      return;
+    }
+    blog("[main]", `openExternal bloqueado (esquema ${proto}): ${url.slice(0, 120)}`);
+  } catch {
+    blog("[main]", `openExternal ignorado (url inválida): ${url.slice(0, 120)}`);
+  }
 }
 
 // ——————————————————————————————————————————————
@@ -117,7 +138,7 @@ if (!singleLock) {
 app.on("web-contents-created", (_e, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
     // Open external links in system browser, not new Electron window
-    shell.openExternal(url);
+    openExternalSafe(url);
     return { action: "deny" };
   });
   contents.on("will-navigate", (event, url) => {
@@ -127,7 +148,7 @@ app.on("web-contents-created", (_e, contents) => {
       // But allow SPA routes: same origin only
       if (!url.startsWith(backendUrl) && backendUrl) {
         event.preventDefault();
-        shell.openExternal(url);
+        openExternalSafe(url);
       }
     }
   });
@@ -184,9 +205,10 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
   const env = {
     ...process.env,
     PYTHONUNBUFFERED: "1",
-    // Preserve NEXUS_BRAIN if set; backend's link.py uses it
-    ELECTRON_RUN_AS_NODE: undefined,
   } as NodeJS.ProcessEnv;
+  // Si heredamos ELECTRON_RUN_AS_NODE=1, el "python" arrancaría como node.
+  // `delete` de verdad: dejar la clave en undefined es una trampa para el próximo.
+  delete env.ELECTRON_RUN_AS_NODE;
 
   // Ensure data dir exists for logs
   const dataDir = join(ROOT, "data");
@@ -216,8 +238,11 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
     dialog.showErrorBox("Nexus v3 — Backend error", `No se pudo iniciar el backend Python.\n\nComando: ${py} ${args.join(" ")}\nError: ${err.message}\n\nVerifica que Python 3.13+ esté instalado y que 'pip install -r requirements.txt' se haya ejecutado (si aplica).`);
   });
   proc.on("exit", (code, signal) => {
-    blog("[main]", `backend exit code=${code} signal=${signal} quitting=${isQuitting}`);
-    if (!isQuitting && code !== 0 && code !== null) {
+    const pid = proc.pid;
+    const silencioso = isQuitting || (pid !== undefined && killingPids.has(pid));
+    if (pid !== undefined) killingPids.delete(pid);
+    blog("[main]", `backend exit code=${code} signal=${signal} quitting=${isQuitting} killing=${silencioso}`);
+    if (!silencioso && code !== 0 && code !== null) {
       // Unexpected crash — notify but don't auto-restart aggressively
       backendReady = false;
       mainWindow?.webContents.send("nexus:backendStatus", { ok: false, url: backendUrl });
@@ -228,33 +253,42 @@ async function spawnBackend(port: number): Promise<ChildProcess> {
 }
 
 async function killBackend(): Promise<void> {
-  if (!pyProc || pyProc.killed) return;
-  const pid = pyProc.pid;
+  const proc = pyProc;
+  if (!proc || proc.exitCode !== null) { pyProc = null; return; }
+  const pid = proc.pid;
   blog("[main]", `killing backend pid=${pid}`);
-  isQuitting = true;
+  // OJO: NO tocar `isQuitting` acá. Este método también corre en "Reiniciar
+  // backend" desde la bandeja; si lo marcaba, la app quedaba creyendo que estaba
+  // saliendo y al cerrar la ventana no minimizaba ni mataba el proceso.
+  if (pid !== undefined) killingPids.add(pid);
+  let exited = false;
 
   // Best-effort graceful
-  try { pyProc.kill("SIGTERM"); } catch {}
+  try { proc.kill("SIGTERM"); } catch {}
 
   // Wait briefly
   await new Promise<void>((resolve) => {
     const t = setTimeout(() => resolve(), 1500);
-    pyProc!.once("exit", () => { clearTimeout(t); resolve(); });
+    proc.once("exit", () => { exited = true; clearTimeout(t); resolve(); });
   });
 
-  // Force kill if still alive (Windows taskkill for tree)
-  if (pyProc && !pyProc.killed && pyProc.pid) {
+  // Force kill if still alive (Windows taskkill for tree).
+  // `proc.killed` solo dice que se envió la señal, no que murió: antes esa
+  // condición nunca dejaba entrar al taskkill /T y los hijos quedaban vivos.
+  if (!exited && pid) {
     try {
       if (process.platform === "win32") {
         // Kill process tree on Windows
         const { spawnSync } = await import("node:child_process");
         spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
       } else {
-        pyProc.kill("SIGKILL");
+        proc.kill("SIGKILL");
       }
     } catch {}
   }
   pyProc = null;
+  // El pid NO se borra acá: lo limpia el handler `exit`, que puede llegar después
+  // de este retorno (por eso antes se colaba un falso aviso de crash).
 }
 
 async function waitForBackend(url: string, timeoutMs = 15000): Promise<boolean> {
@@ -442,6 +476,14 @@ async function start() {
 
   createWindow();
   createTray();
+
+  // Autotest/CI: con NEXUS_SELFTEST_MS la app se cierra sola tras N ms. Verifica
+  // el ciclo spawn → health → quit → kill sin dejar procesos ni ventanas colgadas.
+  const selftestMs = Number(process.env.NEXUS_SELFTEST_MS || 0);
+  if (selftestMs > 0) {
+    blog("[main]", `selftest: cierre programado en ${selftestMs} ms`);
+    setTimeout(() => { isQuitting = true; app.quit(); }, selftestMs);
+  }
 
   // Poll backend readiness, then navigate to correct URL
   const ok = await waitForBackend(backendUrl, 60000);

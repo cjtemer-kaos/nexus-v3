@@ -124,6 +124,24 @@ class JobRegistry:
         return self._public(rec)
 
     # ------------------------------------------------------------------
+    def kill_all(self) -> int:
+        """Mata los jobs vivos; devuelve cuántos. Se llama en el shutdown del server.
+
+        `CREATE_NEW_PROCESS_GROUP` desacopla al job del padre a propósito (para que
+        un Ctrl+C en el harness no lo corte), así que el cierre tiene que ser explícito.
+        """
+        with self._lock:
+            ids = [jid for jid, rec in self._jobs.items() if rec["proc"].poll() is None]
+        matados = 0
+        for jid in ids:
+            try:
+                self.kill(jid)
+                matados += 1
+            except Exception:
+                continue
+        return matados
+
+    # ------------------------------------------------------------------
     def _get_rec(self, job_id: str) -> dict:
         with self._lock:
             rec = self._jobs.get(job_id)
