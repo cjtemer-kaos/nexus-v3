@@ -78,18 +78,29 @@ class JobRegistry:
     def read(self, job_id: str, cursor: int = 0, max_chars: int = 20000) -> dict:
         rec = self._get_rec(job_id)
         log = Path(rec["log"])
+        # Solo el tramo pedido: antes hacia `log.read_bytes()` y cargaba el log
+        # ENTERO en memoria en cada lectura. Con un build verboso (logs de
+        # cientos de MB) cada job_read/job_wait copiaba todo el archivo.
         try:
-            data = log.read_bytes() if log.exists() else b""
+            size = log.stat().st_size if log.exists() else 0
         except Exception:
-            data = b""
+            size = 0
         start = max(0, int(cursor or 0))
-        chunk = data[start:start + max(1, int(max_chars))]
+        want = max(1, int(max_chars))
+        chunk = b""
+        if size > start:
+            try:
+                with open(log, "rb") as fh:
+                    fh.seek(start)
+                    chunk = fh.read(want)
+            except Exception:
+                chunk = b""
         end = start + len(chunk)
         return {
             **self._public(rec),
             "cursor": end,
             "next_cursor": end,
-            "pending_bytes": max(0, len(data) - end),
+            "pending_bytes": max(0, size - end),
             "output": chunk.decode("utf-8", errors="replace"),
         }
 

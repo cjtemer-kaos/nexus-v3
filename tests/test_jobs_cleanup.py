@@ -54,3 +54,30 @@ def test_el_shutdown_del_server_llama_a_kill_all():
 
     fuente = inspect.getsource(server._shutdown)
     assert "kill_all" in fuente
+
+
+def test_read_solo_lee_el_tramo_pedido(tmp_path, monkeypatch):
+    """Antes `read()` hacia `log.read_bytes()`: el log entero a memoria por llamada."""
+    from src.core.jobs import JobRegistry
+
+    reg = JobRegistry()
+    job = reg.start("echo hola", cwd=tmp_path, label="eco")
+    reg._get_rec(job["id"])["proc"].wait(timeout=20)
+
+    log = tmp_path / "grande.log"
+    log.write_bytes(b"x" * 5_000_000)
+    reg._get_rec(job["id"])["log"] = str(log)
+
+    def prohibido(*a, **k):
+        raise AssertionError("read() no debe cargar el log entero")
+
+    monkeypatch.setattr("pathlib.Path.read_bytes", prohibido)
+    out = reg.read(job["id"], cursor=0, max_chars=1000)
+
+    assert len(out["output"]) == 1000
+    assert out["cursor"] == 1000
+    assert out["pending_bytes"] == 5_000_000 - 1000
+
+    # seguir desde el cursor devuelve el tramo siguiente, no el primero
+    out2 = reg.read(job["id"], cursor=out["cursor"], max_chars=10)
+    assert out2["cursor"] == 1010

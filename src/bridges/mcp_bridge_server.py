@@ -21,6 +21,7 @@ Fixes aplicados (2026-05-17):
 - Estado del sistema completo
 """
 
+import asyncio
 import sys
 import hashlib
 import json
@@ -2964,7 +2965,8 @@ async def agent_cu_execute(
         if args:
             cmd_parts.extend(args.split())
 
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             cmd_parts,
             capture_output=True,
             text=True,

@@ -75,6 +75,7 @@ class NexusHive:
         self._pending_commands: Dict[str, asyncio.Future] = {}
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._listener_task: Optional[asyncio.Task] = None
+        self._bg: set[asyncio.Task] = set()
 
         # Registrar nodos conocidos
         self._register_known_nodes()
@@ -157,6 +158,9 @@ class NexusHive:
             self._heartbeat_task.cancel()
         if self._listener_task:
             self._listener_task.cancel()
+        for t in list(self._bg):
+            t.cancel()
+        self._bg.clear()
         if self.pubsub and self.redis:
             try:
                 await self.pubsub.unsubscribe()
@@ -215,8 +219,15 @@ class NexusHive:
         await self.redis.publish("nexus_hive_commands", json.dumps(payload))
         logger.info(f"Comando enviado [{cmd_id}]: {command}")
 
-        # Iniciar listener de resultados
-        asyncio.create_task(self._listen_results(result_pubsub, result_channel, future))
+        # Iniciar listener de resultados. Se retiene la referencia y se cancela
+        # en el finally: antes quedaba huerfano escuchando un pubsub que el
+        # propio finally cerraba, y su excepcion nunca se recuperaba.
+        listener = asyncio.create_task(
+            self._listen_results(result_pubsub, result_channel, future),
+            name=f"hive-results:{cmd_id}",
+        )
+        self._bg.add(listener)
+        listener.add_done_callback(self._bg.discard)
 
         try:
             result = await asyncio.wait_for(future, timeout=timeout)
@@ -225,6 +236,14 @@ class NexusHive:
             return {"status": "timeout", "error": f"Timeout después de {timeout}s"}
         finally:
             self._pending_commands.pop(cmd_id, None)
+            if not listener.done():
+                listener.cancel()
+            try:
+                await listener
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(f"listener de resultados {cmd_id} fallo: {e}")
             await result_pubsub.unsubscribe(result_channel)
             await result_pubsub.close()
 

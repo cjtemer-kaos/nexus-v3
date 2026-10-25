@@ -14,6 +14,8 @@ Features:
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import inspect
 import json
 import time
@@ -494,7 +496,12 @@ class ToolRegistry:
             if inspect.iscoroutinefunction(entry.handler):
                 result = await entry.handler(**args)  # type: ignore
             else:
-                result = entry.handler(**args)  # type: ignore
+                # Los handlers sync con I/O corrian EN LINEA en el event loop:
+                # job_wait duerme hasta 300 s, web_fetch hace HTTP y
+                # read_file/write_file tocan disco, asi que durante esa llamada
+                # ningun SSE, /api/status ni keepalive avanzaba. to_thread los
+                # saca del loop sin cambiar su contrato ni su firma.
+                result = await asyncio.to_thread(functools.partial(entry.handler, **args))  # type: ignore
             success = True
             return result
         except Exception as e:

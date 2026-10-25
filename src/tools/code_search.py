@@ -8,6 +8,7 @@ Supports:
 - GitHub search via gh CLI
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -56,7 +57,9 @@ async def code_search(
             cmd.extend(["--glob", include])
         cmd.extend([query, search_path])
         
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # en hilo: rg puede tardar 30 s y esto corre en el event loop
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=30)
         if proc.returncode == 0:
             import re as _re
             for line in proc.stdout.strip().split('\n'):
@@ -171,7 +174,9 @@ async def github_search(
         if language:
             cmd.extend(["--language", language])
         
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # en hilo: rg puede tardar 30 s y esto corre en el event loop
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=30)
         if proc.returncode == 0:
             return {
                 "success": True,

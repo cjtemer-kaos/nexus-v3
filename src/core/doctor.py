@@ -163,7 +163,9 @@ class Doctor:
                 suggestion="Install Node.js for OpenClaw and UI features",
             )
         try:
-            result = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=5)
+            # en hilo: `node --version` puede colgarse y esto es un check async
+            result = await asyncio.to_thread(
+                subprocess.run, [node, "--version"], capture_output=True, text=True, timeout=5)
             return CheckResult(name="Node.js", status="ok", message=result.stdout.strip())
         except Exception:
             return CheckResult(name="Node.js", status="error", message="Node.js found but not executable")

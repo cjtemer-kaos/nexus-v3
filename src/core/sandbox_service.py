@@ -76,8 +76,10 @@ class SandboxService:
         """Mata el árbol: en Windows `proc.kill()` deja huérfanos (npm/builds)."""
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                               capture_output=True, timeout=10)
+                # taskkill puede tardar hasta 10 s: en hilo, no en el loop
+                await asyncio.to_thread(
+                    subprocess.run, ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True, timeout=10)
             else:
                 proc.kill()
         except Exception:

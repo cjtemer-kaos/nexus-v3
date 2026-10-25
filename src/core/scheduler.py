@@ -97,6 +97,7 @@ class TaskScheduler:
         self._llm_caller = llm_caller
         self._running = False
         self._loop_task: Optional[asyncio.Task] = None
+        self._bg: set[asyncio.Task] = set()
         self._event_handlers: Dict[str, List[Callable]] = {}
         self._load()
 
@@ -248,10 +249,35 @@ class TaskScheduler:
                 await self._loop_task
             except asyncio.CancelledError:
                 pass
+        for t in list(self._bg):
+            t.cancel()
+        self._bg.clear()
         logger.info("Scheduler detenido")
 
+    def _spawn(self, coro) -> asyncio.Task:
+        """Lanza una ejecucion fire-and-forget RETENIENDO la referencia.
+
+        `asyncio.create_task` sin guardar el Task deja que el GC lo recolecte a
+        mitad de vuelo, y sin done_callback la excepcion se pierde ("Task
+        exception was never retrieved"). Las ejecuciones del scheduler no tienen
+        quien las espere: la referencia vive aca hasta que terminan.
+        """
+        task = asyncio.create_task(coro)
+        self._bg.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._bg.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error(f"Ejecucion de scheduler fallo: {exc}")
+
+        task.add_done_callback(_done)
+        return task
+
     async def _loop(self):
-        """Loop principal — verifica tareas cada 30s"""
+        """Loop principal â€” verifica tareas cada 30s"""
         while self._running:
             try:
                 await self._check_due_tasks()
@@ -269,7 +295,7 @@ class TaskScheduler:
             if not task.enabled or not task.next_run:
                 continue
             if task.next_run <= now:
-                asyncio.create_task(self._execute_task(task.id))
+                self._spawn(self._execute_task(task.id))
 
     async def _execute_task(self, task_id: str):
         """Ejecutar una tarea"""
@@ -302,7 +328,7 @@ class TaskScheduler:
             self._save()
 
             if task.then_task_id and task.then_task_id in self.tasks:
-                asyncio.create_task(self._execute_task(task.then_task_id))
+                self._spawn(self._execute_task(task.then_task_id))
 
         except Exception as e:
             run.status = "error"
@@ -311,11 +337,11 @@ class TaskScheduler:
             logger.error(f"Task error: {e}")
 
     async def fire_event(self, event_type: str, data: Dict = None):
-        """Disparar evento — ejecuta tareas con trigger de tipo evento"""
+        """Disparar evento â€” ejecuta tareas con trigger de tipo evento"""
         for task in self.tasks.values():
             if task.enabled and task.metadata.get("trigger") == "event":
                 if event_type in task.metadata.get("events", []):
-                    asyncio.create_task(self._execute_task(task.id))
+                    self._spawn(self._execute_task(task.id))
 
     def get_status(self) -> Dict:
         """Estado del scheduler"""
