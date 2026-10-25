@@ -54,6 +54,7 @@ class TaskDAG:
     goal: str
     nodes: List[TaskNode] = field(default_factory=list)
     status: str = "pending"
+    method: str = "pattern"
     created_at: str = ""
     started_at: str = ""
     completed_at: str = ""
@@ -97,36 +98,59 @@ class DAGCoordinator:
         ]
         self._runs: Dict[str, TaskDAG] = {}
 
-    def decompose_goal(self, goal: str, run_id: str = None, use_llm: bool = True) -> TaskDAG:
-        """
-        Decompose a goal into a task DAG.
-        Uses LLM-based decomposition when goal is complex (>15 words or multiple actions).
-        Falls back to pattern-based for simple goals.
-        """
+    def _needs_llm(self, goal: str) -> bool:
+        """Un objetivo es "complejo" si es largo o encadena varias acciones."""
+        goal_words = len(goal.split())
+        enlaces = ["y ", "and ", "luego ", "después ", "también "]
+        return goal_words > 15 or sum(1 for kw in enlaces if kw in goal.lower()) >= 2
+
+    def _new_dag(self, goal: str, run_id: str | None, nodes: List[TaskNode], method: str) -> TaskDAG:
         import uuid
         rid = run_id or str(uuid.uuid4())[:8]
-
-        # Decide: LLM or pattern-based
-        goal_words = len(goal.split())
-        is_complex = goal_words > 15 or sum(1 for kw in ["y ", "and ", "luego ", "después ", "también "] if kw in goal.lower()) >= 2
-
-        if use_llm and is_complex:
-            tasks = asyncio.get_event_loop().run_until_complete(
-                self._decompose_with_llm(goal)
-            )
-        else:
-            tasks = self._parse_goal(goal)
-
-        dag = TaskDAG(id=rid, goal=goal, nodes=tasks)
+        dag = TaskDAG(id=rid, goal=goal, nodes=nodes, method=method)
         self._runs[rid] = dag
-        logger.info(f"DAG created: {rid} with {len(tasks)} tasks for goal: {goal[:80]} (method: {'llm' if is_complex and use_llm else 'pattern'})")
+        logger.info(f"DAG created: {rid} with {len(nodes)} tasks for goal: {goal[:80]} (method: {method})")
         return dag
 
-    async def _decompose_with_llm(self, goal: str) -> List[TaskNode]:
+    async def _nodes_for(self, goal: str, use_llm: bool) -> tuple[List[TaskNode], str]:
+        """Nodos + metodo REAL (no el pedido). `_decompose_with_llm` cae a
+        patrones cuando Ollama no responde, asi que el metodo se decide alla."""
+        if use_llm and self._needs_llm(goal):
+            return await self._decompose_with_llm(goal)
+        return self._parse_goal(goal), "pattern"
+
+    async def decompose_goal_async(self, goal: str, run_id: str = None,
+                                   use_llm: bool = True) -> TaskDAG:
+        """Descomposicion para llamadores async (bridge MCP, endpoints, loop)."""
+        nodes, method = await self._nodes_for(goal, use_llm)
+        return self._new_dag(goal, run_id, nodes, method)
+
+    def decompose_goal(self, goal: str, run_id: str = None, use_llm: bool = True) -> TaskDAG:
+        """Version sincronica.
+
+        Antes usaba `asyncio.get_event_loop().run_until_complete(...)`, que
+        revienta con "This event loop is already running" cuando se la llama
+        desde codigo async (el bridge MCP lo hace). Ahora: sin loop corre con
+        `asyncio.run`; con loop falla cerrado y pide la variante async en vez
+        de degradar a patrones en silencio.
+        """
+        if use_llm and self._needs_llm(goal):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self.decompose_goal_async(goal, run_id=run_id, use_llm=True))
+            raise RuntimeError(
+                "decompose_goal() es sincronico y ya hay un event loop corriendo; "
+                "usa `await decompose_goal_async(goal, use_llm=True)` o use_llm=False."
+            )
+        return self._new_dag(goal, run_id, self._parse_goal(goal), "pattern")
+
+    async def _decompose_with_llm(self, goal: str) -> tuple[List[TaskNode], str]:
         """Use Ollama LLM to decompose a complex goal into task nodes.
 
         Sends a structured prompt asking the LLM to return JSON with tasks,
-        dependencies, and assignees. Falls back to pattern-based on failure.
+        dependencies, and assignees. Devuelve (nodos, metodo): el metodo es
+        'llm' solo si el modelo respondio algo usable; si fallo, 'pattern'.
         """
         prompt = f"""Eres un coordinador de tareas. Descompón este objetivo en un grafo de tareas (DAG).
 
@@ -175,12 +199,12 @@ Reglas:
                         parsed = json.loads(raw[json_start:json_end])
                         tasks_data = parsed.get("tasks", [])
                         if tasks_data:
-                            return self._llm_to_nodes(tasks_data, goal)
+                            return self._llm_to_nodes(tasks_data, goal), "llm"
         except Exception as e:
             logger.warning(f"LLM decomposition failed, falling back to pattern: {e}")
 
         # Fallback to pattern-based
-        return self._parse_goal(goal)
+        return self._parse_goal(goal), "pattern"
 
     def _llm_to_nodes(self, tasks_data: list, goal: str) -> List[TaskNode]:
         """Convert LLM JSON output to TaskNode objects"""

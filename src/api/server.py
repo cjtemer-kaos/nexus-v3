@@ -4807,13 +4807,17 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
 
-    def team_spawn_tool(task: str, name: str = "", gema: str = "auto",
-                        context: str = "", tools: str = "",
-                        mode: str = "continuable") -> str:
+    async def team_spawn_tool(task: str, name: str = "", gema: str = "auto",
+                              context: str = "", tools: str = "",
+                              mode: str = "continuable") -> str:
         """Lanza un hijo en BACKGROUND y devuelve team_id de inmediato.
 
         A diferencia de sub_agent (bloqueante), permite lanzar varios y seguir
         trabajando; se recogen con team_await y se conversa con team_mailbox.
+
+        Es `async` a proposito: `TeamRuntime.spawn` hace `asyncio.create_task`,
+        y un handler sync corre en un hilo de trabajo (dispatch -> to_thread)
+        donde NO hay loop -> "no running event loop".
         """
         if router is None:
             raise RuntimeError("team_spawn requiere router (helpers=True)")
@@ -4837,14 +4841,16 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return _json.dumps(await rt.await_member(team_id, limit),
                            ensure_ascii=False, default=str)
 
-    def team_mailbox_tool(team_id: str, message: str = "") -> str:
+    async def team_mailbox_tool(team_id: str, message: str = "") -> str:
         """Envía un mensaje al hijo (message no vacío) o lee su buzón (vacío)."""
         import json as _json
         if router is None:
             raise RuntimeError("team_mailbox requiere router (helpers=True)")
         rt = _get_team(session_id, router, scope, cfg)
         if (message or "").strip():
-            return _json.dumps(rt.send(team_id, message), ensure_ascii=False)
+            # `TeamRuntime.send` es async: antes se devolvia la corrutina sin
+            # await y json.dumps reventaba con "not JSON serializable".
+            return _json.dumps(await rt.send(team_id, message), ensure_ascii=False)
         return _json.dumps(rt.inbox(team_id), ensure_ascii=False)
 
     def team_list_tool() -> str:

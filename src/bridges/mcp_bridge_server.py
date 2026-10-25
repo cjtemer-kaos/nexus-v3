@@ -2997,7 +2997,10 @@ async def dag_decompose(goal: str, use_llm: bool = True) -> str:
     try:
         from src.core.dag_coordinator import DAGCoordinator
         dc = DAGCoordinator()
-        dag = dc.decompose_goal(goal, use_llm=use_llm)
+        # decompose_goal() sincronico hacia run_until_complete() adentro de este
+        # mismo loop -> "This event loop is already running" para cualquier
+        # objetivo complejo (justo el caso que usa LLM).
+        dag = await dc.decompose_goal_async(goal, use_llm=use_llm)
         tasks = []
         for n in dag.nodes:
             tasks.append({
@@ -3006,7 +3009,7 @@ async def dag_decompose(goal: str, use_llm: bool = True) -> str:
             })
         return json.dumps({
             "dag_id": dag.id, "goal": dag.goal, "task_count": len(tasks),
-            "tasks": tasks, "method": "llm" if use_llm else "pattern",
+            "tasks": tasks, "method": dag.method,
         }, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
