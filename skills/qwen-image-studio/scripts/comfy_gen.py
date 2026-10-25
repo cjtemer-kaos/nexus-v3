@@ -8,8 +8,8 @@ Config por entorno:
   COMFYUI_URL   URL base de ComfyUI (default http://127.0.0.1:8188)
 
 Modos:
-  --mode edit  (default): Qwen-Image-Edit-2509 GGUF. Requiere --image.
-  --mode t2i            : Qwen-Image 2.1 GGUF (texto a imagen).
+  --mode edit  (default): Qwen-Image-Edit-2511 Q3_K_L. Requiere --image.
+  --mode t2i            : Qwen-Image 2.1-Turbo GGUF (texto a imagen, 8 pasos / CFG 1).
 
 Ejemplos:
   python comfy_gen.py --check
@@ -32,13 +32,13 @@ from pathlib import Path
 
 HOST = (os.environ.get("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
 
-EDIT_UNET = "Qwen-Image-Edit-2509-Q4_K_S.gguf"
-T2I_UNET = "qwen_image_2.1_Q6_K.gguf"
+EDIT_UNET = "qwen-image-edit-2511-Q3_K_L.gguf"
+EDIT_UNET_2511 = EDIT_UNET
+T2I_UNET = "qwen-image-2.1-turbo-Q4_K_S.gguf"
 CLIP_EDIT = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
 CLIP_T2I = "qwen3vl_8b_int8_convrot.safetensors"
 VAE_EDIT = "qwen_image_vae.safetensors"
 VAE_T2I = "qwen_image_2.1_vae_bf16.safetensors"
-LORA_LIGHT = "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
 
 START_HINT = (
     "ComfyUI caído o inalcanzable en " + HOST + ".\n"
@@ -136,7 +136,7 @@ def build_edit(a) -> dict:
     name = _upload_image(a.image)
     model = ["1", 0]
     wf = {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": EDIT_UNET}},
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": a.edit_unet}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_EDIT, "type": "qwen_image"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_EDIT}},
         "4": {"class_type": "LoadImage", "inputs": {"image": name}},
@@ -156,14 +156,6 @@ def build_edit(a) -> dict:
         "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
         "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": a.prefix}},
     }
-    if a.lightning:
-        wf["1b"] = {"class_type": "LoraLoaderModelOnly",
-                    "inputs": {"model": ["1", 0], "lora_name": LORA_LIGHT, "strength_model": 1.0}}
-        wf["9"]["inputs"]["model"] = ["1b", 0]
-        if a.steps == 20:
-            wf["9"]["inputs"]["steps"] = 4
-        if a.cfg == 2.5:
-            wf["9"]["inputs"]["cfg"] = 1.0
     return wf
 
 
@@ -227,18 +219,18 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="estado de ComfyUI y modelos")
     ap.add_argument("--mode", choices=["edit", "t2i"], default="edit")
     ap.add_argument("--image", help="ruta de la imagen a editar (modo edit)")
+    ap.add_argument("--edit-unet", default=EDIT_UNET, help="UNET GGUF para --mode edit")
+    ap.add_argument("--edit-2511", action="store_true", help="alias de compatibilidad; 2511 ya es el default")
     ap.add_argument("--prompt", default="")
     ap.add_argument("--negative", default="")
-    ap.add_argument("--steps", type=int, default=20)
-    ap.add_argument("--cfg", type=float, default=2.5)
+    ap.add_argument("--steps", type=int, default=None)
+    ap.add_argument("--cfg", type=float, default=None)
     ap.add_argument("--sampler", default="euler")
     ap.add_argument("--denoise", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--megapixels", type=float, default=1.0)
     ap.add_argument("--width", type=int, default=1024)
     ap.add_argument("--height", type=int, default=1024)
-    ap.add_argument("--lightning", action="store_true",
-                    help="usar LoRA Lightning 4 pasos (rápido; MENOS fiel a la identidad)")
     ap.add_argument("--prefix", default="nexus_out")
     ap.add_argument("--save", help="carpeta destino para los resultados")
     ap.add_argument("--timeout", type=int, default=1200)
@@ -246,6 +238,12 @@ def main() -> int:
 
     if a.check:
         return check()
+    if a.edit_2511:
+        a.edit_unet = EDIT_UNET_2511
+    if a.steps is None:
+        a.steps = 8 if a.mode == "t2i" else 20
+    if a.cfg is None:
+        a.cfg = 1.0 if a.mode == "t2i" else 2.5
     if not a.prompt:
         print("ERROR: --prompt requerido")
         return 2
