@@ -3,6 +3,7 @@ import { ModelSelector } from '@/components/ModelSelector'
 import { AgentSelector } from '@/components/AgentSelector'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { GraphView } from '@/components/graph/GraphView'
+import { MemoryPanel } from '@/components/memory/MemoryPanel'
 import { FileEditor } from '@/components/editor/FileEditor'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { AgentsPanel } from '@/components/agents/AgentsPanel'
@@ -23,6 +24,7 @@ import { searchApi } from '@/lib/api'
 const viewLabels: Record<string, string> = {
   chat: 'Chat',
   graph: 'Grafo',
+  memory: 'Memoria',
   editor: 'Editor',
   terminal: 'Terminal',
   agents: 'Ayudantes',
@@ -200,6 +202,7 @@ export default function App() {
         <main className="flex-1 min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.06),_transparent_55%)]">
           {view==='chat' && <ChatPanel />}
           {view==='graph' && <GraphView />}
+          {view==='memory' && <MemoryPanel />}
           {view==='editor' && <FileEditor />}
           {view==='terminal' && <TerminalPanel />}
           {view==='agents' && <AgentsPanel />}

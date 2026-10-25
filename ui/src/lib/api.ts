@@ -18,18 +18,46 @@ export async function getBackendUrl(): Promise<string> {
   return window.location.origin;
 }
 
-export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+export type ApiInit = RequestInit & { timeoutMs?: number };
+
+/** Límite por defecto de un request normal. Chat/stream pasan su propio signal y
+ *  su propio límite (5 y 15 min). Sin esto, un backend colgado dejaba la UI
+ *  girando para siempre y apilaba polls de /api/status cada 4 s. */
+const DEFAULT_TIMEOUT_MS = 30000;
+
+export async function apiFetch(path: string, init?: ApiInit): Promise<Response> {
   const base = await getBackendUrl();
   const url = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
   // El backend local no manda Cache-Control: sin no-store Chromium reusa
   // respuestas viejas (historial sin el último mensaje, sesiones ya borradas).
-  const opts: RequestInit = { cache: "no-store", ...init };
-  // If base is window.location.origin and we are on :5174 with proxy, relative path is better for CORS
-  // Prefer relative when base is current origin
-  if (base === window.location.origin) {
-    return fetch(path, opts);
+  const { timeoutMs, signal, ...rest } = init ?? {};
+  const opts: RequestInit = { cache: "no-store", ...rest };
+  const ctrl = signal ? null : new AbortController();
+  const timer = ctrl
+    ? setTimeout(() => ctrl.abort(), timeoutMs ?? DEFAULT_TIMEOUT_MS)
+    : null;
+  // El signal del caller manda: chat/stream ya traen su propio límite y su
+  // propio motivo de aborto (para distinguir timeout de "el usuario cortó").
+  if (signal) opts.signal = signal;
+  else if (ctrl) opts.signal = ctrl.signal;
+  try {
+    // If base is window.location.origin and we are on :5174 with proxy, relative path is better for CORS
+    // Prefer relative when base is current origin
+    if (base === window.location.origin) {
+      return await fetch(path, opts);
+    }
+    return await fetch(url, opts);
+  } catch (e) {
+    // Solo traducimos el aborto que provocamos nosotros: si el signal vino del
+    // caller (chat/stream), el error original le pertenece y él lo explica.
+    if (ctrl && (e as Error).name === "AbortError") {
+      const seg = Math.round((timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000);
+      throw new Error(`sin respuesta del backend en ${seg}s (${path})`);
+    }
+    throw e;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
-  return fetch(url, opts);
 }
 
 /** Mensaje legible de una respuesta no-ok: usa `detail` de FastAPI si existe. */
@@ -153,7 +181,7 @@ export type ProvidersResponse = {
 }
 
 export async function providersApi(refresh = false): Promise<ProvidersResponse> {
-  const res = await apiFetch(`/api/providers${refresh ? "?refresh=1" : ""}`);
+  const res = await apiFetch(`/api/providers${refresh ? "?refresh=1" : ""}`, { timeoutMs: 90000 });
   if (!res.ok) throw new Error(`providers ${res.status}`);
   return res.json();
 }
@@ -262,7 +290,7 @@ export type UploadResult = { id: string; url: string; name: string; mime: string
 export async function uploadApi(file: File): Promise<UploadResult> {
   const fd = new FormData()
   fd.append("file", file, file.name)
-  const res = await apiFetch("/api/upload", { method: "POST", body: fd })
+  const res = await apiFetch("/api/upload", { method: "POST", body: fd, timeoutMs: 120000 })
   if (!res.ok) throw new Error(`upload ${res.status}: ${(await res.text()).slice(0, 300)}`)
   return res.json()
 }
@@ -276,20 +304,24 @@ export async function voiceStatusApi(): Promise<VoiceStatus> {
 }
 
 export async function voiceTtsApi(text: string): Promise<Blob> {
+  // Piper sintetiza en CPU: un párrafo largo pasa los 30 s del límite global.
   const res = await apiFetch("/api/voice/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
+    timeoutMs: 120000,
   })
   if (!res.ok) throw new Error((await res.text()).slice(0, 200))
   return res.blob()
 }
 
 export async function voiceSttApi(audio: Blob, language = "es"): Promise<{ text: string; duration?: number }> {
+  // Whisper transcribe sin streaming: un clip de 2 min tarda más que el default.
   const res = await apiFetch(`/api/voice/stt?language=${encodeURIComponent(language)}`, {
     method: "POST",
     headers: { "Content-Type": audio.type || "audio/webm" },
     body: audio,
+    timeoutMs: 120000,
   })
   if (!res.ok) throw new Error(`stt ${res.status}: ${(await res.text()).slice(0, 300)}`)
   return res.json()
@@ -326,6 +358,96 @@ export async function permissionPutApi(permission: string): Promise<{ ok: boolea
     body: JSON.stringify({ permission }),
   })
   if (!res.ok) throw new Error((await res.text()).slice(0, 400))
+  return res.json()
+}
+
+/* -- Escalera de permisos (#0..#4 por sesión) ------------------ */
+
+export type LadderStep = {
+  level: number
+  name: string
+  preset: string
+  tools: boolean
+  confirm_mutating: boolean
+  hint: string
+}
+
+export type LevelsInfo = {
+  levels: LadderStep[]
+  session_id: string
+  session_level: number | null
+  preset: string
+  preset_level: number
+  effective_level: number
+  effective_name: string
+}
+
+export async function permissionLevelsApi(sessionId = ""): Promise<LevelsInfo> {
+  const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""
+  const res = await apiFetch(`/api/permission/levels${q}`)
+  if (!res.ok) throw new Error(await resError(res, `levels ${res.status}`))
+  return res.json()
+}
+
+export async function permissionLevelSetApi(
+  sessionId: string,
+  level: number | null,
+): Promise<{ ok: boolean; session_id: string; level: number | null; name?: string }> {
+  const res = await apiFetch("/api/permission/level", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, level }),
+  })
+  if (!res.ok) throw new Error(await resError(res, `level ${res.status}`))
+  return res.json()
+}
+
+/* -- Memoria auditable ---------------------------------------- */
+
+export type MemoryTopNode = {
+  node_id: number
+  title: string
+  recalls: number
+  turns_with_outcome: number
+  fail_rate: number | null
+  standing: number
+}
+
+export type MemoryAudit = {
+  days: number
+  totals: {
+    recalls: number
+    turns_with_memory: number
+    outcomes: number
+    verdicts: number
+    with_outcome: number
+  }
+  outcomes_by_status: Record<string, number>
+  top_recalled: MemoryTopNode[]
+  penalized: { node_id: number; standing: number; title: string }[]
+  min_standing: number
+  db: string
+}
+
+export async function memoryAuditApi(days = 30, limit = 20): Promise<MemoryAudit> {
+  const res = await apiFetch(`/api/memory/audit?days=${days}&limit=${limit}`)
+  if (!res.ok) throw new Error(await resError(res, `audit ${res.status}`))
+  return res.json()
+}
+
+export type MemoryVerdict = "helpful" | "outdated" | "harmful" | "wrong"
+
+export async function memoryVerdictApi(
+  nodeId: number,
+  verdict: MemoryVerdict,
+  note = "",
+): Promise<{ node_id: number; verdict: string; weight: number; standing: number }> {
+  const res = await apiFetch("/api/memory/verdict", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_id: nodeId, verdict, note, origin: "human" }),
+  })
+  if (!res.ok) throw new Error(await resError(res, `verdict ${res.status}`))
   return res.json()
 }
 
@@ -537,7 +659,8 @@ export async function approvalClearApi(): Promise<{ ok: boolean; cleared: number
 }
 
 export async function planApi(task: string): Promise<{ ok: boolean; steps: string[]; task?: string; error?: string }> {
-  const res = await apiFetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task }) })
+  // Planificar es un turno LLM completo (puede encadenar 2 llamadas): 5 min.
+  const res = await apiFetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task }), timeoutMs: 300000 })
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()
 }
