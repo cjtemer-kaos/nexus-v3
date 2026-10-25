@@ -206,6 +206,31 @@ providers:
     strict_tools: false
     models: []
     enabled: false
+  # CLIs de agentes como proveedores "consultores": responden, no usan nuestras
+  # tools (el router los saltea cuando el turno necesita herramientas).
+  # Apagados por defecto: cada uno necesita su propio login y su cuota.
+  #   claude   -> claude -p --output-format json      (respeta ANTHROPIC_BASE_URL)
+  #   codex    -> codex exec --json                   (respeta ~/.codex)
+  #   opencode -> opencode run --format json          (respeta tu config de opencode)
+  # Para habilitar: enabled: true. Si el binario no esta o no tiene sesion, el
+  # provider queda offline con el motivo exacto (no reintenta por 300 s).
+  cli:
+    opencode:
+      enabled: false
+      flavor: opencode
+      timeout_s: 180
+      # model: provider/model        # opcional -> se pasa con -m
+      # cwd: .                       # default: directorio descartable
+    claude:
+      enabled: false
+      flavor: claude
+      timeout_s: 180
+      # permission_mode: plan        # consultor: no edita archivos
+    codex:
+      enabled: false
+      flavor: codex
+      timeout_s: 180
+      sandbox: read-only
 router:
   # PRIORIDAD: Ollama LOCAL SIEMPRE primero. El cloud esta deshabilitado; si se
   # re-habilita, agregarlo a fallback_order como respaldo (nunca antes que ollama).

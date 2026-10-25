@@ -664,6 +664,32 @@ def _build_router_from_config(cfg: dict):
             logger.info(f"BYOK catalogo activo: {pid} ({len(known)} modelos)")
     except Exception as e:
         logger.warning(f"catalogo BYOK no registrado: {e}")
+    # CLIs de agentes (claude, codex, opencode) como consultores: no dan tools,
+    # asi que el router los saltea cuando el turno necesita herramientas. Vienen
+    # apagados: se prenden por config y la credencial la pone el usuario.
+    try:
+        from src.providers.cli_provider import CLIProvider
+
+        _cli_cfg = prov_cfg.get("cli") or {}
+        if isinstance(_cli_cfg, dict):
+            for _cname, _cspec in _cli_cfg.items():
+                if not isinstance(_cspec, dict) or not _cspec.get("enabled"):
+                    continue
+                try:
+                    _cli = CLIProvider(_cname, _cspec)
+                    # Resolver ANTES de registrar: un CLI que no existe no debe
+                    # aparecer en list_models ni gastar un intento del router.
+                    _prefix = _cli.argv_prefix
+                    router.register_provider(_cname, _cli)
+                    for _mid in _cli.model_ids():
+                        router.register_model(ModelRoute(id=_mid, provider_name=_cname))
+                    if _cspec.get("fallback") and _cname not in router.fallback_order:
+                        router.fallback_order.append(_cname)
+                    logger.info("CLI provider activo: %s (%s)", _cname, " ".join(_prefix))
+                except Exception as e:
+                    logger.warning("CLI provider %s no registrado: %s", _cname, e)
+    except Exception as e:
+        logger.warning("CLI providers no disponibles: %s", e)
     return router
 
 

@@ -13,7 +13,7 @@ src/api/server.py     FastAPI: todos los endpoints + _build_registry/_build_scop
 src/core/             agent_loop, provider_router, tool_registry, scope, session_log, event_store,
                       checkpoints, diagnostics, lsp_client, board, worktree, diffutil, sub_agent_spawner,
                       compaction, hooks, learning, knowledge graph…
-src/providers/        ollama, cloud (BYOK: opencode-go/groq), llamacpp
+src/providers/        ollama, cloud (BYOK: opencode-go/groq), llamacpp, cli (claude/codex/opencode)
 src/tools/            builtin, web_search, web_fetch, code_search
 src/mcp_server.py     servidor MCP (inbound, stdio) que expone las tools
 src/acp_server.py     adaptador ACP (Zed) sobre stdio
