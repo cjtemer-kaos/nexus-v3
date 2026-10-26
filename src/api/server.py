@@ -1571,6 +1571,28 @@ async def graph_status():
     return JSONResponse(st)
 
 
+@app.get("/api/brain/stats")
+async def brain_stats_compat():
+    """Alias v2 -> v3. Era el endpoint que leia el plugin brain-context de OpenCode.
+
+    Mantiene los nombres de campo de v2 (`conocimientos`) para no romper consumidores;
+    los valores salen del grafo de v3.
+    """
+    from src.core.knowledge_memory import get_knowledge_memory
+    try:
+        st = await asyncio.to_thread(lambda: get_knowledge_memory().status())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse({
+        "conocimientos": st.get("nodes", 0),
+        "temas": st.get("topic_nodes", 0),
+        "memorias": st.get("entities", 0),
+        "aristas": st.get("edges", 0),
+        "fuente": "nexus-v3",
+        "db": st.get("db", ""),
+    })
+
+
 @app.get("/api/graph/search")
 async def graph_search(q: str, limit: int = 20):
     """Búsqueda FTS5 (bm25) sobre los nodos del grafo."""
@@ -5331,7 +5353,8 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                           model: str | None = None, force_tools: bool = False,
                           agent_id: str | None = None, on_delta=None, on_reasoning=None,
                           extract_memory: bool = True, interactive: bool = True,
-                          source: str = "chat", level: int | None = None):
+                          source: str = "chat", level: int | None = None,
+                          gema: str = ""):
     """Un run de AgentLoop con la construccion estandar (config segura).
 
     `interactive=False` para clientes sin canal de aprobacion (p.ej. `/v1`):
@@ -5361,7 +5384,7 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     # fallar cerrado cuando no hay UI (subagentes/MCP).
     registry.approval = _approval
     agent = _agent_registry().resolve(agent_id) if agent_id else None
-    _gema = (agent or {}).get("gema") or ""
+    _gema = (agent or {}).get("gema") or gema
     _sys = (agent or {}).get("system_prompt") or ""
     if _gema:
         try:
@@ -5730,6 +5753,60 @@ if _UI_DIST.exists():
 
     
 # OPENAI
+# Compat de ids: v2 exponia 9 modelos en /v1/models; v3 expone 24 gemas. Estos alias
+# mantienen funcionando a un cliente que todavia pida los ids viejos.
+_LEGACY_V2_MODELS = {
+    "supernexus/nemotron": "director",
+    "supernexus/qwen-coder": "code",
+    "supernexus/deepseek": "sage",
+    "supernexus/auto": "",
+    "supernexus/vision": "vision",
+    "qwen-coder": "code",
+    "deepseek-reason": "sage",
+    "nemotron": "director",
+    "vision": "vision",
+}
+
+_AUTO_ALIASES = {"", "auto", "nexus", "nexus-v3", "nexus/auto"}
+
+
+def _openai_model_target(model: str) -> dict:
+    """Resuelve el `model` de un request OpenAI a gema, modelo explicito o auto.
+
+    Orden: alias auto -> gema v3 -> id heredado de v2 -> modelo del catalogo -> auto.
+    Devuelve {requested, gema, model, fallback}. Nunca lanza: ante la duda, auto.
+    """
+    requested = str(model or "auto").strip()
+    bare = requested[6:] if requested.lower().startswith("nexus/") else requested
+    try:
+        from src.core.gema_profiles import list_gemas
+
+        gemas = {g["name"] for g in list_gemas()}
+    except Exception:
+        gemas = set()
+    if bare.lower() in _AUTO_ALIASES or requested.lower() in _AUTO_ALIASES:
+        return {"requested": requested, "gema": "", "model": None, "fallback": False}
+    if bare in gemas:
+        return {"requested": requested, "gema": bare, "model": None, "fallback": False}
+    legacy = _LEGACY_V2_MODELS.get(requested)
+    if legacy is None:
+        legacy = _LEGACY_V2_MODELS.get(bare)
+    if legacy is not None:
+        return {"requested": requested, "gema": legacy, "model": None, "fallback": False}
+    try:
+        catalog = {m.id for m in (_get_router(_load_config_safe()).list_models() or [])}
+    except Exception:
+        catalog = set()
+    if bare in catalog or requested in catalog:
+        return {
+            "requested": requested,
+            "gema": "",
+            "model": bare if bare in catalog else requested,
+            "fallback": False,
+        }
+    return {"requested": requested, "gema": "", "model": None, "fallback": True}
+
+
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(req: Request):
     """Compat OpenAI. `stream=true` es BUFFERED: el loop TDAO no expone tokens
@@ -5759,6 +5836,11 @@ async def openai_chat_completions(req: Request):
     if not user_text.strip():
         raise HTTPException(status_code=400, detail="no user message in 'messages'")
     model = body.get("model") or "auto"
+    target = _openai_model_target(model)
+    if target["fallback"]:
+        import logging as _lg
+        _lg.getLogger("nexus-v3").warning(
+            "openai compat: modelo '%s' desconocido; se usa el routing automatico", model)
     stream = bool(body.get("stream"))
     error_msg = ""
     try:
@@ -5771,8 +5853,9 @@ async def openai_chat_completions(req: Request):
         result = await _run_agent_once(
             user_text,
             session_id=sess.id,
-            hint=infer_hint(user_text),
-            model=None if model == "auto" else model,
+            hint=None if target["gema"] else infer_hint(user_text),
+            model=target["model"],
+            gema=target["gema"],
             interactive=False,
             source="openai-api",
         )
@@ -5785,9 +5868,12 @@ async def openai_chat_completions(req: Request):
     if error_msg and not stream:
         # Antes salia 200 con "Error: ..." como si fuera una respuesta valida.
         raise HTTPException(status_code=500, detail=error_msg)
-    model_id = model if model != "auto" else "nexus-v3"
+    model_id = target["gema"] or target["model"] or target["requested"] or "nexus-v3"
+    _hdrs = {"x-nexus-gema": target["gema"], "x-nexus-model": target["model"] or "auto"}
+    if target["fallback"]:
+        _hdrs["x-nexus-fallback"] = target["requested"]
     if not stream:
-        return JSONResponse({"id":"chatcmpl-nexus","object":"chat.completion","created":0,"model":model_id,"choices":[{"index":0,"message":{"role":"assistant","content": reply},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}})
+        return JSONResponse({"id":"chatcmpl-nexus","object":"chat.completion","created":0,"model":model_id,"choices":[{"index":0,"message":{"role":"assistant","content": reply},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}, headers=_hdrs)
     async def gen():
         # Buffered streaming: el loop no expone tokens incrementales por esta via,
         # asi que se emite la respuesta completa en un chunk (valido para clientes
@@ -5801,19 +5887,33 @@ async def openai_chat_completions(req: Request):
         done = {"id":"chatcmpl-nexus","object":"chat.completion.chunk","created":0,"model":model_id,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
         yield f"data: {_js.dumps(done)}\n\n"
         yield "data: [DONE]\n\n"
-    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no", **_hdrs})
 @app.get("/v1/models")
 async def openai_models():
+    """Compat OpenAI: expone las gemas (owned_by=nexus-gema) y los modelos reales.
+
+    Las gemas van primero a proposito: son el equivalente de los 9 ids que exponia v2 y
+    lo que un cliente debe elegir para obtener un perfil (system prompt + hint) distinto.
+    """
     cfg = _load_config_safe()
     try:
         # Fase 8: from_config no existe; listar via list_models() del router real.
         router = _get_router(cfg)
         models = [r.id for r in (router.list_models() or []) if getattr(r, "id", None)]
-        if not models:
-            models = ["auto", "nexus-v3"]
     except Exception:
-        models = ["auto","nexus-v3"]
-    return JSONResponse({"object":"list","data":[{"id":m,"object":"model","created":0,"owned_by":"nexus"} for m in models]})
+        models = []
+    try:
+        from src.core.gema_profiles import list_gemas
+        gemas = [g["name"] for g in list_gemas()]
+    except Exception:
+        gemas = []
+    data = [{"id": "auto", "object": "model", "created": 0, "owned_by": "nexus"}]
+    data += [{"id": g, "object": "model", "created": 0, "owned_by": "nexus-gema"}
+             for g in gemas if g not in models]
+    data += [{"id": m, "object": "model", "created": 0, "owned_by": "nexus"} for m in models]
+    if len(data) == 1:
+        data.append({"id": "nexus-v3", "object": "model", "created": 0, "owned_by": "nexus"})
+    return JSONResponse({"object": "list", "data": data})
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
     # Guardia anti cross-site WebSocket hijacking: CORS/middleware http NO cubren WS.

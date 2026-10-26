@@ -90,3 +90,6 @@ updates-manifest*.json
 
 # Log del instalador de un clic (resultado local de cada PC)
 INSTALAR-LOG.txt
+
+# Backups del brain (incluye exports de tareas): nunca se versionan
+brain/backups/

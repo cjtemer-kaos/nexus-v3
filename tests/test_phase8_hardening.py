@@ -373,6 +373,7 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
     async def fake_run(message, session_id, hint=None, model=None, force_tools=False, agent_id=None,
                        **kwargs):
         captured.update(message=message, session_id=session_id, hint=hint, model=model,
+                        gema=kwargs.get("gema"),
                         interactive=kwargs.get("interactive"),
                         source=kwargs.get("source"))
         return SimpleNamespace(final_output="respuesta real del modelo", success=True)
@@ -381,8 +382,13 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
         def create_session(self, project="default"):
             return SimpleNamespace(id="sess-fake")
 
+    class FakeRouter:
+        def list_models(self, min_tier=0):
+            return [SimpleNamespace(id="modelo-real")]
+
     monkeypatch.setattr(srv, "_run_agent_once", fake_run)
     monkeypatch.setattr(srv, "_session_log", lambda: FakeSlog())
+    monkeypatch.setattr(srv, "_get_router", lambda cfg: FakeRouter())
 
     client = TestClient(srv.app)
     r = client.post("/v1/chat/completions",
@@ -395,13 +401,28 @@ def test_v1_chat_completions_uses_standard_loop(monkeypatch):
     assert captured["message"] == "hola nexus"
     assert captured["session_id"] == "sess-fake"
     assert captured["model"] is None  # "auto" -> model None (resolve interno)
+    assert captured["gema"] == ""     # auto no fuerza gema
     assert captured["interactive"] is False  # /v1 no tiene canal de aprobacion
     assert captured["source"] == "openai-api"
 
-    # modelo explicito se pasa tal cual
+    # gema: se pasa como gema (perfil propio) y sin modelo explicito
     r = client.post("/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "x"}], "model": "qwen"})
-    assert r.status_code == 200 and captured["model"] == "qwen"
+                    json={"messages": [{"role": "user", "content": "x"}], "model": "director"})
+    assert r.status_code == 200
+    assert captured["gema"] == "director" and captured["model"] is None
+    assert r.headers.get("x-nexus-gema") == "director"
+
+    # modelo real del catalogo: se pasa tal cual
+    r = client.post("/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "x"}], "model": "modelo-real"})
+    assert r.status_code == 200 and captured["model"] == "modelo-real"
+
+    # id desconocido: no se manda al provider (fallaria); cae a auto y avisa
+    r = client.post("/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "x"}], "model": "qwen-inexistente"})
+    assert r.status_code == 200
+    assert captured["model"] is None
+    assert r.headers.get("x-nexus-fallback") == "qwen-inexistente"
 
 
 def test_chat_stream_sse_uses_standard_loop(monkeypatch):
@@ -447,5 +468,13 @@ def test_v1_models_lists_real_routes(monkeypatch):
     client = TestClient(srv.app)
     r = client.get("/v1/models")
     assert r.status_code == 200
-    ids = [m["id"] for m in r.json()["data"]]
-    assert ids == ["modelo-a", "modelo-b"]
+    data = r.json()["data"]
+    ids = [m["id"] for m in data]
+    # Los modelos reales del router siguen estando...
+    assert "modelo-a" in ids and "modelo-b" in ids
+    # ...y ademas se exponen auto y las gemas (compat con los ids de v2).
+    assert ids[0] == "auto"
+    assert "director" in ids and "code" in ids
+    owned = {m["id"]: m["owned_by"] for m in data}
+    assert owned["director"] == "nexus-gema"
+    assert owned["modelo-a"] == "nexus"
