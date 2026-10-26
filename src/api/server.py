@@ -268,6 +268,17 @@ async def _distill_llm_extract(cfg: dict, digest: str, forced_model: str | None)
     cands: list[str] = []
     if forced_model:
         cands.append(forced_model)
+    # Este destilado corre en background despues de CADA turno. Si pide un modelo
+    # distinto del que quedo cargado, Ollama lo descarga y recarga el otro: ~45-50 s
+    # medidos (2026-10-26) por turno, con el turno siguiente arrancando en frio.
+    # Con router.prefer_models configurado ese modelo YA esta en VRAM, asi que va
+    # primero; el modelo "rapido" queda como ultimo recurso.
+    for pm in list(getattr(router, "prefer_models", ()) or ()):
+        try:
+            if any(m.id == pm for m in router.list_models()):
+                cands.append(pm)
+        except Exception:
+            pass
     try:
         a = assign_model(router, model_hint="speed")
         if a.get("model"):
@@ -609,7 +620,24 @@ def _build_router_from_config(cfg: dict):
     router = ProviderRouter(
         vram_budget_gb=_vram,
         fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]) if isinstance(cfg, dict) else ["ollama", "cloud"],
+        prefer_models=(cfg.get("router", {}).get("prefer_models") or []) if isinstance(cfg, dict) else [],
     )
+    # Guarda de coherencia: si la ventana que asume el harness supera el num_ctx
+    # real del modelo, Ollama responde 400 "exceeds the available context size",
+    # el router lo toma por modelo roto y el turno se va en recargas (100-165 s
+    # medidos el 2026-10-26). Avisar fuerte en el log en vez de fallar en silencio.
+    try:
+        _num_ctx = int((prov_cfg.get("ollama", {}).get("options") or {}).get("num_ctx") or 0)
+        _session_max = int((cfg.get("session") or {}).get("max_tokens") or 0)
+        if _num_ctx and _session_max and _session_max > _num_ctx:
+            logger.warning(
+                "config incoherente: session.max_tokens=%d > ollama num_ctx=%d; "
+                "la compactacion no va a saltar a tiempo y Ollama va a rechazar "
+                "los turnos largos (400 'exceeds the available context size').",
+                _session_max, _num_ctx,
+            )
+    except Exception:
+        pass
     if "ollama" in prov_cfg:
         oc = prov_cfg["ollama"]
         from src.core import environment as _env
@@ -5769,6 +5797,22 @@ _LEGACY_V2_MODELS = {
 
 _AUTO_ALIASES = {"", "auto", "nexus", "nexus-v3", "nexus/auto"}
 
+# Presupuesto del path de fallback (id de modelo desconocido). El routing automatico
+# puede elegir un modelo que hay que cargar en frio (~45 s medidos) y reintentar en otro
+# proveedor: sin tope, un typo en `model` se convertia en una espera de 168 s sin
+# explicacion. Pasado el presupuesto responde 504 con la lista de ids validos.
+_FALLBACK_BUDGET_S = 120.0
+
+
+def _known_gemas() -> set[str]:
+    """Nombres de las gemas v3. Vacío si el modulo no esta disponible."""
+    try:
+        from src.core.gema_profiles import list_gemas
+
+        return {g["name"] for g in list_gemas()}
+    except Exception:
+        return set()
+
 
 def _openai_model_target(model: str) -> dict:
     """Resuelve el `model` de un request OpenAI a gema, modelo explicito o auto.
@@ -5778,12 +5822,7 @@ def _openai_model_target(model: str) -> dict:
     """
     requested = str(model or "auto").strip()
     bare = requested[6:] if requested.lower().startswith("nexus/") else requested
-    try:
-        from src.core.gema_profiles import list_gemas
-
-        gemas = {g["name"] for g in list_gemas()}
-    except Exception:
-        gemas = set()
+    gemas = _known_gemas()
     if bare.lower() in _AUTO_ALIASES or requested.lower() in _AUTO_ALIASES:
         return {"requested": requested, "gema": "", "model": None, "fallback": False}
     if bare in gemas:
@@ -5843,6 +5882,7 @@ async def openai_chat_completions(req: Request):
             "openai compat: modelo '%s' desconocido; se usa el routing automatico", model)
     stream = bool(body.get("stream"))
     error_msg = ""
+    result = None
     try:
         # Fase 8: esta via estaba rota (from_config inexistente, Scope(permission=),
         # run() sin session_id, result.get() sobre dataclass) y devolvia "Error: ..."
@@ -5850,7 +5890,7 @@ async def openai_chat_completions(req: Request):
         from src.core.provider_router import infer_hint
         slog = _session_log()
         sess = slog.create_session(project="openai-compat")
-        result = await _run_agent_once(
+        _coro = _run_agent_once(
             user_text,
             session_id=sess.id,
             hint=None if target["gema"] else infer_hint(user_text),
@@ -5859,7 +5899,27 @@ async def openai_chat_completions(req: Request):
             interactive=False,
             source="openai-api",
         )
+        # El fallback lleva tope: un id mal escrito no debe colgar minutos.
+        result = (await asyncio.wait_for(_coro, timeout=_FALLBACK_BUDGET_S)
+                  if target["fallback"] else await _coro)
         reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
+    except asyncio.TimeoutError:
+        import logging as _lg
+        _lg.getLogger("nexus-v3").warning(
+            "openai compat: el fallback de '%s' excedio %.0fs; se corta la espera",
+            model, _FALLBACK_BUDGET_S)
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "model_not_found_slow_fallback",
+                "message": (
+                    f"'{model}' no es una gema ni un modelo del catalogo. Se intento el "
+                    f"routing automatico pero excedio {_FALLBACK_BUDGET_S:.0f}s; se corto la espera."
+                ),
+                "valid_gemas": sorted(_known_gemas()),
+                "models_endpoint": "/v1/models",
+            },
+        )
     except Exception as e:
         import logging as _lg
         _lg.getLogger("nexus-v3").exception("openai compat error: %s", e)
@@ -5868,8 +5928,12 @@ async def openai_chat_completions(req: Request):
     if error_msg and not stream:
         # Antes salia 200 con "Error: ..." como si fuera una respuesta valida.
         raise HTTPException(status_code=500, detail=error_msg)
-    model_id = target["gema"] or target["model"] or target["requested"] or "nexus-v3"
-    _hdrs = {"x-nexus-gema": target["gema"], "x-nexus-model": target["model"] or "auto"}
+    # Modelo REAL que respondio, no el pedido: con `auto` el header decia siempre
+    # "auto" y no habia forma de verificar el routing desde el cliente (habia que
+    # mirar /api/ps de Ollama). result.model sale del provider que gano el turno.
+    _modelo_real = str(getattr(result, "model", "") or "") if result is not None else ""
+    model_id = target["gema"] or _modelo_real or target["model"] or target["requested"] or "nexus-v3"
+    _hdrs = {"x-nexus-gema": target["gema"], "x-nexus-model": _modelo_real or target["model"] or "auto"}
     if target["fallback"]:
         _hdrs["x-nexus-fallback"] = target["requested"]
     if not stream:

@@ -188,7 +188,7 @@ export async function providersApi(refresh = false): Promise<ProvidersResponse> 
 
 export type ProvidersConfigResponse = {
   providers: Record<string, { base_url?: string; fallback_url?: string; api_key?: string; api_key_masked?: string; _has_env_key?: boolean; auth_style?: string; models?: string[]; enabled?: boolean; timeout_s?: number; ctx?: number }>
-  router: { strategy?: string; vram_budget_gb?: number; prefer_speed?: boolean; fallback_order?: string[] }
+  router: { strategy?: string; vram_budget_gb?: number; prefer_speed?: boolean; prefer_models?: string[]; fallback_order?: string[] }
 }
 
 export async function getProvidersConfig(): Promise<ProvidersConfigResponse> {

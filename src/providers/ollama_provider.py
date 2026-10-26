@@ -11,10 +11,22 @@ class OllamaProvider(BaseProvider):
     def __init__(self, base_url: str = "http://localhost:11434", timeout_s: float = 300,
                  keep_alive: str = "30m", options: dict | None = None):
         self.base_url = base_url.rstrip("/")
+        self._timeout_s = timeout_s
         self._client = httpx.AsyncClient(timeout=timeout_s)
         # Velocidad local: keep_alive mantiene el modelo cargado (evita recarga por request).
         self.keep_alive = keep_alive or "30m"
         self.options = dict(options or {})
+
+    def _ensure_client(self) -> None:
+        """Recrea el AsyncClient si alguien lo cerro.
+
+        Motivo (log del 2026-10-26): un router retirado se cierra a los 30 s, y si
+        un run largo todavia lo estaba usando, TODAS sus llamadas morian con
+        "Cannot send a request, as the client has been closed" y el turno
+        terminaba respondiendo sin tools. Un cliente cerrado es reemplazable.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self._timeout_s)
 
     async def _resolve_model(self, model: str) -> str:
         try:
@@ -44,6 +56,7 @@ class OllamaProvider(BaseProvider):
             return cache[m]
         caps: list[str] = []
         try:
+            self._ensure_client()
             r = await self._client.post(f"{self.base_url}/api/show", json={"model": m})
             r.raise_for_status()
             caps = list(r.json().get("capabilities") or [])
@@ -97,8 +110,13 @@ class OllamaProvider(BaseProvider):
             payload["options"] = _opts
         if tools:
             payload["tools"] = tools
+        self._ensure_client()
         r = await self._client.post(f"{self.base_url}/api/chat", json=payload)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # raise_for_status() pierde el body, que es donde Ollama explica el
+            # motivo real ("exceeds the available context size" -> hay que compactar,
+            # no cambiar de modelo). Se propaga el texto para poder distinguirlo.
+            raise RuntimeError(f"ollama {r.status_code} ({model}): {(r.text or '')[:400]}")
         data = r.json()
         msg = data.get("message") or {}
         content = msg.get("content", "")
@@ -171,6 +189,7 @@ class OllamaProvider(BaseProvider):
         _seen: set = set()
         _usage: dict = {}
         _done_reason = None
+        self._ensure_client()
         async with self._client.stream("POST", f"{self.base_url}/api/chat", json=payload) as r:
             r.raise_for_status()
             async for line in r.aiter_lines():
@@ -219,12 +238,14 @@ class OllamaProvider(BaseProvider):
 
     async def health(self) -> bool:
         try:
+            self._ensure_client()
             r = await self._client.get(f"{self.base_url}/api/tags")
             return r.status_code == 200
         except Exception:
             return False
 
     async def list_models(self) -> list[str]:
+        self._ensure_client()
         r = await self._client.get(f"{self.base_url}/api/tags")
         r.raise_for_status()
         return [m.get("name", "") for m in r.json().get("models", []) if m.get("name")]

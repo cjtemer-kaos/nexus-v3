@@ -21,7 +21,11 @@ session:
   event_db_path: ./data/event_store.db
   wal: true
   fts: true
-  max_tokens: 32000
+  # Debe coincidir con providers.ollama.options.num_ctx. Medido el 2026-10-26: con
+  # 32000/8192 desalineados, el harness no compactaba hasta 24000 pero Ollama
+  # rechazaba todo request >8192 con 400 "exceeds the available context size",
+  # el router lo tomaba como modelo roto y recorria modelos (100-165 s por turno).
+  max_tokens: 16384
   compact_threshold: 0.75
   keep_recent: 4
 agent_loop:
@@ -180,14 +184,18 @@ providers:
     # Velocidad local: mantiene el modelo cargado entre requests (evita recarga).
     keep_alive: 30m
     # Opciones de generacion Ollama (num_ctx, temperature, num_predict...).
+    # num_ctx es la ventana REAL del modelo: si queda por debajo de
+    # session.max_tokens, Ollama responde 400 "exceeds the available context size"
+    # y el turno se cae. Medido el 2026-10-26 en la RTX 3060: 16384 -> 7,3 GB.
     options:
-      num_ctx: 8192
+      num_ctx: 16384
     embed_url: http://localhost:11434
     models:
     - nexus-director-v6
     - qwen3.5-9b
     - ornith-9b
     - qwen3-vl-8b
+    - qwen2.5vl:7b
     - qwen2.5-coder:7b
     - deepseek-r1:8b
     - janus-pro-7b
@@ -239,6 +247,15 @@ router:
   prefer_speed: false
   fallback_order:
   - ollama
+  # Modelos preferidos por encima del mapeo por gema. Motivo medido (2026-10-26):
+  # cambiar de modelo en Ollama cuesta ~45 s de recarga en frio (gemma4 45,4 s,
+  # nemotron-3-nano:4b 49,8 s con un prompt de 2 palabras). Un multimodal cubre
+  # texto + vision, asi que las gemas conservan su system prompt pero comparten
+  # modelo y no hay saltos. El orden es prioridad; si el primero no esta instalado
+  # se usa el siguiente. Lista vacia = vuelve al modelo propio de cada gema.
+  prefer_models:
+  - qwen3-vl-8b
+  - qwen2.5vl:7b
 hooks:
   phases:
   - pre_tool_use

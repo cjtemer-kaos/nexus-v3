@@ -593,6 +593,13 @@
         "prefer_speed": {
           "type": "boolean"
         },
+        "prefer_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Modelos preferidos por encima del mapeo por gema (orden = prioridad). Un multimodal cubre texto + vision y evita la recarga en frio (~45 s) que cuesta cada cambio de modelo en Ollama. Vacio = modelo propio de cada gema."
+        },
         "fallback_order": {
           "type": "array",
           "items": {

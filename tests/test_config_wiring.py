@@ -82,3 +82,92 @@ def test_agent_loop_sin_config_usa_defaults():
     assert loop.context_max_tokens == 32000
     assert loop.compact_threshold == 0.75
     assert loop.heartbeat_ms == 2000
+
+
+def test_avisa_si_la_ventana_del_harness_supera_el_num_ctx(caplog):
+    """config incoherente = turnos que mueren con 400 de Ollama; hay que avisar.
+
+    Caso real (2026-10-26): session.max_tokens=32000 contra num_ctx=8192. La
+    compactacion no saltaba hasta 24000 y todo request mayor a 8192 era rechazado.
+    """
+    import logging
+
+    from src.api.server import _build_router_from_config
+
+    cfg = {
+        "session": {"max_tokens": 32000},
+        "providers": {"ollama": {"base_url": "http://localhost:1", "models": [],
+                                 "options": {"num_ctx": 8192}}},
+        "router": {"fallback_order": ["ollama"]},
+    }
+    with caplog.at_level(logging.WARNING, logger="nexus-v3"):
+        _build_router_from_config(cfg)
+
+    assert any("num_ctx" in r.message for r in caplog.records), [r.message for r in caplog.records]
+
+
+def test_no_avisa_si_la_ventana_es_coherente(caplog):
+    import logging
+
+    from src.api.server import _build_router_from_config
+
+    cfg = {
+        "session": {"max_tokens": 16384},
+        "providers": {"ollama": {"base_url": "http://localhost:1", "models": [],
+                                 "options": {"num_ctx": 16384}}},
+        "router": {"fallback_order": ["ollama"]},
+    }
+    with caplog.at_level(logging.WARNING, logger="nexus-v3"):
+        _build_router_from_config(cfg)
+
+    assert not any("num_ctx" in r.message for r in caplog.records)
+
+
+class _Modelo:
+    def __init__(self, mid, prov="ollama"):
+        self.id = mid
+        self.provider_name = prov
+
+
+class _RouterFake:
+    """Router mínimo: registra qué modelo pide cada chat que hace el destilado."""
+
+    def __init__(self, ids, prefer):
+        self._ids = list(ids)
+        self.prefer_models = list(prefer)
+        self.llamados: list[str] = []
+
+    def list_models(self):
+        return [_Modelo(i) for i in self._ids]
+
+    def resolve(self, task_hint=None):
+        raise RuntimeError("el fake no resuelve routing")
+
+    async def chat(self, msgs, model=None):
+        self.llamados.append(model)
+
+        class _R:
+            content = "[]"
+
+        return _R()
+
+
+def test_destilado_usa_el_modelo_preferido_y_no_recarga_otro(monkeypatch):
+    """El destilado corre tras CADA turno: si pide otro modelo, Ollama recarga (~45 s).
+
+    Caso real (2026-10-26): con prefer_models=[qwen3-vl-8b] el turno usaba ese modelo
+    y el destilado cargaba nemotron-3-nano:4b en cada turno, tirando abajo el que
+    estaba en VRAM. El preferido tiene que ir primero.
+    """
+    import asyncio
+
+    from src.api import server
+
+    fake = _RouterFake(["qwen3-vl-8b", "nemotron-3-nano:4b"], ["qwen3-vl-8b"])
+    monkeypatch.setattr(server, "_get_router", lambda cfg: fake)
+
+    asyncio.run(server._distill_llm_extract({}, "resumen de la sesion", None))
+
+    assert fake.llamados, "el destilado no intento ningun modelo"
+    assert fake.llamados[0] == "qwen3-vl-8b", fake.llamados
+

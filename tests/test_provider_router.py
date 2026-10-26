@@ -48,6 +48,109 @@ def test_preferred_model(router):
     assert r4 and r4.model == "muse-spark-1.2"
 
 
+def test_prefer_models_gana_al_mapeo_por_gema():
+    """router.prefer_models unifica el modelo: un multimodal atiende todos los hints.
+
+    Motivo: cada cambio de modelo en Ollama cuesta ~45 s de recarga en frio. La gema
+    conserva su system prompt; solo cambia el modelo que la ejecuta.
+    """
+    r = ProviderRouter(fallback_order=["ollama"], strategy="tier",
+                       prefer_models=["qwen3-vl-8b", "qwen2.5vl:7b"])
+    r.register_provider("ollama", MockProvider("ollama", models=["qwen3-vl-8b", "qwen3.5-9b"]))
+    r.register_model(ModelRoute(id="qwen3.5-9b", provider_name="ollama", tier=4))
+    r.register_model(ModelRoute(id="qwen3-vl-8b", provider_name="ollama", tier=8))
+
+    for hint in ("none", "coding", "reasoning", "vision", "planning", "simple"):
+        got = r.resolve(task_hint=hint)
+        assert got is not None, hint
+        assert got.model == "qwen3-vl-8b", (hint, got.model)
+
+
+def test_prefer_models_respeta_model_explicito():
+    """Un `model=` explicito sigue ganando sobre la preferencia."""
+    r = ProviderRouter(fallback_order=["ollama"], strategy="tier",
+                       prefer_models=["qwen3-vl-8b"])
+    r.register_provider("ollama", MockProvider("ollama", models=["qwen3-vl-8b", "deepseek-r1:8b"]))
+    r.register_model(ModelRoute(id="qwen3-vl-8b", provider_name="ollama", tier=8))
+    r.register_model(ModelRoute(id="deepseek-r1:8b", provider_name="ollama", tier=5))
+
+    got = r.resolve(task_hint="coding", preferred_model="deepseek-r1:8b")
+    assert got is not None and got.model == "deepseek-r1:8b"
+
+
+def test_prefer_models_vacio_mantiene_el_mapeo_por_gema():
+    """Sin preferencia, el modelo sale de GEMA_MAPPING (comportamiento previo)."""
+    r = ProviderRouter(fallback_order=["ollama"], strategy="tier")
+    r.register_provider("ollama", MockProvider("ollama", models=["qwen3.5-9b", "qwen3-vl-8b"]))
+    r.register_model(ModelRoute(id="qwen3.5-9b", provider_name="ollama", tier=4))
+    r.register_model(ModelRoute(id="qwen3-vl-8b", provider_name="ollama", tier=8))
+
+    assert r.resolve(task_hint="vision").model == "qwen3-vl-8b"
+    assert r.resolve(task_hint="coding").model != "qwen3-vl-8b"
+
+
+# ---- overflow de contexto: no es "modelo roto" ----
+
+@pytest.mark.parametrize("msg,overflow", [
+    # mensaje real de Ollama (body que antes se perdia en raise_for_status)
+    ("ollama 400 (qwen3-vl-8b): {\"error\":\"request (10132 tokens) exceeds "
+     "the available context size (8192 tokens), try increasing it\"}", True),
+    ("Client error '400 Bad Request' for url 'http://localhost:11434/api/chat'", False),
+    ("This model's maximum context length is 8192 tokens", True),
+    ("ollama 500 (x): internal error", False),
+    ("socket closed", False),
+])
+def test_deteccion_de_overflow_de_contexto(msg, overflow):
+    from src.core.provider_router import es_overflow_de_contexto
+
+    assert es_overflow_de_contexto(msg) is overflow
+
+
+class _OverflowProvider(MockProvider):
+    """Simula el 400 de Ollama: el prompt no entra en num_ctx."""
+
+    def __init__(self, name, model):
+        super().__init__(name, models=[model])
+        self.model = model
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        self.calls += 1
+        raise RuntimeError(
+            f'ollama 400 ({model}): {{"error":"request (10132 tokens) exceeds the '
+            f'available context size (8192 tokens), try increasing it"}}')
+
+
+def test_overflow_de_contexto_no_recorre_la_cadena_de_modelos():
+    """Un prompt demasiado grande debe volver al loop para compactar, no saltar de modelo.
+
+    Antes el router lo tomaba como fallo del modelo y probaba el resto del catalogo:
+    cada salto costaba una recarga en frio (~45 s) y el turno terminaba respondiendo
+    sin tools por el camino "chat degradado sin tools" (100-165 s medidos).
+    """
+    r = ProviderRouter(fallback_order=["ollama"], strategy="tier")
+    p = _OverflowProvider("ollama", "qwen3-vl-8b")
+    r.register_provider("ollama", p)
+    for mid in ("qwen3-vl-8b", "nexus-director-v6", "deepseek-r1:8b"):
+        r.register_model(ModelRoute(id=mid, provider_name="ollama", tier=6))
+
+    with pytest.raises(RuntimeError, match="exceeds the available context size"):
+        asyncio.run(r.chat([LLMMessage(role="user", content="hola")], hint="research"))
+    assert p.calls == 1, f"deberia intentar una sola vez, intento {p.calls}"
+
+
+def test_cadena_de_fallback_acotada():
+    """Ante un fallo comun no se recorren los 10 modelos del catalogo (45 s cada uno)."""
+    r = ProviderRouter(fallback_order=["ollama"], strategy="tier")
+    p = MockProvider("ollama", fail=True)
+    r.register_provider("ollama", p)
+    for i in range(8):
+        r.register_model(ModelRoute(id=f"modelo-{i}", provider_name="ollama", tier=i))
+
+    attempts = r._attempts(None, "coding", False)
+    assert len(attempts) <= 1 + 2, f"cadena sin tope: {[a[1] for a in attempts]}"
+
+
 def test_chat_fallback(router):
     async def run():
         router2 = ProviderRouter(fallback_order=["bad", "good"])

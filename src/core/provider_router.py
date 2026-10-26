@@ -35,6 +35,28 @@ def _get_adaptive():
 
 logger = logging.getLogger("nexus-router")
 
+# Cuantos modelos alternativos del mismo proveedor se prueban tras el elegido.
+# Cada uno puede costar una recarga en frio (~45 s medidos en Ollama).
+_MAX_FALLBACK_MODELS = 2
+
+
+def es_overflow_de_contexto(err: BaseException | str) -> bool:
+    """True si el error es 'el prompt no entra en la ventana', no 'el modelo esta roto'.
+
+    Ollama responde 400 con: "request (10132 tokens) exceeds the available context
+    size (8192 tokens), try increasing it". Recorrer la cadena de modelos ante esto
+    no arregla nada y cuesta una recarga en frio (~45 s) por modelo: hay que devolver
+    el error al agent_loop para que compacte y reintente.
+    """
+    import re as _re
+    t = (err if isinstance(err, str) else str(err)).lower()
+    if "exceeds the available context size" in t or "context length exceeded" in t:
+        return True
+    return bool(_re.search(
+        r"context (window|length)|maximum context|too many tokens|prompt is too long"
+        r"|context[_\s]?limit|exceed.{0,20}context|input is too long|reduce the length",
+        t))
+
 HINT_MAPPING: dict[str, int] = {
     "none": 0, "simple": 1, "categorization": 2, "coding": 3,
     "analysis": 4, "reasoning": 5, "research": 6,
@@ -156,12 +178,16 @@ class ProviderRouter:
     """
 
     def __init__(self, vram_budget_gb: float = 12, fallback_order: list[str] | None = None, strategy: str = "tier",
-                 adaptive_router=None):
+                 adaptive_router=None, prefer_models: list[str] | None = None):
         self._providers: dict[str, BaseProvider] = {}
         self._models: list[ModelRoute] = []
         self.vram_budget_gb = vram_budget_gb
         self.fallback_order = fallback_order or ["ollama", "cloud"]
         self.strategy = strategy  # thompson|vram|tier|manual
+        # Modelos que se prefieren por encima del mapeo por gema. Motivo: cambiar de
+        # modelo en Ollama cuesta ~45 s de recarga en frio (medido); un multimodal
+        # cubre texto + vision y evita ese salto. Lista vacia = comportamiento por gema.
+        self.prefer_models = [str(x) for x in (prefer_models or []) if str(x).strip()]
         # Thompson persistido (fuente de verdad del aprendizaje). Compartido.
         self._adaptive = adaptive_router if adaptive_router is not None else _get_adaptive()
         # Contadores por proveedor (observabilidad legacy; el aprendizaje vive en _adaptive)
@@ -222,6 +248,15 @@ class ProviderRouter:
 
         hint = (task_hint or "none").lower()
         hint_complexity = HINT_MAPPING.get(hint, 0)
+
+        # Preferencia de configuracion (router.prefer_models): un modelo multimodal
+        # atiende todas las tareas sin cambiar de modelo. Gana sobre GEMA_MAPPING
+        # (el prompt de la gema se conserva; solo se unifica el modelo) y pierde
+        # ante un `model=` explicito, que se resuelve mas arriba.
+        for pm in self.prefer_models:
+            for m in self._models:
+                if m.id == pm and m.provider_name in self._providers:
+                    return RoutedProvider(provider=self._providers[m.provider_name], model=m.id, route=m)
 
         # Gema override: si el hint tiene un modelo preferido en GEMA_MAPPING y está
         # registrado, usarlo directamente (evita que tareas generativas caigan en el
@@ -375,6 +410,15 @@ class ProviderRouter:
                 return resp
             except Exception as e:
                 last_err = e
+                # Overflow de contexto: no es culpa del modelo. Seguir con otro
+                # solo agrega una recarga en frio (~45 s) y termina respondiendo
+                # sin tools. Se devuelve el error para que el loop compacte, y no
+                # se penaliza al modelo en el aprendizaje (no fallo el modelo).
+                if es_overflow_de_contexto(e):
+                    logger.warning(
+                        "router: overflow de contexto en %s/%s; se corta la cadena "
+                        "de fallback (compactar y reintentar)", pname, m_id)
+                    raise
                 self._record_fail(pname, m_id)
                 logger.warning(f"fallo chat enrutador {pname}/{m_id}: {e}")
                 continue
@@ -422,7 +466,10 @@ class ProviderRouter:
                          if m.provider_name == routed.route.provider_name
                          and m.id != routed.model and is_chat_model_id(m.id)]
                 _same.sort(key=lambda x: -x.effective_tier())
-                for m in _same:
+                # Tope de la cadena: cada modelo nuevo de Ollama puede costar ~45 s de
+                # recarga en frio (medido). Sin tope, un fallo recorria los 10 modelos
+                # del catalogo y el turno tardaba 100-165 s.
+                for m in _same[:_MAX_FALLBACK_MODELS]:
                     attempts.append((routed.route.provider_name, m.id))
                 for pname in self.fallback_order:
                     if pname != routed.route.provider_name and pname in self._providers:

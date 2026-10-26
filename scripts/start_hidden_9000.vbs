@@ -13,5 +13,7 @@ If WScript.Arguments.Count > 0 Then port = WScript.Arguments(0)
 ' scripts\ -> raiz del proyecto
 root = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 sh.CurrentDirectory = root
-sh.Run "cmd /c scripts\run_ft.bat --port " & port, 0, False
+' run_ft_logged.bat = run_ft.bat + redireccion a data\nexus-server.log (con rotacion).
+' Sin esto la salida del server se perdia en la consola oculta.
+sh.Run "cmd /c scripts\run_ft_logged.bat --port " & port, 0, False
 Set sh = Nothing
