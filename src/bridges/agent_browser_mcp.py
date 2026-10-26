@@ -26,10 +26,13 @@ def _run(args: list[str], timeout: int = 30) -> str:
     # resolverlo con shutil.which (honra PATHEXT) o el nombre pelado da FileNotFoundError.
     cmd = [shutil.which("agent-browser") or "agent-browser"] + args
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # encoding explicito: sin el, text=True decodifica con cp1252 y el CLI (UTF-8) rompe
+        # el lector con UnicodeDecodeError -> stdout None -> 'NoneType' has no attribute strip.
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout)
         if r.returncode != 0:
-            return f"[error] {r.stderr.strip() or r.stdout.strip()}"
-        return r.stdout.strip() or "(empty)"
+            return f"[error] {(r.stderr or '').strip() or (r.stdout or '').strip()}"
+        return (r.stdout or "").strip() or "(empty)"
     except subprocess.TimeoutExpired:
         return "[timeout]"
     except FileNotFoundError:
