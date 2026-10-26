@@ -9,6 +9,7 @@ Usage:
 """
 
 import logging
+import shutil
 import subprocess
 
 from mcp.server.fastmcp import FastMCP
@@ -21,7 +22,9 @@ mcp = FastMCP("agent-browser")
 
 def _run(args: list[str], timeout: int = 30) -> str:
     """Run an agent-browser command and return stdout."""
-    cmd = ["agent-browser"] + args
+    # En Windows el CLI es un shim .CMD: subprocess solo resuelve .EXE, asi que hay que
+    # resolverlo con shutil.which (honra PATHEXT) o el nombre pelado da FileNotFoundError.
+    cmd = [shutil.which("agent-browser") or "agent-browser"] + args
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if r.returncode != 0:

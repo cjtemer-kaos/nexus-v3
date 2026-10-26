@@ -91,7 +91,7 @@ Esto es lo que hay que arreglar para que la migración no sea solo cosmética.
 | 13 | Docker `hindsight` (:9999/8899), `nexus-redis` (:6379) | Nada de v2 | No tocar | — |
 | 14 | MCP `nexus-bridge` (deprecado) | Board stale desde 24/07/2026 | Ya reemplazado por `nexus-sovereign` (VPS) | Nada nuevo |
 | 15 | `start_server.py` / `run_ft.bat` de v3 | Acepta `--port` (`run_ft.bat` pasa args) | Crear lanzador headless en `:9000` (§5-D1) | Sin puerto fijo, OpenCode no lo alcanza |
-| 16 | MCP `agent-browser` de `opencode.json` | **Script dentro de v2**: `supernexus-v2\src\bridges\agent_browser_mcp.py` | **Nada**: es un archivo, no el proceso. Por eso v2 queda en disco | Si se borra el repo de v2, ese MCP deja de arrancar |
+| 16 | MCP `agent-browser` de `opencode.json` | **Script dentro de v2**: `supernexus-v2\src\bridges\agent_browser_mcp.py` | **Desacoplado**: reapuntado a la copia de v3 + fix de `shutil.which` (§12) | Ya no depende del repo archivado |
 
 **Total real a modificar: 8 objetos** (#1 sin URL, #2 alias server, #4 doc, #7, #8, #10, #11, #15).
 
@@ -416,12 +416,22 @@ sin ventana de riesgo).
 en la **carpeta Inicio**: `Nexus v3 (servicio 9000).lnk` → `wscript scripts\start_hidden_9000.vbs`.
 Equivalente funcional al logon, sin necesitar permisos de administrador.
 
-### Hallazgo que obliga a NO borrar v2
+### El MCP `agent-browser` quedó desacoplado (2026-10-26)
 
-El MCP `agent-browser` de `opencode.json` ejecuta
-`D:\ias\proyectos\supernexus-v2\src\bridges\agent_browser_mcp.py`. Es una dependencia de **archivo**,
-no del proceso: mientras el repo de v2 siga en disco (aunque sus tareas estén `Disabled`), el MCP
-funciona. Por eso "retirar v2" es deshabilitar, nunca borrar.
+Ese MCP ejecutaba `D:\ias\proyectos\supernexus-v2\src\bridges\agent_browser_mcp.py`: una dependencia de
+**archivo** con el repo archivado. Se resolvió así:
+
+- `src/bridges/agent_browser_mcp.py` ya existía en nexus-v3 y era **byte-idéntico** (SHA256) al de v2,
+  así que no hubo que copiar nada; solo se reapuntó `opencode.json` a la copia de v3.
+- **Bug preexistente corregido**: `_run()` lanzaba `subprocess.run(["agent-browser", ...])` con el
+  nombre pelado. En Windows `subprocess` solo resuelve `.EXE`, y el CLI está instalado como shim
+  `.CMD`/`.ps1`, así que **toda** llamada devolvía `agent-browser not installed` aunque estuviera
+  instalado (v0.27.0). Ahora se resuelve con `shutil.which("agent-browser")`, que honra `PATHEXT`.
+- Verificado por stdio JSON-RPC con el argv exacto de la config: `initialize` OK, `tools/list` = 18
+  herramientas, `tools/call browser_session_info` → `default` en 0,1 s.
+
+Con esto nexus-v3 no depende de ningún archivo de `supernexus-v2`; el repo archivado puede borrarse
+sin romper MCPs. (Se mantiene en disco igual, como respaldo de rollback.)
 
 ### Rollback reproducible (2 comandos)
 
@@ -437,5 +447,7 @@ wscript D:\ias\proyectos\nexus-v3\scripts\start_hidden_9000.vbs                 
 
 ### Pendiente para el usuario
 
-Reiniciar OpenCode (cerrar y abrir) para que relea `opencode.json` (25 modelos) y `AGENTS.md`.
-Los archivos ya están escritos y verificados; OpenCode los lee al arrancar.
+Reiniciar OpenCode (cerrar y abrir) para que relea `opencode.json` (25 modelos), `AGENTS.md` y el
+nuevo path del MCP `agent-browser`. Los archivos ya están escritos y verificados; OpenCode los lee al
+arrancar. Hasta ese reinicio, la sesión abierta sigue usando la instancia vieja del MCP (levantada
+desde el path de v2), que funciona igual pero con el bug de `agent-browser` sin corregir.
