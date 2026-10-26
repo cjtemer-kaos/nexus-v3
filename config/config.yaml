@@ -336,7 +336,8 @@ voice:
   tts_endpoint: http://127.0.0.1:4123
 updates:
   # URL (http/https) o ruta al manifiesto. Vacio = chequeo deshabilitado.
-  manifest_url: ""
+  # Apunta al asset del ultimo release: la URL no cambia entre versiones.
+  manifest_url: "https://github.com/cjtemer-kaos/nexus-v3/releases/latest/download/updates-manifest.json"
   timeout_s: 10
   # Deteccion y planificacion solamente: no descarga ni reemplaza archivos.
   auto_apply: false
