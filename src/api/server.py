@@ -764,6 +764,52 @@ async def health():
     }
 
 
+@app.get("/api/mcp/status")
+async def mcp_status(refresh: bool = False):
+    """Estado del bundle MCP (instalado/falta/clave) sin salir de la app."""
+    import json as _json
+    from src.core.mcp_setup import run_mcp_setup, status_path
+    p = status_path()
+    if not refresh and p.exists():
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    report = await asyncio.to_thread(lambda: run_mcp_setup(fix=False, resolve=True))
+    report["status_file"] = str(p)
+    return report
+
+
+@app.post("/api/mcp/setup")
+async def mcp_setup_endpoint(request: Request):
+    """Instala/verifica los MCP del bundle. Body: {"fix": true}."""
+    from src.core.mcp_setup import run_mcp_setup, status_path, write_status
+    body = await _json_body(request)
+    fix = bool(body.get("fix", False))
+    report = await asyncio.to_thread(
+        lambda: run_mcp_setup(fix=fix, resolve=True, ensure_uv_binary=fix))
+    write_status(report)
+    report["status_file"] = str(status_path())
+    return report
+
+
+@app.get("/api/mcp/client-config")
+async def mcp_client_config():
+    """Snippet listo para pegar en un cliente MCP (opencode/Claude/Cursor)."""
+    import os as _os
+    import sys as _sys
+    py = str(_PROJECT_ROOT / ".venv-ft314" / "Scripts" / "python.exe")
+    if not _os.path.exists(py):
+        alt = str(_PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+        py = alt if _os.path.exists(alt) else _sys.executable
+    return {"mcpServers": {"nexus-v3": {
+        "command": py,
+        "args": ["-m", "src.mcp_server"],
+        "cwd": str(_PROJECT_ROOT),
+        "environment": {"PYTHONUNBUFFERED": "1"},
+    }}}
+
+
 @app.get("/api/providers")
 async def providers_status(refresh: bool = False):
     """Dynamic provider inventory — only online providers report models. Used by ModelSelector.

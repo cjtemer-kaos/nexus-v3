@@ -17,8 +17,23 @@ QUE HACE EL INSTALADOR
   resources\app.asar.unpacked\.venv-ft314
 - Instala las dependencias base y, si se puede, los extras opcionales
   (LSP, PTY, tree-sitter, galeria, etc.).
+- Instala un "uv" propio en el entorno: los MCP que usan uvx quedan
+  funcionando aunque el uv/uvx de Windows este roto.
+- Crea el grafo de conocimiento y le importa la semilla del sistema
+  (asi recall responde desde el primer arranque).
+- Instala y verifica los servidores MCP del bundle y deja el estado en:
+  resources\app.asar.unpacked\data\mcp_bundle\status.json
 - Crea accesos directos en el Escritorio y en el Menu Inicio.
 - Abre Nexus v3.
+
+MCP
+---
+Los MCP no necesitan un cliente externo: Nexus v3 los lanza por su cuenta.
+Para ver el estado despues de instalar, en una consola dentro de la app:
+  .venv-ft314\Scripts\python.exe scripts\setup_mcp.py
+Los que figuran como CLAVE necesitan tu propia cuenta (.env); los REMOTO
+son servidores HTTP que este cliente no lanza (usarlos desde opencode o
+Claude, que ya los tienen configurados).
 
 REQUISITOS
 ----------

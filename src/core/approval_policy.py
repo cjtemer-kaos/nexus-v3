@@ -86,7 +86,60 @@ _DEFAULT_MCP_READ_ONLY = (
     "nexus-sovereign/brain_recall",
     "serena/find_*",
     "serena/search_*",
+    "playwright/browser_snapshot",
+    "playwright/browser_take_screenshot",
+    "playwright/browser_console_messages",
+    "playwright/browser_network_requests",
+    "chrome-devtools/list_*",
+    "chrome-devtools/get_*",
+    "chrome-devtools/take_snapshot",
+    "chrome-devtools/take_screenshot",
+    "chrome-devtools/performance_*",
+    "computer-control/get_*",
+    "computer-control/list_*",
+    "computer-control/take_screenshot",
+    "computer-control/screenshot",
+    "computer-control/read_*",
 )
+
+_MANIFEST_RO_CACHE: dict[str, Any] = {"mtime": None, "patterns": ()}
+
+
+def _manifest_read_only() -> tuple[str, ...]:
+    """Patrones `read_only` declarados por cada entrada del bundle (manifest).
+
+    El manifest es la fuente de verdad de que tools de cada MCP son de lectura;
+    asi el gate no bloquea de entrada servers legitimos como computer-control.
+    """
+    import os
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    p = Path(os.environ.get("NEXUS_MCP_MANIFEST")
+             or (root / "data" / "mcp_bundle" / "manifest.json"))
+    try:
+        st = p.stat()
+    except OSError:
+        return ()
+    if _MANIFEST_RO_CACHE["mtime"] == st.st_mtime_ns:
+        return _MANIFEST_RO_CACHE["patterns"]
+    out: list[str] = []
+    try:
+        import json
+
+        data = json.loads(p.read_text(encoding="utf-8"))
+        for entry in data.get("entries", []):
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            for pat in entry.get("read_only") or []:
+                pat = str(pat).strip()
+                if pat:
+                    out.append(f"{name}/{pat}")
+    except Exception:
+        out = []
+    _MANIFEST_RO_CACHE.update(mtime=st.st_mtime_ns, patterns=tuple(out))
+    return _MANIFEST_RO_CACHE["patterns"]
 
 
 @dataclass(frozen=True)
@@ -117,9 +170,18 @@ class ApprovalContext:
     def mcp_read_only(self) -> tuple[str, ...]:
         acfg = (self.config.get("approval") or {}) if isinstance(self.config, dict) else {}
         extra = acfg.get("mcp_read_only")
-        if isinstance(extra, list) and extra:
-            return tuple(str(x) for x in extra)
-        return _DEFAULT_MCP_READ_ONLY
+        merged: list[str] = []
+        if isinstance(extra, list):
+            merged.extend(str(x) for x in extra)
+        merged.extend(_DEFAULT_MCP_READ_ONLY)
+        merged.extend(_manifest_read_only())
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in merged:
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return tuple(out)
 
 
 @dataclass
@@ -200,7 +262,9 @@ def check_tool_approval(
                               "arguments": args.get("arguments") or {}},
                              ensure_ascii=False, default=str)[:2000]
         return ApprovalCheck(True, action=action,
-                             reason=f"MCP sin allowlist de solo lectura: {server}/{remote_tool}",
+                             reason=(f"MCP sin allowlist de solo lectura: {server}/{remote_tool}"
+                                     f" — agregá '{server}/{remote_tool}' a approval.mcp_read_only"
+                                     " en config/config.yaml, o aprobalo desde la UI"),
                              key_hash=_make_key(tool, action, args), preview=preview)
     if category == "mcp" and tool not in _READONLY_MCP_TOOLS:
         action = f"mcp-tool:{tool}"

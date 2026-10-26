@@ -36,7 +36,8 @@ def load_manifest(project_root: str | Path) -> list[dict]:
     key = str(project_root)
     if key in _manifest_cache:
         return _manifest_cache[key]
-    p = Path(project_root) / "data" / "mcp_bundle" / "manifest.json"
+    p = Path(os.environ.get("NEXUS_MCP_MANIFEST")
+             or (Path(project_root) / "data" / "mcp_bundle" / "manifest.json"))
     entries: list[dict] = []
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -103,7 +104,9 @@ class MCPClient:
         name = entry["name"]
         if name in self._sessions:
             return self._sessions[name]
-        cmd = entry.get("command") or []
+        from src.core.mcp_setup import resolve_command
+
+        cmd = resolve_command(entry, root=self.root)
         if not cmd:
             raise ValueError(f"{name}: sin command")
         stack = AsyncExitStack()

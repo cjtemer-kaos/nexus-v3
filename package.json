@@ -36,13 +36,20 @@
       "ui/dist/**/*",
       "src/**/*",
       "config/**/*",
+      "scripts/**/*",
+      "data/mcp_bundle/**/*",
+      "brain/seed/**/*",
+      "brain/README.md",
       "package.json"
     ],
     "asar": true,
     "asarUnpack": [
       "src/**/*",
       "config/**/*",
-      "ui/dist/**/*"
+      "ui/dist/**/*",
+      "scripts/**/*",
+      "data/mcp_bundle/**/*",
+      "brain/seed/**/*"
     ],
     "extraResources": [
       {

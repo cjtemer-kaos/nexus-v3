@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "Programs\Nexus v3"),
   [switch]$NoLaunch,
   [switch]$NoShortcuts,
@@ -224,6 +224,59 @@ Write-Log "Verificando imports base..."
 & $VenvPy -c "import fastapi, uvicorn, httpx, yaml, jsonschema, dotenv, numpy, psutil, websockets, mcp, aiohttp, aiosqlite, croniter, ruamel.yaml"
 if ($LASTEXITCODE -ne 0) {
   Fail "Las dependencias base no se importan correctamente. Revisa el log: $Log"
+}
+
+# uv propio: los MCP que usan uvx no dependen del uv/uvx del sistema (en algunas
+# PCs falla con 'os error 448'). Si no se puede instalar, la app sigue andando.
+Write-Log "Instalando uv propio (para los MCP que usan uvx)..."
+& $VenvPy -m pip install uv --disable-pip-version-check --no-input --quiet
+if ($LASTEXITCODE -ne 0) {
+  Write-Log "Aviso: no se pudo instalar uv; los MCP que lo usan quedaran sin binario."
+}
+
+# Raiz con src/ y scripts/ (empaquetado: app.asar.unpacked)
+$AppRoot = Join-Path $AppDir "resources\app.asar.unpacked"
+if (-not (Test-Path -LiteralPath (Join-Path $AppRoot "scripts\bootstrap_brain.py"))) {
+  $AppRoot = $AppDir
+}
+
+$BrainScript = Join-Path $AppRoot "scripts\bootstrap_brain.py"
+if (Test-Path -LiteralPath $BrainScript) {
+  Write-Log "Creando el grafo e importando la base de conocimiento compartida (puede tardar unos minutos)..."
+  Push-Location $AppRoot
+  try {
+    & $VenvPy $BrainScript
+    if ($LASTEXITCODE -ne 0) {
+      Write-Log "Aviso: el grafo quedo sin la base; se puede regenerar con scripts\bootstrap_brain.py"
+    }
+  } finally { Pop-Location }
+} else {
+  Write-Log "Aviso: no se encontro scripts\bootstrap_brain.py (grafo sin base)."
+}
+
+$McpScript = Join-Path $AppRoot "scripts\setup_mcp.py"
+if (Test-Path -LiteralPath $McpScript) {
+  Write-Log "Verificando los servidores MCP del bundle..."
+  Push-Location $AppRoot
+  try {
+    & $VenvPy $McpScript --fix
+    if ($LASTEXITCODE -ne 0) {
+      Write-Log "Aviso: el bundle MCP quedo incompleto (faltan binarios o claves propias)."
+    }
+  } finally { Pop-Location }
+} else {
+  Write-Log "Aviso: no se encontro scripts\setup_mcp.py."
+}
+
+$VerifyScript = Join-Path $AppRoot "scripts\verify_install.py"
+if (Test-Path -LiteralPath $VerifyScript) {
+  Push-Location $AppRoot
+  try {
+    & $VenvPy $VerifyScript --skip-mcp
+    if ($LASTEXITCODE -ne 0) {
+      Write-Log "Aviso: la verificacion detecto pendientes (ver salida de arriba)."
+    }
+  } finally { Pop-Location }
 }
 
 if (-not $NoShortcuts) {

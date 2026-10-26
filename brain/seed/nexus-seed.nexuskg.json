@@ -1,0 +1,603 @@
+{
+ "schema": "nexus.knowledge.bundle/v1",
+ "created_at": "2026-10-26T00:00:00Z",
+ "source": {
+  "app": "nexus-v3",
+  "version": "seed"
+ },
+ "counts": {
+  "nodes": 26,
+  "edges": 18
+ },
+ "nodes": [
+  {
+   "key": "que-es-nexus-v3",
+   "topic_key": "que-es-nexus-v3",
+   "content": "nexus-v3 es un harness de agentes autonomos con interfaz Electron + React y backend Python (FastAPI). Corre un loop TDAO (Think-Decide-Act-Observe) con tools, scope jail, aprobaciones, checkpoints, compactacion de contexto, sesiones con FTS5, grafo de conocimiento (learn/recall), RAG, sub-agentes y MCP en los dos sentidos: cliente de servidores MCP externos y servidor MCP para otros clientes (opencode, Claude, Cursor).",
+   "title": "Que es nexus-v3",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "arquitectura",
+    "overview"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "instalacion-rapida",
+   "topic_key": "instalacion-rapida",
+   "content": "En Windows: doble clic en INSTALAR.bat (raiz del repo). El bootstrap verifica git/node/python, crea .venv-ft314, instala requirements, ejecuta npm install en la raiz y en ui/, compila electron y la UI, crea el grafo e importa la semilla, instala los MCP del bundle y corre la verificacion final. Si algo falla, el log queda en INSTALAR-LOG.txt con el paso exacto. No requiere pasos manuales ni permisos de administrador.",
+   "title": "Instalacion en un clic",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 10,
+   "tags": [
+    "instalacion",
+    "bootstrap"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "instalacion-manual",
+   "topic_key": "instalacion-manual",
+   "content": "python -m venv .venv-ft314; .venv-ft314\\Scripts\\python.exe -m pip install -r requirements.txt; npm install; npm install --prefix ui; npm run build (compila electron y ui); .venv-ft314\\Scripts\\python.exe scripts\\bootstrap_brain.py; .venv-ft314\\Scripts\\python.exe scripts\\setup_mcp.py --fix; .venv-ft314\\Scripts\\python.exe scripts\\verify_install.py. En Linux/macOS el venv es .venv-ft314/bin/python.",
+   "title": "Instalacion manual (equivalente)",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 8,
+   "tags": [
+    "instalacion",
+    "manual"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "estructura-del-repo",
+   "topic_key": "estructura-del-repo",
+   "content": "src/api/server.py: FastAPI con todos los endpoints y el registry de tools. src/core: harness (agent_loop, tool_registry, scope, approvals, checkpoints, compactacion, sesiones, grafo). src/providers: ollama, nube BYOK, llama.cpp, CLIs. src/tools: tools builtin y de busqueda. src/mcp_server.py: servidor MCP entrante (stdio). ui/: React+Vite. electron/: main+preload. config/config.yaml: toda la configuracion. brain/: grafo y RAG. scripts/: bootstrap, setup MCP, verificacion, diagnostico.",
+   "title": "Estructura del repositorio",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 8,
+   "tags": [
+    "arquitectura",
+    "estructura"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "arranque-y-puertos",
+   "topic_key": "arranque-y-puertos",
+   "content": "La app se abre con scripts\\nexus-v3-launch.vbs (acceso directo) o con npm start. Electron levanta el backend Python en un puerto libre (efimero) y sirve ui/dist. El log del backend queda en data/backend.log. En modo dev el backend usa :8765 y Vite :5174 (npm run dev). Ollama :11434. El lanzador compila electron y la UI si faltan los artefactos.",
+   "title": "Arranque y puertos",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 7,
+   "tags": [
+    "arranque",
+    "puertos"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "brain-y-rutas",
+   "topic_key": "brain-y-rutas",
+   "content": "El cerebro vive en ./brain y se puede mover con NEXUS_V3_BRAIN (variable de entorno) o brain.path en config/config.yaml. Archivos: knowledge_graph.db (grafo OPCODE con FTS5), rag_index.db (indice RAG, se genera en runtime), session.db, event_store.db. NO usar NEXUS_BRAIN: esa variable pertenece a supernexus-v2 y enlazaria cerebros de proyectos distintos. Los .db no se versionan: viajan como bundle .nexuskg.json.",
+   "title": "Cerebro local y NEXUS_V3_BRAIN",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "brain",
+    "config"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "grafo-bundles",
+   "topic_key": "grafo-bundles",
+   "content": "El grafo se transfiere con bundles .nexuskg.json (schema nexus.knowledge.bundle/v1). Exportar: GET /api/knowledge/export (o el boton de la UI). Importar: POST /api/knowledge/import con dry_run=true por defecto; el merge es por topic_key, no duplica y archiva revision al actualizar. La semilla del sistema esta en brain/seed/nexus-seed.nexuskg.json y se importa con scripts/bootstrap_brain.py. Nunca copies knowledge_graph.db entre maquinas: los ids locales no son estables.",
+   "title": "Exportar e importar conocimiento",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 8,
+   "tags": [
+    "brain",
+    "bundle",
+    "grafo"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "mcp-sistema",
+   "topic_key": "mcp-sistema",
+   "content": "nexus-v3 es cliente y servidor MCP. Cliente: src/core/mcp_client.py lanza servidores stdio del catalogo data/mcp_bundle/manifest.json de forma just-in-time. Servidor: python -m src.mcp_server expone 41 tools por stdio (cwd = raiz del repo). Instalar y verificar el catalogo: python scripts/setup_mcp.py --fix (deja data/mcp_bundle/status.json). Config para un cliente: python scripts/setup_mcp.py --emit-client.",
+   "title": "Sistema MCP de nexus-v3",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 10,
+   "tags": [
+    "mcp",
+    "setup"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "mcp-aprobacion",
+   "topic_key": "mcp-aprobacion",
+   "content": "Cada llamada mcp_call pasa por el gate de aprobacion. Si el par server/tool esta en approval.mcp_read_only (config/config.yaml) o en el campo read_only del manifest, se ejecuta sin preguntar. Si no, en la UI se pide aprobacion; en contextos sin canal (servidor MCP entrante, subagentes) falla cerrado con un mensaje que indica que patron agregar. Para habilitar una tool: agregar 'server/tool' (admite wildcards) a approval.mcp_read_only.",
+   "title": "Aprobaciones de MCP",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "mcp",
+    "aprobacion",
+    "seguridad"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "mcp-uvx-roto",
+   "topic_key": "mcp-uvx-roto",
+   "content": "Varios MCP del catalogo usan uvx (computer-control, serena, mcp-local-rag). Si uv/uvx del sistema falla (en Windows es tipico 'os error 448'), el bootstrap instala un uv propio en el venv: .venv-ft314\\Scripts\\uvx.exe. El setup y el runtime resuelven uvx con esta precedencia: NEXUS_UVX, venv del proyecto, PATH. No hace falta reparar el uv del sistema ni pedir permisos de administrador.",
+   "title": "uvx roto o ausente",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "mcp",
+    "uvx",
+    "troubleshooting"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "tools-registry",
+   "topic_key": "tools-registry",
+   "content": "El ToolRegistry expone tools por categoria: fs (read_file, write_file, edit, apply_patch, list_dir, glob, code_search, repo_map), ejecucion (exec, job_start/read/wait/kill/list), red (web_fetch, web_search), memoria (learn, recall), MCP (mcp_list, mcp_call), agentes (gema_*, agent_*, sub_agent*, team_*), imagenes (image_generate) y checkpoints. Toda tool de filesystem pasa por scope.check_path.",
+   "title": "Tools del harness",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 7,
+   "tags": [
+    "tools",
+    "arquitectura"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "scope-jail",
+   "topic_key": "scope-jail",
+   "content": "El scope define que rutas y tools puede tocar el agente. permission=full libera; read_only (plan mode) bloquea mutaciones; require_confirm_mutating exige confirm=true. Se configura en config/config.yaml (scope.allow/deny) y toda tool FS pasa por scope.check_path/check_tool antes de ejecutarse.",
+   "title": "Scope jail",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 7,
+   "tags": [
+    "seguridad",
+    "scope"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "checkpoints",
+   "topic_key": "checkpoints",
+   "content": "Antes de cada write/edit se crea un checkpoint (snapshot) automatico. Se listan y comparan con checkpoint_list/checkpoint_diff y se restauran con checkpoint_restore. En la UI aparecen en la pestana Cambios. Sirven para revertir un cambio del agente sin tocar git.",
+   "title": "Checkpoints y diffs",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "checkpoints",
+    "seguridad"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "compactacion-de-contexto",
+   "topic_key": "compactacion-de-contexto",
+   "content": "El harness compacta en 4 capas: seguridad/redaccion, presupuesto por tokens, recorte de mensajes viejos y micro-compactacion. Se dispara por umbral de contexto o por budget del run (agent_loop.budget: max_iterations, max_tokens, max_wall_ms, max_tool_calls). Evita que una sesion larga reviente la ventana del modelo.",
+   "title": "Compactacion de contexto",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "harness",
+    "contexto"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "sesiones",
+   "topic_key": "sesiones",
+   "content": "Las sesiones se guardan en data/session.db (SQLite WAL + FTS5): listar, buscar, fork, rewind y arbol. Los eventos van a data/event_store.db y alimentan auditoria, aprobaciones y replay. El session_log es la fuente para retomar una conversacion.",
+   "title": "Sesiones y event store",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "sesiones",
+    "persistencia"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "routers-de-modelos",
+   "topic_key": "routers-de-modelos",
+   "content": "El provider router elige entre Ollama local, proveedores de nube BYOK (opencode-go, groq) y CLIs (claude, codex, opencode) segun capacidad (tools, vision), costo y latencia. El aprendizaje de routing persiste en data/router_state.json (Thompson Sampling). Si no hay nube configurada, todo corre local con Ollama.",
+   "title": "Routers de modelos",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "modelos",
+    "routing"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "ui-electron",
+   "topic_key": "ui-electron",
+   "content": "La UI es React 19 + Vite + Tailwind. Electron la carga desde ui/dist en produccion y desde Vite :5174 en desarrollo (ELECTRON_IS_DEV=1). contextIsolation y sandbox activos, sin nodeIntegration. El renderer habla con el backend por HTTP (/api/*) usando la URL que expone el preload. Si la ventana queda en blanco: falta ui/dist o el backend no arranco (ver data/backend.log).",
+   "title": "UI Electron + React",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 7,
+   "tags": [
+    "ui",
+    "electron"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "configuracion",
+   "topic_key": "configuracion",
+   "content": "Toda la configuracion esta en config/config.yaml (con config.schema.json para validar). Precedencia: variable de entorno > config.yaml > autodeteccion. Secretos solo por entorno (.env), nunca en el repo. Cambios de config se reflejan sin reinstalar; algunos requieren reiniciar el backend.",
+   "title": "Configuracion",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "config"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "logs",
+   "topic_key": "logs",
+   "content": "data/backend.log: stdout/stderr del backend Python (el primer lugar a revisar). data/mcp_bundle/status.json: ultimo reporte de MCP (estado por servidor). INSTALAR-LOG.txt: resultado del bootstrap. ui/vite.log en dev. Los logs de la app Electron van a la consola del proceso principal.",
+   "title": "Donde mirar los logs",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 7,
+   "tags": [
+    "logs",
+    "troubleshooting"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "troubleshoot-ui-no-carga",
+   "topic_key": "troubleshoot-ui-no-carga",
+   "content": "1) Verificar que exista ui/dist/index.html; si falta: npm run build:ui. 2) Verificar electron/dist/main.js; si falta: npm run build:electron. 3) Revisar data/backend.log: si el backend no arranco, falta una dependencia en el venv. 4) Probar el backend solo: python -m src.api.server --port 8765 y abrir http://127.0.0.1:8765. 5) El lanzador scripts\\nexus-v3-launch.vbs ya compila ambos artefactos si faltan.",
+   "title": "La UI no carga o queda en blanco",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "troubleshooting",
+    "ui"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "troubleshoot-mcp-no-responde",
+   "topic_key": "troubleshoot-mcp-no-responde",
+   "content": "1) python scripts/setup_mcp.py (sin --fix) muestra el estado por servidor. 2) Si dice FALTA, correr con --fix. 3) Si dice CLAVE, falta una variable de entorno propia del servicio (.env). 4) Probar la tool con mcp_list(server) y mcp_call: si el error es de aprobacion, agregar el patron a approval.mcp_read_only. 5) Si el servidor usa uvx y falla, revisar .venv-ft314\\Scripts\\uvx.exe (el setup lo instala).",
+   "title": "Un MCP no responde",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "troubleshooting",
+    "mcp"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "troubleshoot-puerto-ocupado",
+   "topic_key": "troubleshoot-puerto-ocupado",
+   "content": "En modo app el backend usa un puerto libre: no hay conflicto. En modo dev el backend fijo es :8765 y Vite :5174. Si estan ocupados: netstat -ano | findstr :8765 y cerrar el proceso, o levantar con --port 0 para que elija uno libre. Ollama usa :11434.",
+   "title": "Puerto ocupado",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 5,
+   "tags": [
+    "troubleshooting",
+    "puertos"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "verificacion-de-instalacion",
+   "topic_key": "verificacion-de-instalacion",
+   "content": "python scripts\\verify_install.py comprueba: python del venv y dependencias, artefactos de UI y Electron, esquema y conteo del grafo, handshake del servidor MCP propio (initialize + tools/list + recall) y estado del bundle MCP. Devuelve exit 0 solo si todo pasa y escribe el detalle en pantalla. Es la forma objetiva de saber si la instalacion quedo completa, sin abrir la app.",
+   "title": "Verificar una instalacion",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 9,
+   "tags": [
+    "verificacion",
+    "instalacion"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "actualizaciones",
+   "topic_key": "actualizaciones",
+   "content": "El updater compara el manifiesto publicado con la version local ignorando diferencias de CRLF. El manifiesto se regenera con scripts/build_update_manifest.py y la URL se define en config (updates.manifest_url). Para actualizar un clon manual: git pull, npm install, npm run build y pip install -r requirements.txt dentro del venv.",
+   "title": "Actualizaciones",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 5,
+   "tags": [
+    "updates"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "plan-mode",
+   "topic_key": "plan-mode",
+   "content": "En plan mode el agente no muta nada: el scope pasa a read_only y las tools de escritura quedan bloqueadas. El plan se revisa por un canal de aprobacion; sin canal, falla cerrado (no se puede pedir review).",
+   "title": "Plan mode",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 5,
+   "tags": [
+    "harness",
+    "seguridad"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  },
+  {
+   "key": "subagentes",
+   "topic_key": "subagentes",
+   "content": "sub_agent lanza un agente hijo continuable con su propia sesion; team_spawn crea un equipo con mailbox. Los hijos heredan scope y config pero no pueden escalar permisos: un deny del padre se hereda, un allow no. Sirven para paralelizar tareas independientes.",
+   "title": "Sub-agentes y equipos",
+   "category": "nexus",
+   "source": "seed:nexus-v3",
+   "importance": 6,
+   "tags": [
+    "agentes"
+   ],
+   "content_hash": "",
+   "created_at": "2026-10-26T00:00:00Z",
+   "updated_at": "2026-10-26T00:00:00Z",
+   "revision_count": 1
+  }
+ ],
+ "edges": [
+  {
+   "from": "que-es-nexus-v3",
+   "to": "estructura-del-repo",
+   "relation": "documenta",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "instalacion-rapida",
+   "to": "instalacion-manual",
+   "relation": "detalla",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "instalacion-rapida",
+   "to": "verificacion-de-instalacion",
+   "relation": "termina_con",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "instalacion-rapida",
+   "to": "mcp-sistema",
+   "relation": "instala",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "arranque-y-puertos",
+   "to": "ui-electron",
+   "relation": "levanta",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "brain-y-rutas",
+   "to": "grafo-bundles",
+   "relation": "se_transfiere_con",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "mcp-sistema",
+   "to": "mcp-aprobacion",
+   "relation": "respeta",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "mcp-sistema",
+   "to": "mcp-uvx-roto",
+   "relation": "depende_de",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "mcp-aprobacion",
+   "to": "troubleshoot-mcp-no-responde",
+   "relation": "resuelve",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "mcp-uvx-roto",
+   "to": "troubleshoot-mcp-no-responde",
+   "relation": "resuelve",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "troubleshoot-ui-no-carga",
+   "to": "logs",
+   "relation": "mira",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "troubleshoot-mcp-no-responde",
+   "to": "logs",
+   "relation": "mira",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "tools-registry",
+   "to": "scope-jail",
+   "relation": "pasa_por",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "checkpoints",
+   "to": "scope-jail",
+   "relation": "protege",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "compactacion-de-contexto",
+   "to": "sesiones",
+   "relation": "persiste_en",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "routers-de-modelos",
+   "to": "configuracion",
+   "relation": "se_configura_en",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "subagentes",
+   "to": "scope-jail",
+   "relation": "hereda",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  },
+  {
+   "from": "plan-mode",
+   "to": "scope-jail",
+   "relation": "usa",
+   "weight": 1.0,
+   "note": "",
+   "created_at": "2026-10-26T00:00:00Z"
+  }
+ ],
+ "content_hash": "cbcb57e527f89e44da7fa91e0858428657a9e7f166ce384642c1c5f0e2cf71f5"
+}

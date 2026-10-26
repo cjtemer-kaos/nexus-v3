@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "opencode.json (solo nombres de env vars; JAMAS valores)",
-  "note": "Catalogo portable de MCPs. install = comando exacto en Windows (cmd/PowerShell). Las claves se configuran por entorno (.env.example); este archivo no contiene secretos.",
+  "note": "Catalogo portable de MCPs. install = comando exacto en Windows (cmd/PowerShell). Las claves se configuran por entorno (.env.example); este archivo no contiene secretos. Cada entrada puede declarar read_only (patrones server/tool) que el gate de aprobacion trata como lectura incluso sin UI.",
   "placeholders": {
     "NEXUS_SOVEREIGN_URL": "URL del MCP remoto soberano (por defecto loopback :8765). Configurala por entorno en cada PC.",
     "LOCAL_PKG_DIR": "Ruta local del paquete en ESTA pc (no portable entre maquinas)."
@@ -14,10 +14,22 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "npx -y @playwright/mcp@latest",
-      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
       "env_required": [],
-      "scopes": ["browser-automation"],
-      "notes": "Automatizacion web por accesibilidad. Cero config."
+      "scopes": [
+        "browser-automation"
+      ],
+      "notes": "Automatizacion web por accesibilidad. Cero config.",
+      "read_only": [
+        "browser_snapshot",
+        "browser_take_screenshot",
+        "browser_console_messages",
+        "browser_network_requests"
+      ]
     },
     {
       "name": "chrome-devtools",
@@ -26,10 +38,25 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222",
-      "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ],
       "env_required": [],
-      "scopes": ["browser-debug"],
-      "notes": "Requiere Chrome/Chromium con remote debugging en el puerto indicado (flag --remote-debugging-port=9222)."
+      "scopes": [
+        "browser-debug"
+      ],
+      "notes": "Requiere Chrome/Chromium con remote debugging en el puerto indicado (flag --remote-debugging-port=9222).",
+      "read_only": [
+        "list_*",
+        "get_*",
+        "take_snapshot",
+        "take_screenshot",
+        "performance_*"
+      ]
     },
     {
       "name": "context7",
@@ -38,10 +65,19 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "npx -y @upstash/context7-mcp",
-      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "command": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ],
       "env_required": [],
-      "scopes": ["docs"],
-      "notes": "Docs actualizadas de librerias. Cero config."
+      "scopes": [
+        "docs"
+      ],
+      "notes": "Docs actualizadas de librerias. Cero config.",
+      "read_only": [
+        "*"
+      ]
     },
     {
       "name": "rea",
@@ -50,10 +86,20 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "npx -y rea-agents@6.1.0 mcp",
-      "command": ["npx", "-y", "rea-agents@6.1.0", "mcp"],
+      "command": [
+        "npx",
+        "-y",
+        "rea-agents@6.1.0",
+        "mcp"
+      ],
       "env_required": [],
-      "scopes": ["reverse-engineering"],
-      "notes": "Ingenieria reversa (binarios, JS, webs, firmware). Cero config."
+      "scopes": [
+        "reverse-engineering"
+      ],
+      "notes": "Ingenieria reversa (binarios, JS, webs, firmware). Cero config.",
+      "read_only": [
+        "*"
+      ]
     },
     {
       "name": "computer-control",
@@ -62,10 +108,24 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "uvx --python 3.13 computer-control-mcp@latest",
-      "command": ["uvx", "--python", "3.13", "computer-control-mcp@latest"],
+      "command": [
+        "uvx",
+        "--python",
+        "3.13",
+        "computer-control-mcp@latest"
+      ],
       "env_required": [],
-      "scopes": ["desktop-automation"],
-      "notes": "Requiere uv instalado y Python 3.13 disponible."
+      "scopes": [
+        "desktop-automation"
+      ],
+      "notes": "Requiere uv instalado y Python 3.13 disponible.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "take_screenshot",
+        "screenshot",
+        "read_*"
+      ]
     },
     {
       "name": "serena",
@@ -74,10 +134,25 @@
       "needs_account": false,
       "enabled_default": false,
       "install": "uvx --from git+https://github.com/oraios/serena serena start-mcp-server",
-      "command": ["uvx", "--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"],
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server"
+      ],
       "env_required": [],
-      "scopes": ["code-search", "editing"],
-      "notes": "Deshabilitado por defecto; activalo si lo necesitas. Requiere git + uv."
+      "scopes": [
+        "code-search",
+        "editing"
+      ],
+      "notes": "Deshabilitado por defecto; activalo si lo necesitas. Requiere git + uv.",
+      "read_only": [
+        "find_*",
+        "search_*",
+        "list_*",
+        "read_*"
+      ]
     },
     {
       "name": "firebase",
@@ -86,10 +161,21 @@
       "needs_account": true,
       "enabled_default": false,
       "install": "npx -y firebase-tools@latest mcp",
-      "command": ["npx", "-y", "firebase-tools@latest", "mcp"],
+      "command": [
+        "npx",
+        "-y",
+        "firebase-tools@latest",
+        "mcp"
+      ],
       "env_required": [],
-      "scopes": ["firebase-login"],
-      "notes": "MANUAL: requiere 'firebase login' previo con tu cuenta. Deshabilitado por defecto."
+      "scopes": [
+        "firebase-login"
+      ],
+      "notes": "MANUAL: requiere 'firebase login' previo con tu cuenta. Deshabilitado por defecto.",
+      "read_only": [
+        "get_*",
+        "list_*"
+      ]
     },
     {
       "name": "terraform",
@@ -98,9 +184,21 @@
       "needs_account": true,
       "enabled_default": false,
       "install": "docker run -i --rm -e TFE_TOKEN=${TFE_TOKEN} hashicorp/terraform-mcp-server:0.4.0",
-      "command": ["docker", "run", "-i", "--rm", "-e", "TFE_TOKEN=${TFE_TOKEN}", "hashicorp/terraform-mcp-server:0.4.0"],
-      "env_required": ["TFE_TOKEN"],
-      "scopes": ["iac"],
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "TFE_TOKEN=${TFE_TOKEN}",
+        "hashicorp/terraform-mcp-server:0.4.0"
+      ],
+      "env_required": [
+        "TFE_TOKEN"
+      ],
+      "scopes": [
+        "iac"
+      ],
       "notes": "Requiere Docker + token de Terraform Cloud. Deshabilitado por defecto."
     },
     {
@@ -110,10 +208,21 @@
       "needs_account": true,
       "enabled_default": true,
       "install": "npx -y @brave/brave-search-mcp-server",
-      "command": ["npx", "-y", "@brave/brave-search-mcp-server"],
-      "env_required": ["BRAVE_API_KEY"],
-      "scopes": ["web-search"],
-      "notes": "Pide BRAVE_API_KEY (cuenta de Brave Search). Sin la key queda en needs_key."
+      "command": [
+        "npx",
+        "-y",
+        "@brave/brave-search-mcp-server"
+      ],
+      "env_required": [
+        "BRAVE_API_KEY"
+      ],
+      "scopes": [
+        "web-search"
+      ],
+      "notes": "Pide BRAVE_API_KEY (cuenta de Brave Search). Sin la key queda en needs_key.",
+      "read_only": [
+        "*"
+      ]
     },
     {
       "name": "mcp-local-rag",
@@ -122,10 +231,21 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "uvx --python=3.10 --from git+https://github.com/nkapila6/mcp-local-rag mcp-local-rag",
-      "command": ["uvx", "--python=3.10", "--from", "git+https://github.com/nkapila6/mcp-local-rag", "mcp-local-rag"],
+      "command": [
+        "uvx",
+        "--python=3.10",
+        "--from",
+        "git+https://github.com/nkapila6/mcp-local-rag",
+        "mcp-local-rag"
+      ],
       "env_required": [],
-      "scopes": ["web-search"],
-      "notes": "Busqueda web KEYLESS multi-motor (Google/Bing/Brave/DDG/Wikipedia/Yandex/Mojeek...). Sin API key y sin Docker. Requiere uv/uvx + git. Alternativa keyless a brave-search."
+      "scopes": [
+        "web-search"
+      ],
+      "notes": "Busqueda web KEYLESS multi-motor (Google/Bing/Brave/DDG/Wikipedia/Yandex/Mojeek...). Sin API key y sin Docker. Requiere uv/uvx + git. Alternativa keyless a brave-search.",
+      "read_only": [
+        "*"
+      ]
     },
     {
       "name": "parallel-search",
@@ -134,10 +254,21 @@
       "needs_account": false,
       "enabled_default": true,
       "install": "npx -y mcp-remote https://search.parallel.ai/mcp",
-      "command": ["npx", "-y", "mcp-remote", "https://search.parallel.ai/mcp"],
+      "command": [
+        "npx",
+        "-y",
+        "mcp-remote",
+        "https://search.parallel.ai/mcp"
+      ],
       "env_required": [],
-      "scopes": ["web-search", "web-fetch"],
-      "notes": "Busqueda web + fetch de paginas GRATIS y SIN API key (Parallel Search MCP, tier anonimo). MCP remoto (Streamable HTTP) puenteado a stdio con mcp-remote. Sin Docker. Tools: web_search, web_fetch. GitHub: parallel-web/search-mcp."
+      "scopes": [
+        "web-search",
+        "web-fetch"
+      ],
+      "notes": "Busqueda web + fetch de paginas GRATIS y SIN API key (Parallel Search MCP, tier anonimo). MCP remoto (Streamable HTTP) puenteado a stdio con mcp-remote. Sin Docker. Tools: web_search, web_fetch. GitHub: parallel-web/search-mcp.",
+      "read_only": [
+        "*"
+      ]
     },
     {
       "name": "github",
@@ -148,9 +279,20 @@
       "install": "remote (sin instalacion): https://api.githubcopilot.com/mcp/ + header Authorization",
       "command": [],
       "url": "https://api.githubcopilot.com/mcp/",
-      "env_required": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-      "scopes": ["repo", "gist", "read:org"],
-      "notes": "Pide token personal de GitHub. Es remoto: no instala nada local."
+      "env_required": [
+        "GITHUB_PERSONAL_ACCESS_TOKEN"
+      ],
+      "scopes": [
+        "repo",
+        "gist",
+        "read:org"
+      ],
+      "notes": "Pide token personal de GitHub. Es remoto: no instala nada local.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "greptile",
@@ -161,9 +303,18 @@
       "install": "remote (sin instalacion): https://api.greptile.com/mcp + header Authorization",
       "command": [],
       "url": "https://api.greptile.com/mcp",
-      "env_required": ["GREPTILE_API_KEY"],
-      "scopes": ["code-review"],
-      "notes": "Pide GREPTILE_API_KEY. Deshabilitado por defecto."
+      "env_required": [
+        "GREPTILE_API_KEY"
+      ],
+      "scopes": [
+        "code-review"
+      ],
+      "notes": "Pide GREPTILE_API_KEY. Deshabilitado por defecto.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "discord",
@@ -172,9 +323,17 @@
       "needs_account": true,
       "enabled_default": true,
       "install": "npm i -g discord-mcp  (binario: discord-mcp)",
-      "command": ["discord-mcp"],
-      "env_required": ["DISCORD_TOKEN", "ALLOWED_GUILDS", "MCP_WRITE_MODE"],
-      "scopes": ["discord-bot"],
+      "command": [
+        "discord-mcp"
+      ],
+      "env_required": [
+        "DISCORD_TOKEN",
+        "ALLOWED_GUILDS",
+        "MCP_WRITE_MODE"
+      ],
+      "scopes": [
+        "discord-bot"
+      ],
       "notes": "Pide bot token de Discord + guild permitida. MANUAL: crear app/bot en el portal de Discord."
     },
     {
@@ -186,9 +345,20 @@
       "install": "remote (sin instalacion): ${NEXUS_SOVEREIGN_URL}",
       "command": [],
       "url": "${NEXUS_SOVEREIGN_URL}",
-      "env_required": ["NEXUS_SOVEREIGN_URL"],
-      "scopes": ["hive", "memory"],
-      "notes": "MCP remoto de la colmena. Configura NEXUS_SOVEREIGN_URL por entorno (loopback en dev). Sin OAuth."
+      "env_required": [
+        "NEXUS_SOVEREIGN_URL"
+      ],
+      "scopes": [
+        "hive",
+        "memory"
+      ],
+      "notes": "MCP remoto de la colmena. Configura NEXUS_SOVEREIGN_URL por entorno (loopback en dev). Sin OAuth.",
+      "read_only": [
+        "read_*",
+        "list_*",
+        "search_*",
+        "brain_recall"
+      ]
     },
     {
       "name": "hindsight",
@@ -200,8 +370,16 @@
       "command": [],
       "url": "http://localhost:8888/mcp/supernexus/",
       "env_required": [],
-      "scopes": ["agent-memory"],
-      "notes": "Memoria de agentes self-hosted. Opcional: si no corre en :8888 queda como no disponible, no bloquea."
+      "scopes": [
+        "agent-memory"
+      ],
+      "notes": "Memoria de agentes self-hosted. Opcional: si no corre en :8888 queda como no disponible, no bloquea.",
+      "read_only": [
+        "recall",
+        "search",
+        "get_*",
+        "list_*"
+      ]
     },
     {
       "name": "rube",
@@ -213,7 +391,9 @@
       "command": [],
       "url": "https://rube.app/mcp",
       "env_required": [],
-      "scopes": ["oauth"],
+      "scopes": [
+        "oauth"
+      ],
       "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth."
     },
     {
@@ -225,9 +405,18 @@
       "install": "remote: https://gitlab.com/api/v4/mcp (token en el cliente)",
       "command": [],
       "url": "https://gitlab.com/api/v4/mcp",
-      "env_required": ["GITLAB_TOKEN"],
-      "scopes": ["git"],
-      "notes": "Deshabilitado por defecto. Requiere cuenta/token."
+      "env_required": [
+        "GITLAB_TOKEN"
+      ],
+      "scopes": [
+        "git"
+      ],
+      "notes": "Deshabilitado por defecto. Requiere cuenta/token.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "linear",
@@ -239,8 +428,15 @@
       "command": [],
       "url": "https://mcp.linear.app/mcp",
       "env_required": [],
-      "scopes": ["oauth"],
-      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth."
+      "scopes": [
+        "oauth"
+      ],
+      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "cloudflare-api",
@@ -252,8 +448,15 @@
       "command": [],
       "url": "https://mcp.cloudflare.com/mcp",
       "env_required": [],
-      "scopes": ["oauth"],
-      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth."
+      "scopes": [
+        "oauth"
+      ],
+      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "asana",
@@ -265,8 +468,15 @@
       "command": [],
       "url": "https://mcp.asana.com/sse",
       "env_required": [],
-      "scopes": ["oauth"],
-      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth."
+      "scopes": [
+        "oauth"
+      ],
+      "notes": "Deshabilitado por defecto. Requiere cuenta y OAuth.",
+      "read_only": [
+        "get_*",
+        "list_*",
+        "search_*"
+      ]
     },
     {
       "name": "agent-browser",
@@ -276,8 +486,12 @@
       "enabled_default": false,
       "install": "MANUAL: script python local de otra instalacion (no portable). Reimplementa o apunta NEXUS_AGENT_BROWSER_CMD al script equivalente en esta PC.",
       "command": [],
-      "env_required": ["NEXUS_AGENT_BROWSER_CMD"],
-      "scopes": ["browser-bridge"],
+      "env_required": [
+        "NEXUS_AGENT_BROWSER_CMD"
+      ],
+      "scopes": [
+        "browser-bridge"
+      ],
       "notes": "Ruta local de la maquina original; en otra PC es MANUAL hasta reubicar el script."
     },
     {
@@ -288,8 +502,12 @@
       "enabled_default": false,
       "install": "MANUAL: instalar cua-driver en esta PC y apuntar NEXUS_CUA_DRIVER_BIN al binario + subcomando mcp.",
       "command": [],
-      "env_required": ["NEXUS_CUA_DRIVER_BIN"],
-      "scopes": ["desktop-automation"],
+      "env_required": [
+        "NEXUS_CUA_DRIVER_BIN"
+      ],
+      "scopes": [
+        "desktop-automation"
+      ],
       "notes": "Binario nativo por SO; no portable como comando fijo."
     },
     {
@@ -300,8 +518,12 @@
       "enabled_default": false,
       "install": "MANUAL: uvx --from <LOCAL_PKG_DIR>[core] qwen-mm-plugins-core  (paquete local, sin API key)",
       "command": [],
-      "env_required": ["NEXUS_QWEN_MM_DIR"],
-      "scopes": ["multimodal"],
+      "env_required": [
+        "NEXUS_QWEN_MM_DIR"
+      ],
+      "scopes": [
+        "multimodal"
+      ],
       "notes": "Codigo local multimodal sin API key, pero su ruta no es portable: define NEXUS_QWEN_MM_DIR en esta PC."
     },
     {
@@ -312,8 +534,12 @@
       "enabled_default": false,
       "install": "MANUAL: uvx --from <LOCAL_PKG_DIR>[omni-video2note] qwen-mm-plugins-omni-video2note",
       "command": [],
-      "env_required": ["NEXUS_QWEN_MM_DIR"],
-      "scopes": ["video-to-pdf"],
+      "env_required": [
+        "NEXUS_QWEN_MM_DIR"
+      ],
+      "scopes": [
+        "video-to-pdf"
+      ],
       "notes": "Como el anterior: paquete local, ruta por entorno."
     },
     {
@@ -324,8 +550,12 @@
       "enabled_default": false,
       "install": "MANUAL: uvx --from <LOCAL_PKG_DIR>[omni-skill-creator] qwen-mm-plugins-omni-skill-creator",
       "command": [],
-      "env_required": ["NEXUS_QWEN_MM_DIR"],
-      "scopes": ["skill-gen"],
+      "env_required": [
+        "NEXUS_QWEN_MM_DIR"
+      ],
+      "scopes": [
+        "skill-gen"
+      ],
       "notes": "Como el anterior: paquete local, ruta por entorno."
     }
   ]

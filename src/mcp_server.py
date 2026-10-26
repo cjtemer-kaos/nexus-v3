@@ -28,8 +28,12 @@ def _log(*a) -> None:
 
 class NexusMCPServer:
     def __init__(self) -> None:
-        if os.getcwd() not in sys.path:
-            sys.path.insert(0, os.getcwd())
+        # No depender del cwd: el cliente MCP puede lanzarnos desde cualquier
+        # carpeta. La raiz del repo sale de este archivo.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for p in (root, os.getcwd()):
+            if p and p not in sys.path:
+                sys.path.insert(0, p)
         from src.api.server import (
             _build_approval_context,
             _build_registry,

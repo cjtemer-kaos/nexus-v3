@@ -388,11 +388,16 @@ class ToolRegistry:
         # Sin contexto se omite (compatibilidad); los caminos no interactivos
         # pasan un ApprovalContext con interactive=False para fallar cerrado.
         _approval_required = False
+        _declared_read_only = False
         if approval is not None:
             try:
                 from src.core.approval_policy import check_tool_approval, authorize
                 _check = check_tool_approval(name, args, entry, approval)
                 _approval_required = bool(getattr(_check, "required", False))
+                # mcp_call ya resuelto como lectura por allowlist: el guardrail de
+                # secuencia no debe volver a pedir aprobacion (rompia el uso sin UI).
+                _declared_read_only = (name == "mcp_call" and not _approval_required
+                                       and str(getattr(_check, "action", "")).startswith("mcp:"))
                 _out = await authorize(_check, approval, tool=name)
                 if not _out.allowed:
                     raise PermissionError(
@@ -423,7 +428,8 @@ class ToolRegistry:
         # Sin ApprovalContext el gate HITL se omite por compatibilidad; el
         # guardrail de secuencia sigue la misma regla (los caminos no
         # interactivos SI pasan un contexto interactive=False).
-        if _sg is not None and approval is not None and not _approval_required:
+        if (_sg is not None and approval is not None and not _approval_required
+                and not _declared_read_only):
             try:
                 _verdict = await _sg.evaluate(name, args)
             except Exception as e:

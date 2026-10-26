@@ -108,6 +108,51 @@ def test_mcp_read_only_allowlist_and_gate(appr):
                                     approval=ctx2, session_id="s1")) == "mcp:github:create_issue"
 
 
+def test_mcp_read_only_merges_config_defaults_and_manifest(monkeypatch):
+    """La config NO reemplaza a los defaults: se fusionan, y el manifest suma.
+
+    Antes `approval.mcp_read_only` del YAML reemplazaba la allowlist por defecto;
+    con un YAML minimo se perdian brave-search/context7 y todo pedia aprobacion.
+    """
+    import src.core.approval_policy as ap
+    monkeypatch.setattr(ap, "_manifest_read_only",
+                        lambda: ("computer-control/get_*", "custom-server/*"))
+    ctx = _ctx(mcp_read_only=["github/create_issue"])
+    patterns = ctx.mcp_read_only
+    assert "github/create_issue" in patterns            # config
+    assert "context7/*" in patterns                     # default
+    assert "computer-control/get_*" in patterns         # manifest
+    assert len(patterns) == len(set(patterns))          # sin duplicados
+
+
+def test_mcp_allowlisted_by_manifest_skips_sequence_guard(monkeypatch):
+    """Un mcp_call ya autorizado como lectura no vuelve a pedir aprobacion.
+
+    El guardrail de secuencia lo marcaba MEDIUM y, sin UI, denegaba con
+    fail-closed: un MCP legitimo quedaba inutilizable desde el servidor MCP.
+    """
+    import src.core.approval_policy as ap
+    monkeypatch.setattr(ap, "_manifest_read_only", lambda: ("computer-control/get_*",))
+
+    class _Guard:
+        async def evaluate(self, name, args):
+            class _V:
+                risk = "MEDIUM"
+                reason = "prueba"
+            return _V()
+
+    reg = _registry()
+    reg.sequence_guard = _Guard()
+    ctx = _ctx()
+    assert asyncio.run(reg.dispatch(
+        "mcp_call", {"server": "computer-control", "tool": "get_screen_size"},
+        approval=ctx, session_id="s1")) == "mcp:computer-control:get_screen_size"
+    # Una tool normal sigue pasando por el guardrail (fail-closed sin canal).
+    with pytest.raises(PermissionError):
+        asyncio.run(reg.dispatch("exec", {"command": "echo ok"}, approval=ctx,
+                                 session_id="s1"))
+
+
 def test_mcp_always_grant_is_by_server_tool(appr):
     reg = _registry()
     ctx = _ctx("s4", interactive=True, timeout_s=3.0)

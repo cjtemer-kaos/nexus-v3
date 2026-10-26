@@ -328,7 +328,15 @@ def import_bundle(km, bundle: dict[str, Any], *, dry_run: bool = True,
 
     edge_index = _load_edge_index(km)
 
-    for edge in edges:
+    # Las aristas mas fuertes primero: el grafo limita la degree por nodo
+    # (MAX_EDGES_PER_NODE), asi el cupo se queda con lo mas relevante.
+    def _edge_weight(edge: dict[str, Any]) -> float:
+        try:
+            return float(edge.get("weight") or 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    for edge in sorted(edges, key=_edge_weight, reverse=True):
         frm_key = str(edge.get("from") or "")
         to_key = str(edge.get("to") or "")
         relation = str(edge.get("relation") or "relates_to").strip().lower() or "relates_to"

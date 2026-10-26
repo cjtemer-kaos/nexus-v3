@@ -134,7 +134,7 @@ export function FileEditor() {
           onChange={e=>setPathInput(e.target.value)}
           onKeyDown={e=>{ if(e.key==='Enter') loadRoot(pathInput.trim()) }}
           aria-label="Ruta a explorar"
-          placeholder="ruta (ej. C:\ o D:\ias)"
+          placeholder="ruta o unidad (ej. C:\ o /home)"
           className="min-w-0 flex-1 rounded-md border border-[#2C3037] bg-[#1E2127] px-2 py-1 font-mono text-[11px] text-[#EDEEF0] placeholder:text-zinc-600 focus:outline-none"
         />
         <Button variant="ghost" size="xs" onClick={()=>loadRoot('')} aria-label="Unidades del disco" title="Unidades"><HardDrive className="h-3.5 w-3.5" /></Button>

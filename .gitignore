@@ -32,6 +32,10 @@ brain/*.bak*
 brain/learnings.md
 !brain/.gitkeep
 !brain/README.md
+# Semilla portable del sistema (conocimiento de nexus-v3, no datos de una PC)
+!brain/seed/
+!brain/seed/*.nexuskg.json
+!brain/seed/*.nexuskg.json.gz
 workspace/
 
 # OS
@@ -83,3 +87,6 @@ pytest_out.txt
 
 # Manifiestos de update (se regeneran con scripts/build_update_manifest.py)
 updates-manifest*.json
+
+# Log del instalador de un clic (resultado local de cada PC)
+INSTALAR-LOG.txt

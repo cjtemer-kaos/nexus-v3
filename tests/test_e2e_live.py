@@ -713,3 +713,20 @@ def test_mesa_redonda_endpoint(monkeypatch):
     assert data["answered"] == 1
     assert [s["seat"] for s in data["seats"]] == ["code", "tester"]
     assert data["confidence"] == 0.55
+
+def test_mcp_status_endpoint():
+    # Estado del bundle MCP dentro de la app (cached o recien calculado).
+    r = client.get("/api/mcp/status")
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert "entries" in body or "summary" in body
+
+
+def test_mcp_client_config_endpoint():
+    # Snippet para pegar en opencode/Claude/Cursor: rutas de ESTA maquina.
+    r = client.get("/api/mcp/client-config")
+    assert r.status_code == 200, r.text[:200]
+    srv = r.json()["mcpServers"]["nexus-v3"]
+    assert srv["args"] == ["-m", "src.mcp_server"]
+    assert Path(srv["cwd"]) == _ROOT
+    assert Path(srv["command"]).exists()
