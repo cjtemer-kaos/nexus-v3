@@ -3,6 +3,11 @@
 El manifiesto lista archivos versionados con su sha256. Comparar es solo
 lectura: nunca descarga ni reemplaza archivos. La aplicacion de un update
 queda en manos del usuario (git pull / instalador).
+
+Los hashes se calculan sobre el contenido con finales de linea normalizados
+(CRLF -> LF). Sin eso, un clon de git en Windows con `core.autocrlf=true`
+aparece como "desactualizado" con TODOS los archivos distintos aunque el
+contenido sea identico al del commit publicado.
 """
 from __future__ import annotations
 
@@ -34,12 +39,39 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
+def _iter_normalized(path: Path, chunk: int = 1024 * 1024):
+    """Lee el archivo normalizando CRLF -> LF sin cargarlo entero en memoria.
+
+    Un `\\r` al final del bloque se retiene para no partir un CRLF entre chunks.
+    """
+    carry = b""
     with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            data = carry + block
+            carry = b""
+            if data.endswith(b"\r"):
+                carry = b"\r"
+                data = data[:-1]
+            yield data.replace(b"\r\n", b"\n")
+    if carry:
+        yield carry
+
+
+def _digest_file(path: Path) -> tuple[str, int]:
+    """(sha256 del contenido normalizado, bytes normalizados)."""
+    h = hashlib.sha256()
+    size = 0
+    for piece in _iter_normalized(path):
+        h.update(piece)
+        size += len(piece)
+    return h.hexdigest(), size
+
+
+def _sha256_file(path: Path) -> str:
+    return _digest_file(path)[0]
 
 
 def _canonical_hash(files: list[dict[str, Any]]) -> str:
@@ -134,10 +166,11 @@ def build_manifest(root: str | Path, *, version: str = "", commit: str = "",
         if not p.is_file():
             continue
         seen.add(safe)
+        sha, size = _digest_file(p)
         entries.append({
             "path": safe,
-            "sha256": _sha256_file(p),
-            "size": p.stat().st_size,
+            "sha256": sha,
+            "size": size,
         })
         if len(entries) >= MAX_FILES:
             break
@@ -220,11 +253,11 @@ def compare(manifest: dict[str, Any], root: str | Path) -> dict[str, Any]:
         if not local.is_file():
             missing.append({"path": rel, "remote_sha256": f["sha256"]})
             continue
-        local_sha = _sha256_file(local)
+        local_sha, local_size = _digest_file(local)
         if local_sha != f["sha256"]:
             changed.append({"path": rel, "local_sha256": local_sha,
                             "remote_sha256": f["sha256"],
-                            "local_size": local.stat().st_size,
+                            "local_size": local_size,
                             "remote_size": int(f.get("size") or 0)})
         else:
             unchanged += 1

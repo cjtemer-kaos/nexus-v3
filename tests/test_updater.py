@@ -83,3 +83,53 @@ def test_unknown_schema_is_rejected(project):
     m["schema"] = "otro/v1"
     with pytest.raises(ValueError, match="schema"):
         validate_manifest(m)
+
+
+def _to_crlf(path) -> None:
+    raw = path.read_bytes().replace(b"\r\n", b"\n")
+    path.write_bytes(raw.replace(b"\n", b"\r\n"))
+
+
+def _to_lf(path) -> None:
+    path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+
+
+def test_compare_ignores_crlf_checkout(project):
+    """Un clon de git en Windows (core.autocrlf=true) no debe figurar como desactualizado."""
+    m = build_manifest(project)
+    for rel in ("src/a.py", "README.md"):
+        _to_crlf(project / rel)
+    res = compare(m, project)
+    assert res["update_available"] is False
+    assert res["counts"] == {"total": 2, "changed": 0, "missing": 0, "unchanged": 2}
+
+
+def test_manifest_from_crlf_tree_matches_lf_checkout(project):
+    """Al reves: manifiesto generado en Windows, chequeado en un clon LF."""
+    _to_crlf(project / "src" / "a.py")
+    m = build_manifest(project)
+    _to_lf(project / "src" / "a.py")
+    assert compare(m, project)["update_available"] is False
+
+
+def test_eol_normalization_does_not_hide_real_changes(tmp_path):
+    root = tmp_path / "proj2"
+    root.mkdir()
+    target = root / "x.txt"
+    target.write_bytes(b"uno\ndos\n")
+    m = build_manifest(root, version="1", commit="c")
+    target.write_bytes(b"uno\ntres\r\n")
+    res = compare(m, root)
+    assert res["update_available"] is True
+    assert [c["path"] for c in res["changed"]] == ["x.txt"]
+
+
+def test_crlf_split_across_chunks(tmp_path):
+    """Un CRLF partido entre dos lecturas no debe romper el hash."""
+    from src.core.updater import _iter_normalized
+
+    root = tmp_path / "proj3"
+    root.mkdir()
+    target = root / "big.txt"
+    target.write_bytes(b"a" * 8 + b"\r\n" + b"b" * 8)
+    assert b"".join(_iter_normalized(target, chunk=9)) == b"a" * 8 + b"\n" + b"b" * 8
