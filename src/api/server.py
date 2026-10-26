@@ -362,8 +362,19 @@ async def _distill_enrich(cfg: dict, session_id: str, forced_model: str | None, 
         return 0
 
 
+_DISTILL_LAST: dict[str, dict] = {}
+
+
 async def _distill_run(cfg: dict, session_id: str, *, wait_llm: bool, llm_timeout: float | None = None) -> dict:
-    """Destila una sesión: digest determinista (siempre) + enriquecimiento LLM por capacidad."""
+    """Destila una sesión: digest determinista (siempre) + enriquecimiento LLM por capacidad.
+
+    El hook de pre-compactación corre en CADA compactación; sin freno, con resultados de
+    tools grandes eso era una compactación por iteración y, con ella, un destilado por
+    iteración (LLM + embeddings sobre el mismo contenido): competía con la generación
+    principal y multiplicaba la latencia del turno. Dos guardas:
+      * si no hay mensajes nuevos desde el último destilado, no se repite;
+      * fuera del pedido explícito (`wait_llm=True`), hay un intervalo mínimo por sesión.
+    """
     from src.core.session_distill import distill_session
     from src.core.knowledge_memory import get_knowledge_memory
     lc = (cfg or {}).get("learning", {}) or {}
@@ -373,12 +384,26 @@ async def _distill_run(cfg: dict, session_id: str, *, wait_llm: bool, llm_timeou
     dict_msgs = [{"role": m.role, "content": m.content, "tool_name": m.tool_name} for m in msgs]
     km = get_knowledge_memory()
 
+    sig = (len(dict_msgs), str(getattr(msgs[-1], "id", "") if msgs else ""))
+    prev = _DISTILL_LAST.get(session_id)
+    now = __import__("time").monotonic()
+    try:
+        cooldown = float(lc.get("distill_min_interval_s", 180) or 180)
+    except Exception:
+        cooldown = 180.0
+    if prev is not None:
+        if prev.get("sig") == sig:
+            return {"distilled": 0, "turns": 0, "skipped": "sin mensajes nuevos"}
+        if not wait_llm and (now - float(prev.get("at", 0) or 0)) < cooldown:
+            return {"distilled": 0, "turns": 0, "skipped": "intervalo mínimo"}
+
     def _learn(content, *, topic_key="", category="general", tags=None, title=""):
         return km.learn(content, topic_key=topic_key, category=category,
                         tags=tags or [], title=title, source="session-distill",
                         session_id=session_id)
 
     res = distill_session(session_id, dict_msgs, _learn)  # determinista: siempre fiable
+    _DISTILL_LAST[session_id] = {"sig": sig, "at": now}
     if use_llm and res.get("turns"):
         if wait_llm:
             try:
@@ -1827,7 +1852,7 @@ async def list_sessions(limit: int = 50):
             if hasattr(s, "__dict__"):
                 d = {k: getattr(s, k) for k in dir(s) if not k.startswith("_")}
                 # Filter to known fields
-                out.append({k: d[k] for k in ["id", "project", "parent_id", "summary", "compact_count", "total_tokens", "created_at", "last_active"] if k in d})
+                out.append({k: d[k] for k in ["id", "project", "parent_id", "summary", "title", "compact_count", "total_tokens", "created_at", "last_active"] if k in d})
             else:
                 out.append(dict(s) if isinstance(s, dict) else {"id": str(s)})
         return {"sessions": out}
@@ -1844,6 +1869,12 @@ async def create_session(request: Request):
     parent_id = body.get("parent_id") if isinstance(body, dict) else None
     slog = _session_log()
     sess = slog.create_session(project=project, parent_id=parent_id)
+    _t = str((body.get("title") if isinstance(body, dict) else "") or "").strip()
+    if _t:
+        try:
+            slog.update_session(sess.id, title=_t[:80])
+        except Exception:
+            pass
     return {"id": sess.id, "project": sess.project, "parent_id": sess.parent_id if hasattr(sess, "parent_id") else None}
 
 
@@ -4043,7 +4074,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 scope.check_path(str(child))
             except Exception:
                 continue
-            entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)})
+            _entry = {"name": child.name, "type": "dir" if child.is_dir() else "file", "path": _rel(child)}
+            if not child.is_dir():
+                try:
+                    _entry["size"] = int(child.stat().st_size)
+                except Exception:
+                    pass
+            entries.append(_entry)
             if len(entries) >= cap:
                 break
         from src.core.text_limits import cap_json_list
@@ -4054,22 +4091,40 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         )
 
     def glob_tool(pattern: str, path: str = ".") -> str:
-        """Busca archivos por patrón glob (ej: '**/*.py') dentro del scope."""
+        """Busca archivos por patrón glob (ej: '**/*.py') dentro del scope.
+
+        Devuelve el conteo y el archivo más grande con su tamaño, para responder
+        "cuántos / cuál es el más grande" sin leer archivo por archivo.
+        """
         import json as _json
         base = scope.check_path(path or ".")
         found = []
+        sizes: dict[str, int] = {}
         for f in sorted(base.glob(pattern or "*")):
             try:
                 scope.check_path(str(f))
             except Exception:
                 continue
-            found.append(_rel(f))
+            rel = _rel(f)
+            found.append(rel)
+            try:
+                if f.is_file():
+                    sizes[rel] = int(f.stat().st_size)
+            except Exception:
+                pass
             if len(found) >= 500:
                 break
+        payload: dict = {"pattern": pattern, "path": path, "count": len(found),
+                         "files": sum(1 for v in sizes.values()), "matches": found,
+                         "truncated": len(found) >= 500}
+        if sizes:
+            largest = max(sizes.items(), key=lambda kv: kv[1])
+            payload["largest"] = {"path": largest[0], "size_bytes": largest[1]}
+            if len(sizes) <= 100:
+                payload["sizes"] = sizes
         from src.core.text_limits import cap_json_list
         return cap_json_list(
-            {"pattern": pattern, "path": path, "matches": found,
-             "truncated": len(found) >= 500},
+            payload,
             "matches", 48000,
             hint="afiná el patrón (ej: 'src/**/*.py') o usá code_search",
         )
@@ -4405,7 +4460,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "additionalProperties": False},
     )
     registry.register_function(list_dir_tool, name="list_dir",
-                               description="Lista los archivos y carpetas de un directorio; recursive=true recorre subcarpetas.",
+                               description=("Lista los archivos y carpetas de un directorio con su tamaño en "
+                                            "bytes (size); recursive=true recorre subcarpetas."),
                                category="local",
                                parameters={"type": "object", "properties": {
                                    "path": {"type": "string", "description": "Ruta del directorio (default '.')"},
@@ -4413,7 +4469,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "limit": {"type": "integer", "description": "Máximo de entradas (default 400)"}},
                                    "additionalProperties": False})
     registry.register_function(glob_tool, name="glob",
-                               description="Busca archivos por patrón glob (ej: '**/*.py', 'src/**/*.ts') dentro del proyecto.",
+                               description=("Busca archivos por patrón glob (ej: '**/*.py', 'src/**/*.ts') "
+                                            "dentro del proyecto. Devuelve count (cuántos), matches (rutas), "
+                                            "sizes (bytes) y largest (el más grande con su tamaño): sirve "
+                                            "para contar o comparar tamaños sin abrir cada archivo."),
                                category="local",
                                parameters={"type": "object", "properties": {
                                    "pattern": {"type": "string", "description": "Patrón glob relativo a `path`"},
@@ -5380,6 +5439,7 @@ def _delegation_block() -> str:
 async def _run_agent_once(message: str, session_id: str, hint: str | None = None,
                           model: str | None = None, force_tools: bool = False,
                           agent_id: str | None = None, on_delta=None, on_reasoning=None,
+                          on_step=None,
                           extract_memory: bool = True, interactive: bool = True,
                           source: str = "chat", level: int | None = None,
                           gema: str = ""):
@@ -5450,6 +5510,7 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
                             force_tools=force_tools,
                             model=model or (agent or {}).get("model") or None,
                             system_prompt=_sys or None, on_delta=on_delta, on_reasoning=on_reasoning,
+                            on_step=on_step,
                             steer=(lambda: _steer_drain(session_id)) if session_id else None,
                             extra_system=(_extra or None))
     await _learning_record(message, session_id, result, hint=hint, model=model)
@@ -6048,10 +6109,17 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
             if text:
                 await q.put({"reasoning": text})
 
+        async def _on_step(step: dict):
+            if step:
+                await q.put({"step": step})
+
         task = None
         sess = None
         ok = False
         err = ""
+        steps_out: list = []
+        iters_out = 0
+        model_out = ""
         try:
             # Fase 8: misma construccion estandar + streaming (pi).
             from src.core.provider_router import infer_hint
@@ -6069,6 +6137,7 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 agent_id=(agent_id or None),
                 on_delta=_on_delta,
                 on_reasoning=_on_reasoning,
+                on_step=_on_step,
                 interactive=True,
                 source="chat-stream",
                 level=level,
@@ -6084,6 +6153,21 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
             result = await task
             reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
             ok = bool(result.success)
+            iters_out = int(getattr(result, "iterations", 0) or 0)
+            model_out = str(getattr(result, "model", "") or "")
+            try:
+                steps_out = [
+                    {
+                        "iteration": s.iteration,
+                        "phase": s.phase,
+                        "content": (s.content or "")[:600],
+                        "tool_used": s.tool_used,
+                        "result": (s.result.output[:400] if s.result else None),
+                    }
+                    for s in (result.steps or [])
+                ]
+            except Exception:
+                steps_out = []
         except Exception as e:
             reply = f"[error] {e}"
             err = f"{type(e).__name__}: {e}"
@@ -6096,7 +6180,7 @@ def _sse_stream_response(message: str, session_id: str, model: str, agent_id: st
                 import contextlib as _ctx
                 with _ctx.suppress(BaseException):
                     await task
-        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id), 'success': ok, 'error': err or None, 'permission_level': level, 'permission_level_name': _level_name(level) if level is not None else None, 'permission_level_note': level_note or None}, ensure_ascii=False)}\n\n"
+        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id), 'success': ok, 'error': err or None, 'iterations': iters_out, 'model': model_out, 'steps': steps_out, 'permission_level': level, 'permission_level_name': _level_name(level) if level is not None else None, 'permission_level_note': level_note or None}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 

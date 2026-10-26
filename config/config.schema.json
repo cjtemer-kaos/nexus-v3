@@ -169,6 +169,14 @@
             "failures_stop": {
               "type": "integer",
               "minimum": 1
+            },
+            "tool_warn": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tool_stop": {
+              "type": "integer",
+              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -805,6 +813,10 @@
         },
         "distill_model": {
           "type": "string"
+        },
+        "distill_min_interval_s": {
+          "type": "number",
+          "minimum": 0
         },
         "distill_on_session_end": {
           "type": "boolean"

@@ -40,6 +40,10 @@ agent_loop:
     repeat_stop: 8
     failures_warn: 3
     failures_stop: 6
+    # Misma herramienta con argumentos DISTINTOS (ej: leer 9 archivos de a uno):
+    # a las 5 se inyecta un recordatorio para cambiar de estrategia; a las 10 se corta.
+    tool_warn: 5
+    tool_stop: 10
   heartbeat_ms: 2000
   # assisted = las tools mutantes piden aprobacion; auto = se aplican solas.
   auto_apply: assisted
@@ -329,6 +333,9 @@ learning:
   # instalado en ESTA pc (nada hardcodeado). Si falla, queda el digest determinista.
   distill_llm: true
   distill_model: ""   # override opcional; vacio = auto por capacidad (fast/general)
+  # Freno del destilado por compactacion: el hook corre cada vez que se compacta y sin
+  # esto se repetia el mismo trabajo (LLM + embeddings) en cada iteracion del loop.
+  distill_min_interval_s: 180
   # Red de seguridad: al cerrar una sesion (o al arrancar el server) destilar las
   # sesiones con turnos que nunca compactaron, para no perder conocimiento.
   distill_on_session_end: true

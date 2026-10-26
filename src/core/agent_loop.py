@@ -201,10 +201,21 @@ class AgentLoop:
         self.anti_loop_repeat_stop = int(_anti.get("repeat_stop", 4) or 4)
         self.anti_loop_failures_warn = int(_anti.get("failures_warn", 3) or 3)
         self.anti_loop_failures_stop = int(_anti.get("failures_stop", 6) or 6)
+        # Por herramienta (aunque cambien los args): avisar y cortar.
+        try:
+            self.anti_loop_tool_warn = int(_anti.get("tool_warn", 5) or 5)
+            self.anti_loop_tool_stop = int(_anti.get("tool_stop", 10) or 10)
+        except Exception:
+            self.anti_loop_tool_warn, self.anti_loop_tool_stop = 5, 10
 
         # Per-task retry/replan counters
         self._retry_counts: dict[str, int] = {}
         self._replan_counts: dict[str, int] = {}
+        # Histéresis de compactación: tras compactar no se vuelve a compactar hasta
+        # que el contexto crezca de nuevo por encima de este piso (tokens estimados).
+        # Sin esto, con resultados de tools grandes el loop compactaba en casi todas
+        # las iteraciones (y cada compactación disparaba destilado + LLM de resumen).
+        self._no_recompact_below: dict[str, int] = {}
 
     def _effective_context_max_tokens(self, session_id: str) -> int:
         """Presupuesto de contexto corregido por subestimacion del tokenizer.
@@ -218,6 +229,48 @@ class AgentLoop:
         if factor <= 1.0:
             return self.context_max_tokens
         return max(1024, int(self.context_max_tokens / factor))
+
+    def _should_compact(self, session_id: str, dict_msgs: list[dict], max_tokens: int,
+                        est_tokens: int | None = None) -> bool:
+        """Compactar sólo si se pasó el umbral Y se superó el piso de histéresis."""
+        if self.compaction is None or not hasattr(self.compaction, "maybe_compact"):
+            return False
+        if est_tokens is None:
+            try:
+                est_tokens = int(self.compaction.estimate_tokens_for_messages(dict_msgs))
+            except Exception:
+                est_tokens = 0
+        floor = int(self._no_recompact_below.get(session_id, 0) or 0)
+        if floor and est_tokens <= floor:
+            return False
+        try:
+            self._last_est_tokens = est_tokens  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return bool(self.compaction.maybe_compact(dict_msgs, max_tokens, self.compact_threshold))
+
+    def _note_compaction(self, session_id: str, metrics: Any, dict_msgs: list[dict]) -> None:
+        """Registra el piso de histéresis y deja traza de la compactación en el log."""
+        try:
+            md = metrics.to_dict() if hasattr(metrics, "to_dict") else dict(metrics or {})
+        except Exception:
+            md = {}
+        before = int(md.get("tokens_before", 0) or 0)
+        if before <= 0:
+            before = int(getattr(self, "_last_est_tokens", 0) or 0)
+        after = int(md.get("tokens_after", md.get("compressed_tokens", 0)) or 0)
+        if after <= 0:
+            try:
+                after = int(self.compaction.estimate_tokens_for_messages(dict_msgs))
+            except Exception:
+                after = 0
+        # Tras compactar, dejar aire: no re-compactar hasta crecer 20% sobre lo que quedó.
+        self._no_recompact_below[session_id] = int(after * 1.2) if after > 0 else 0
+        logger.info(
+            "compact sesión %s: %d -> %d tokens est. (piso %d, budget %d, umbral %.2f, capas %s)",
+            session_id, before, after, self._no_recompact_below.get(session_id, 0),
+            self.context_max_tokens, self.compact_threshold, md.get("layers", []),
+        )
 
     def _persist_compaction_summary(self, session_id: str, dict_msgs: list[dict]) -> None:
         """Guarda el resumen L4 como mensaje real (durable entre reinicios)."""
@@ -578,7 +631,7 @@ class AgentLoop:
             last = last[:1500] + "\n…[truncado]"
         return "Listo (respuesta sintetizada de las herramientas ejecutadas):\n" + last
 
-    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, on_reasoning=None, steer=None, extra_system: str | None = None) -> LoopResult:
+    async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, on_reasoning=None, on_step=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
         Args:
@@ -590,6 +643,27 @@ class AgentLoop:
         """
         t0 = time.monotonic()
         steps: list[LoopStep] = []
+        _emitted = 0
+
+        async def _flush_steps() -> None:
+            """Reenvía al cliente los pasos nuevos (streaming en vivo de la trayectoria)."""
+            nonlocal _emitted
+            cb = getattr(self, "_on_step", None)
+            if cb is None or _emitted >= len(steps):
+                _emitted = len(steps)
+                return
+            for _s in steps[_emitted:]:
+                try:
+                    await cb({
+                        "iteration": _s.iteration,
+                        "phase": _s.phase,
+                        "content": _s.content[:600],
+                        "tool_used": _s.tool_used,
+                        "result": (_s.result.output[:400] if _s.result else None),
+                    })
+                except Exception:
+                    pass
+            _emitted = len(steps)
         trajectory = trajectory or Trajectory(session_id=session_id, task=task)
         # Resume: cerrar turnos interrumpidos antes de emitir nada nuevo.
         try:
@@ -606,6 +680,7 @@ class AgentLoop:
         self._consecutive_failures = 0  # type: ignore[attr-defined]
         self._tool_fp_window = []  # type: ignore[attr-defined]
         self._tool_repeat = {}  # type: ignore[attr-defined]
+        self._tool_total = {}  # type: ignore[attr-defined]
         try:
             if self.budget is not None:
                 self.budget.reset()  # reset per-run (budget persiste en instancias reusadas)
@@ -615,6 +690,7 @@ class AgentLoop:
         self._resp_model_last = ""  # type: ignore[attr-defined]
         self._on_delta = on_delta  # type: ignore[attr-defined]
         self._on_reasoning = on_reasoning  # type: ignore[attr-defined]
+        self._on_step = on_step  # type: ignore[attr-defined]
         # P0 prompt-cache stickiness: fija el modelo UNA vez por run (si no se pidió uno)
         # para no invalidar el prompt/KV cache cambiando de modelo entre turnos.
         if (self._req_model is None and getattr(self, "router", None) is not None
@@ -633,6 +709,17 @@ class AgentLoop:
             try:
                 from .session_log import Message
                 self.session_log.append(session_id, Message(role="user", content=task))
+                # Título de la sesión = primer pedido del usuario (como opencode), sin
+                # markdown ni saltos: la barra lateral mostraba la respuesta o el resumen.
+                try:
+                    _sess = self.session_log.get_session(session_id)
+                    if _sess is not None and not str(getattr(_sess, "title", "") or "").strip():
+                        _t = " ".join(task.strip().split())
+                        _t = _t.replace("**", "").replace("`", "").replace("#", "").strip()
+                        if _t:
+                            self.session_log.update_session(session_id, title=_t[:80])
+                except Exception:
+                    pass
             except Exception as e:
                 logger.debug(f"session append user falló: {e}")
         if self.event_store is not None:
@@ -814,7 +901,7 @@ class AgentLoop:
                 # Use router to decide if we need compaction via token estimate.
                 # Presupuesto corregido por el usage real del provider (Cline).
                 max_tokens = self._effective_context_max_tokens(session_id)
-                if hasattr(self.compaction, "maybe_compact") and self.compaction.maybe_compact(dict_msgs, max_tokens):
+                if self._should_compact(session_id, dict_msgs, max_tokens):
                     await self._distill(session_id)
                     _limit = int(max_tokens * self.compact_threshold)
                     _prev, _progress = self._summary_state(session_id)
@@ -824,6 +911,7 @@ class AgentLoop:
                             previous_summary=_prev, progress_messages=_progress)
                     else:
                         dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                    self._note_compaction(session_id, cmetrics, dict_msgs)
                     self._persist_compaction_summary(session_id, dict_msgs)
                     self._persist_compaction_state(session_id, cmetrics, dict_msgs)
                     await self._emit_compact_hook(
@@ -1130,6 +1218,7 @@ class AgentLoop:
                     except Exception:
                         tool_args = {}
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"decide: {tool_name}({json.dumps(tool_args, ensure_ascii=False)[:300]})", tool_used=tool_name))
+                await _flush_steps()
 
                 # Act
                 tool_result_str = ""
@@ -1155,6 +1244,32 @@ class AgentLoop:
                             pass
                     elif _n >= self.anti_loop_repeat_stop:
                         final_output = f"[doom-loop: {tool_name} repetido {_n} veces con mismos args — bucle detenido; sin respuesta final]"
+                        success = False
+                        iteration = max_iters  # force exit
+                        break
+                except Exception:
+                    pass
+                # Anti-bucle por HERRAMIENTA (aunque cambien los argumentos): leer los
+                # archivos de a uno hasta quedarse sin presupuesto no es "doom loop"
+                # técnico pero tampoco progresa. Avisa y, si insiste, corta.
+                try:
+                    _tot = getattr(self, "_tool_total", None)
+                    if _tot is None:
+                        _tot = {}
+                        self._tool_total = _tot  # type: ignore[attr-defined]
+                    _tn = _tot.get(tool_name, 0) + 1
+                    _tot[tool_name] = _tn
+                    if _tn == self.anti_loop_tool_warn:
+                        messages.append(LLMMessage(role="user", content=(
+                            f"[recordatorio del sistema] ya llamaste '{tool_name}' {_tn} veces en este "
+                            "turno. Si con esta herramienta no estás llegando al objetivo, cambiá de "
+                            "enfoque: usá una vía más directa (glob para listar, exec para contar o "
+                            "resumir en un comando, code_search para buscar) en vez de repetir la misma "
+                            "herramienta, y respondé con lo que ya tengas.")))
+                    elif _tn >= self.anti_loop_tool_stop:
+                        final_output = (
+                            f"[bucle de herramienta: '{tool_name}' llamada {_tn} veces sin llegar a una "
+                            "respuesta final — turno detenido para no agotar el presupuesto]")
                         success = False
                         iteration = max_iters  # force exit
                         break
@@ -1277,6 +1392,7 @@ class AgentLoop:
                         pass
 
             # ---- OBSERVE: budget check + compaction ----
+            await _flush_steps()
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado tras iter {iteration}: {self.budget.reason}"))
                 final_output = final_output or "[presupuesto agotado antes de respuesta final]"
@@ -1288,7 +1404,7 @@ class AgentLoop:
                 try:
                     dict_msgs = self._to_dicts(messages)
                     max_tokens = self._effective_context_max_tokens(session_id)
-                    if self.compaction.maybe_compact(dict_msgs, max_tokens):
+                    if self._should_compact(session_id, dict_msgs, max_tokens):
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
                         _limit = int(max_tokens * self.compact_threshold)
@@ -1299,6 +1415,7 @@ class AgentLoop:
                                 previous_summary=_prev, progress_messages=_progress)
                         else:
                             dict_msgs, _cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                        self._note_compaction(session_id, _cmetrics, dict_msgs)
                         self._persist_compaction_summary(session_id, dict_msgs)
                         self._persist_compaction_state(session_id, _cmetrics, dict_msgs)
                         await self._emit_compact_hook(
@@ -1311,6 +1428,7 @@ class AgentLoop:
             await _close_turn("tool_calls")
 
         # Finalize
+        await _flush_steps()
         duration_ms = (time.monotonic() - t0) * 1000
         if not final_output and trajectory.steps:
             # Fallback: last assistant content

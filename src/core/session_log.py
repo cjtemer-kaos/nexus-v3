@@ -55,6 +55,8 @@ class Session:
     project: str = "default"
     parent_id: Optional[str] = None  # maps to parent_session_id column (BLUEPRINT compat)
     summary: str = ""
+    # Nombre corto de la sesión (primer pedido del usuario), para la barra lateral.
+    title: str = ""
     compact_count: int = 0
     total_tokens: int = 0
     # Id del mensaje `system` que contiene el ultimo resumen de compactacion.
@@ -70,6 +72,7 @@ class Session:
             "parent_id": self.parent_id,
             "parent_session_id": self.parent_id,
             "summary": self.summary,
+            "title": self.title,
             "compact_count": self.compact_count,
             "total_tokens": self.total_tokens,
             "summary_message_id": self.summary_message_id,
@@ -190,6 +193,8 @@ class SessionLog:
                 _cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sessions)")}
                 if "summary_message_id" not in _cols:
                     self._conn.execute("ALTER TABLE sessions ADD COLUMN summary_message_id INTEGER")
+                if "title" not in _cols:
+                    self._conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT DEFAULT ''")
             except Exception:
                 pass
             # Migracion: mensajes sinteticos (resumen de compactacion) necesitan
@@ -226,6 +231,7 @@ class SessionLog:
                 created_at=row["created_at"],
                 last_active=row["last_active"],
                 summary=row["summary"] or "",
+                title=(row["title"] if "title" in row.keys() else "") or "",
                 compact_count=row["compact_count"] or 0,
                 total_tokens=row["total_tokens"] or 0,
                 summary_message_id=(row["summary_message_id"]
@@ -284,7 +290,7 @@ class SessionLog:
 
     def update_session(self, session_id: str, **fields) -> bool:
         """Generic update: summary, project, etc."""
-        allowed = {"summary", "project", "compact_count", "total_tokens", "summary_message_id"}
+        allowed = {"summary", "project", "compact_count", "total_tokens", "summary_message_id", "title"}
         sets = []
         vals = []
         for k, v in fields.items():

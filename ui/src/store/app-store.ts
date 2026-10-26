@@ -129,7 +129,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await sessionsApi()
       const sessions: SessionMeta[] = (data.sessions ?? []).map((s, i) => ({
         id: s.id,
-        title: s.summary || s.project || `Sesión ${i + 1}`,
+        title: s.title || s.summary || s.project || `Sesión ${i + 1}`,
         project: s.project,
         summary: s.summary,
         source: 'server',
@@ -152,7 +152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const s = await createSessionApi()
       set((x) => ({
-        sessions: [{ id: s.id, title: s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
+        sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
         activeSession: s.id,
       }))
       return s.id
@@ -171,7 +171,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const s = await createSessionApi()
         set((st) => ({
-          sessions: [...st.sessions, { id: s.id, title: s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
+          sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
           activeSession: s.id,
           messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
         }))

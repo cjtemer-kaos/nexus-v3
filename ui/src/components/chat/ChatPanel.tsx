@@ -6,11 +6,20 @@ import { cn } from '@/lib/utils'
 import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
+import { Markdown } from '@/components/chat/Markdown'
 
 type Pending = { key: string; file: File; preview?: string }
 
 const now = () => new Date().toLocaleTimeString().slice(0, 5)
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+
+// El modelo a veces escribe el bloque de tool_call como texto: no debe verse en el chat.
+const sanitizeAssistantText = (s: string) => {
+  let out = s || ''
+  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/<tool_call>[\s\S]*$/g, '')
+  out = out.replace(/<\/?tool_call>/g, '')
+  return out.replace(/\n{3,}/g, '\n\n').trim()
+}
 
 // Resumen de una línea para el bloque colapsable de una tool (estilo opencode).
 const summarize = (s: string) => {
@@ -78,7 +87,7 @@ export function ChatPanel() {
   const [slashQuery, setSlashQuery] = useState('')
   const [lastSteps, setLastSteps] = useState<any[]|null>(null)
   const [lastTodos, setLastTodos] = useState<any|null>(null)
-  const [showTraj, setShowTraj] = useState(false)
+  const [showTraj, setShowTraj] = useState(true)
   const [distillMsg, setDistillMsg] = useState<string | null>(null)
   const [distilling, setDistilling] = useState(false)
   const [speaking, setSpeaking] = useState(false)
@@ -315,11 +324,14 @@ export function ChatPanel() {
       let streamed = false
       if (uploads.length === 0) {
         try {
+          if (stillActive()) setLastSteps([])
           const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, agentId: (activeAgent && activeAgent !== 'default') ? activeAgent : undefined,
             onDelta: pushDelta,
+            onStep: (s) => { if (stillActive()) setLastSteps(prev => [...(prev || []), s as any]) },
             onReasoning: (t) => { if (stillActive()) setReasoning(prev => prev + t) } })
           const finalReply = (sres.success === false ? '⚠️ ' : '') + (sres.reply || acc || '[sin respuesta]')
           if (stillActive()) {
+            if (sres.steps?.length) setLastSteps(sres.steps as any)
             if (placed) updateMessage(msgId, finalReply)
             else addMessage({ id: msgId, role: 'assistant', content: finalReply, timestamp: now() })
           }
@@ -520,7 +532,7 @@ export function ChatPanel() {
                   ))}
                 </div>
               )}
-              <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              <div className="break-words">{m.role === 'assistant' ? <Markdown text={sanitizeAssistantText(m.content)} /> : <span className="whitespace-pre-wrap">{m.content}</span>}</div>
               <div className={cn('mt-1.5 flex items-center gap-2 text-[11px]', m.role === 'user' ? 'text-[#B9DBFF] justify-end' : 'text-[#9BA1AA]')}>
                 <span>{m.timestamp}</span>
                 <button
@@ -544,7 +556,7 @@ export function ChatPanel() {
         )}
         {(lastSteps && lastSteps.length>0) && (
           <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs">
-            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trayectoria: {lastSteps.length} pasos {showTraj? '▾':'▸'}</button>
+            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trayectoria: {lastSteps.length} pasos {isStreaming && <span className="text-[#FFB86B]">· en vivo</span>} {showTraj? '▾':'▸'}</button>
             {showTraj && <div className="mt-2 space-y-2 max-h-64 overflow-auto">{lastSteps.map((s:any,i:number)=>(<div key={i} className="rounded-lg border border-[#2C3037] bg-[#15171B] p-2"><div className="flex gap-2 text-[#9BA1AA]">#{s.iteration} <span className="text-[#4C9DFF]">{s.phase}</span> {s.tool_used && <span className="text-[#FFB86B]">{s.tool_used}</span>}</div><div className="mt-1 whitespace-pre-wrap text-[#EDEEF0]">{String(s.content||'').slice(0,600)}</div></div>))}</div>}
           </div>
         )}

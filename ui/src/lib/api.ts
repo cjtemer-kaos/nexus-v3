@@ -102,10 +102,18 @@ export async function chatApi(
 }
 
 // Streaming token-a-token (pi): consume /api/chat/stream (SSE) y llama onDelta por chunk.
+export type ChatStreamStep = { iteration: number; phase: string; content: string; tool_used?: string | null; result?: string | null };
 export async function chatStreamApi(
   message: string,
-  opts: { sessionId?: string; model?: string; agentId?: string; onDelta?: (t: string) => void; onReasoning?: (t: string) => void } = {},
-): Promise<{ reply: string; success: boolean; error?: string; session_id?: string }> {
+  opts: {
+    sessionId?: string;
+    model?: string;
+    agentId?: string;
+    onDelta?: (t: string) => void;
+    onReasoning?: (t: string) => void;
+    onStep?: (s: ChatStreamStep) => void;
+  } = {},
+): Promise<{ reply: string; success: boolean; error?: string; session_id?: string; steps?: ChatStreamStep[]; iterations?: number; model?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 900000); // cap 15 min: alineado con el budget del server
@@ -125,6 +133,9 @@ export async function chatStreamApi(
     let sessionId = "";
     let success = true;
     let errorMsg = "";
+    let steps: ChatStreamStep[] = [];
+    let iterations = 0;
+    let modelUsed = "";
     const handleEvent = (raw: string) => {
       const dataLines = raw
         .split("\n")
@@ -137,7 +148,14 @@ export async function chatStreamApi(
         const obj = JSON.parse(line);
         if (obj.delta && opts.onDelta) opts.onDelta(String(obj.delta));
         if (obj.reasoning && opts.onReasoning) opts.onReasoning(String(obj.reasoning));
+        if (obj.step) {
+          steps = [...steps, obj.step as ChatStreamStep];
+          opts.onStep?.(obj.step as ChatStreamStep);
+        }
         if (obj.reply) reply = String(obj.reply);
+        if (Array.isArray(obj.steps)) steps = obj.steps as ChatStreamStep[];
+        if (typeof obj.iterations === "number") iterations = obj.iterations;
+        if (obj.model) modelUsed = String(obj.model);
         if (obj.session_id) sessionId = String(obj.session_id);
         if (typeof obj.success === "boolean") success = obj.success;
         if (obj.error) errorMsg = String(obj.error);
@@ -157,7 +175,7 @@ export async function chatStreamApi(
       }
     }
     if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
-    return { reply, success, error: errorMsg || undefined, session_id: sessionId || undefined };
+    return { reply, success, error: errorMsg || undefined, session_id: sessionId || undefined, steps, iterations, model: modelUsed || undefined };
   } catch (e) {
     if ((e as Error).name === "AbortError") throw new Error("stream timeout 900s — el modelo local tarda; reintenta");
     throw e;
@@ -233,7 +251,7 @@ export async function execCmd(command: string, cwd = "./workspace", timeout = 15
   return res.json();
 }
 
-export type SessionInfo = { id: string; project?: string; parent_id?: string | null; summary?: string; compact_count?: number; total_tokens?: number; created_at?: string; last_active?: string }
+export type SessionInfo = { id: string; project?: string; parent_id?: string | null; summary?: string; title?: string; compact_count?: number; total_tokens?: number; created_at?: string; last_active?: string }
 
 export async function sessionsApi(limit = 1000): Promise<{ sessions: SessionInfo[] }> {
   const res = await apiFetch(`/api/sessions?limit=${limit}`);
