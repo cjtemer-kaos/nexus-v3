@@ -2222,13 +2222,71 @@ async def get_messages(session_id: str, limit: int = 10000, offset: int = 0):
     return {"session_id": session_id, "messages": rows, "count": len(rows)}
 
 
+def _tool_calls_from_body(raw) -> tuple[dict, ...]:
+    """Normaliza `tool_calls` de un POST al shape del wire. Invalido -> 400 con el motivo.
+
+    Un par `assistant(tool_calls)` -> `tool` solo sirve si el id de la llamada
+    coincide con el `tool_call_id` del resultado; aceptar cualquier cosa acá
+    trasladaría el error al reanudar, donde ya no hay contexto para explicarlo.
+    """
+    import json as _json
+
+    if raw is None or raw == "":
+        return ()
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="tool_calls debe ser una lista")
+    out: list[dict] = []
+    for _i, _tc in enumerate(raw):
+        if not isinstance(_tc, dict):
+            raise HTTPException(status_code=400, detail=f"tool_calls[{_i}] debe ser un objeto")
+        _fn = _tc.get("function")
+        _fn = _fn if isinstance(_fn, dict) else {}
+        _id = str(_tc.get("id") or "").strip()
+        _name = str(_fn.get("name") or _tc.get("name") or "").strip()
+        if not _id:
+            raise HTTPException(status_code=400, detail=f"tool_calls[{_i}] sin id")
+        if not _name:
+            raise HTTPException(status_code=400, detail=f"tool_calls[{_i}] sin function.name")
+        _args = _fn.get("arguments", _tc.get("arguments"))
+        if isinstance(_args, str):
+            try:
+                _args = _json.loads(_args) if _args.strip() else {}
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"tool_calls[{_i}].function.arguments no es JSON válido")
+        if _args is None:
+            _args = {}
+        if not isinstance(_args, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"tool_calls[{_i}].function.arguments debe ser un objeto")
+        out.append({"id": _id, "type": "function",
+                    "function": {"name": _name, "arguments": _args}})
+    return tuple(out)
+
+
 @app.post("/api/sessions/{session_id}/messages")
 async def append_message(session_id: str, request: Request):
     body = await _json_body(request)
-    role = body.get("role", "user")
-    content = body.get("content", "")
-    if not content:
+    # `content: null` con tool_calls pasaba el chequeo viejo y rompía el INSERT
+    # (NOT NULL); un content no-texto quedaba en la DB con un tipo que al reanudar
+    # hacía fallar el recorte del historial. Un cliente así se corrige con un 400,
+    # no guardando algo que "parece válido".
+    role = str(body.get("role") or "user")
+    _raw_content = body.get("content")
+    if _raw_content is not None and not isinstance(_raw_content, str):
+        raise HTTPException(status_code=400, detail="content debe ser texto")
+    content = _raw_content or ""
+    tool_calls = _tool_calls_from_body(body.get("tool_calls"))
+    # Un assistant que solo emitió tool_calls tiene content vacío: el par es
+    # válido sin texto (así lo escribe el loop).
+    if not content and not tool_calls:
         raise HTTPException(status_code=400, detail="content required")
+    if tool_calls and role != "assistant":
+        raise HTTPException(
+            status_code=400,
+            detail=f"tool_calls solo en un mensaje assistant (llegó role={role!r})")
     slog = _session_log()
     # Sin esto el INSERT choca con la FK y sale un 500 por un error del cliente.
     if slog.get_session(session_id) is None:
@@ -2236,7 +2294,8 @@ async def append_message(session_id: str, request: Request):
     from src.core.session_log import Message
     msg = Message(role=role, content=content, tool_call_id=body.get("tool_call_id", ""),
                   tool_name=body.get("tool_name", ""), kind=body.get("kind", "") or "",
-                  display_role=body.get("display_role", "") or "")
+                  display_role=body.get("display_role", "") or "",
+                  tool_calls=tool_calls)
     try:
         mid = slog.append(session_id, msg)
     except Exception as e:

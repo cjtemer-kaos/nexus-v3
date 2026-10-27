@@ -21,6 +21,7 @@ import pytest
 
 from src.core.agent_loop import AgentLoop, _SIN_RESULTADO, _replay_history
 from src.core.iteration_budget import IterationBudget
+from src.core.provider_base import BaseProvider, LLMResponse, ToolCall
 from src.core.provider_router import ModelRoute, ProviderRouter
 from src.core.session_log import Message, SessionLog
 from src.core.tool_registry import ToolRegistry
@@ -226,6 +227,79 @@ def test_el_loop_persiste_la_llamada_sin_texto(tmp_path):
         slog.close()
 
 
+class _DosLlamadasYMuere(BaseProvider):
+    """Primer turno: dos llamadas; la segunda mata el proceso sin devolver resultado."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        self.calls += 1
+        if self.calls == 1 and tools:
+            return LLMResponse(
+                content="",
+                tool_calls=(
+                    ToolCall(id="call_a", name="echo", arguments={"text": "uno"}),
+                    ToolCall(id="call_b", name="boom", arguments={}),
+                ),
+                finish_reason="tool_calls",
+                model="mock",
+            )
+        return LLMResponse(content="no debería llegar acá", model="mock")
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["mock"]
+
+
+def test_muerte_a_mitad_del_batch_conserva_lo_ya_ejecutado(tmp_path):
+    """Si el proceso muere entre dos tools, la primera queda en disco y la segunda no.
+
+    Es la razón por la que el resultado se persiste dentro del bucle y no al final
+    del turno: al reanudar, `_replay_history` solo tiene que cerrar la llamada que
+    nunca llegó a ejecutarse, no reconstruir todo el turno.
+    """
+    ruta = tmp_path / "session.db"
+    slog = SessionLog(str(ruta))
+    sess = slog.create_session(project="crash")
+    reg = ToolRegistry()
+    reg.register_function(lambda text: f"echo:{text}", name="echo", description="echo")
+
+    def boom() -> str:
+        raise SystemExit(1)  # un BaseException no lo captura el loop ni el dispatch
+
+    reg.register_function(boom, name="boom", description="muere el proceso")
+    router = ProviderRouter()
+    router.register_provider("mock", _DosLlamadasYMuere())
+    router.register_model(ModelRoute(id="mock", provider_name="mock", tier=3))
+    loop = AgentLoop(provider_router=router, tool_registry=reg,
+                     budget=IterationBudget(max_iterations=5), session_log=slog)
+
+    with pytest.raises(SystemExit):
+        asyncio.run(loop.run(task="hacé dos cosas", session_id=sess.id, hint="coding"))
+    slog.close()
+
+    # Se reabre desde el archivo, como al reiniciar la app.
+    slog2 = SessionLog(str(ruta))
+    try:
+        filas = slog2.messages_with_ids(sess.id)
+        roles = [f["role"] for f in filas]
+        assert roles == ["user", "assistant", "tool"], roles
+        assert [t["id"] for t in filas[1]["tool_calls"]] == ["call_a", "call_b"]
+        assert filas[2]["tool_call_id"] == "call_a"
+        assert filas[2]["content"] == "echo:uno"
+
+        replay = _replay_history(filas)
+        assert [m.role for m in replay] == ["user", "assistant", "tool", "tool"]
+        assert replay[2].content == "echo:uno"
+        assert replay[3].tool_call_id == "call_b"
+        assert replay[3].content == _SIN_RESULTADO
+    finally:
+        slog2.close()
+
+
 @pytest.mark.parametrize("role", ["user", "assistant"])
 def test_branch_copia_los_tool_calls(tmp_path, role):
     """`branch(copy_messages=True)` replica filas, incluidas las llamadas."""
@@ -238,3 +312,82 @@ def test_branch_copia_los_tool_calls(tmp_path, role):
         assert copia and copia[0].tool_calls == CALLS
     finally:
         slog.close()
+
+
+# ------------------------------------------------------------------- el REST
+
+@pytest.fixture()
+def cliente(tmp_path, monkeypatch):
+    """TestClient con la session log en tmp: escribir el par no toca data/session.db."""
+    from fastapi.testclient import TestClient
+
+    from src.api import server
+
+    slog = SessionLog(str(tmp_path / "api.db"))
+    monkeypatch.setitem(server._state, "session_log", slog)
+    try:
+        yield TestClient(server.app), slog
+    finally:
+        slog.close()
+
+
+def test_post_message_acepta_el_par_completo(cliente):
+    """Un cliente REST puede escribir assistant(tool_calls, sin texto) + su resultado."""
+    http, slog = cliente
+    sid = slog.create_session().id
+
+    r = http.post(f"/api/sessions/{sid}/messages", json={
+        "role": "assistant", "content": "", "tool_calls": list(CALLS)})
+    assert r.status_code == 200, r.text
+    r2 = http.post(f"/api/sessions/{sid}/messages", json={
+        "role": "tool", "content": "echo:hola", "tool_name": "echo", "tool_call_id": "call_1"})
+    assert r2.status_code == 200, r2.text
+
+    filas = http.get(f"/api/sessions/{sid}/messages").json()["messages"]
+    assert [f["role"] for f in filas] == ["assistant", "tool"]
+    assert filas[0]["content"] == ""
+    assert filas[0]["tool_calls"] == list(CALLS)
+    assert filas[1]["tool_call_id"] == "call_1"
+
+    replay = _replay_history(filas)
+    assert [m.role for m in replay] == ["assistant", "tool"]
+    assert replay[0].tool_calls[0].arguments == {"text": "hola"}
+    assert replay[1].tool_call_id == "call_1"
+
+
+def test_post_message_normaliza_arguments_en_texto(cliente):
+    """`arguments` como string JSON (lo que manda un cliente OpenAI-compat) se parsea."""
+    http, slog = cliente
+    sid = slog.create_session().id
+    r = http.post(f"/api/sessions/{sid}/messages", json={
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": "call_x", "function": {"name": "echo",
+                                                     "arguments": '{"text":"hola"}'}}]})
+    assert r.status_code == 200, r.text
+    tc = http.get(f"/api/sessions/{sid}/messages").json()["messages"][0]["tool_calls"][0]
+    assert tc["type"] == "function"
+    assert tc["function"]["arguments"] == {"text": "hola"}
+
+
+@pytest.mark.parametrize("cuerpo, motivo", [
+    ({"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "echo"}}]},
+     "sin id"),
+    ({"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {}}]},
+     "sin function.name"),
+    ({"role": "assistant", "content": "",
+      "tool_calls": [{"id": "c1", "function": {"name": "echo", "arguments": "{roto"}}]},
+     "arguments no es JSON"),
+    ({"role": "assistant", "content": "",
+      "tool_calls": [{"id": "c1", "function": {"name": "echo", "arguments": [1, 2]}}]},
+     "arguments no es objeto"),
+    ({"role": "user", "content": "", "tool_calls": list(CALLS)},
+     "tool_calls en role=user"),
+    ({"role": "assistant", "content": ""}, "ni texto ni llamadas"),
+    ({"content": 12345}, "content no textual"),
+])
+def test_post_message_rechaza_pares_invalidos(cliente, cuerpo, motivo):
+    http, slog = cliente
+    sid = slog.create_session().id
+    r = http.post(f"/api/sessions/{sid}/messages", json=cuerpo)
+    assert r.status_code == 400, f"{motivo}: {r.status_code} {r.text}"
+    assert slog.count_messages(sid) == 0

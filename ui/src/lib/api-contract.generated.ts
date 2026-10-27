@@ -4,7 +4,7 @@
 
 
 /** Versión del contrato: hash del contenido. Cambia si cambia una ruta. */
-export const API_CONTRACT_VERSION = "70132782ee27"
+export const API_CONTRACT_VERSION = "95816a741fb9"
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -127,7 +127,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "GET", path: "/api/sessions/{session_id}/export", handler: "export_session", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/fork", handler: "session_fork", pathParams: ['session_id'], query: [], body: ['copy_messages'], bodyOpen: false, response: ['id', 'ok'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/messages", handler: "get_messages", pathParams: ['session_id'], query: ['limit', 'offset'], body: [], bodyOpen: false, response: ['count', 'messages', 'session_id'], stream: false },
-  { method: "POST", path: "/api/sessions/{session_id}/messages", handler: "append_message", pathParams: ['session_id'], query: [], body: ['content', 'display_role', 'kind', 'role', 'tool_call_id', 'tool_name'], bodyOpen: false, response: ['id', 'session_id'], stream: false },
+  { method: "POST", path: "/api/sessions/{session_id}/messages", handler: "append_message", pathParams: ['session_id'], query: [], body: ['content', 'display_role', 'kind', 'role', 'tool_call_id', 'tool_calls', 'tool_name'], bodyOpen: false, response: ['id', 'session_id'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/mode", handler: "session_mode_get", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['mode'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/mode", handler: "session_mode_set", pathParams: ['session_id'], query: [], body: ['mode'], bodyOpen: false, response: ['mode', 'ok'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/replay", handler: "session_replay", pathParams: ['session_id'], query: ['limit'], body: [], bodyOpen: false, response: ['events'], stream: false },
