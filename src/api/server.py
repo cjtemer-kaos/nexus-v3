@@ -5153,10 +5153,17 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise PermissionError(_blocked)
         return _json.dumps(_jobs().start(cmd, cwd_p, label=label), ensure_ascii=False)
 
+    def _job_o_error(fn, *args, **kwargs):
+        """KeyError de un job inexistente -> ValueError sin las comillas del repr."""
+        try:
+            return fn(*args, **kwargs)
+        except KeyError as e:
+            raise ValueError(str(e).strip("'\"")) from None
+
     def job_read_tool(job_id: str, cursor: int = 0, max_chars: int = 20000) -> str:
         """Lee la salida acumulada de un job (delta desde cursor) y su estado."""
         import json as _json
-        return _json.dumps(_jobs().read(job_id, cursor=cursor, max_chars=max_chars),
+        return _json.dumps(_job_o_error(_jobs().read, job_id, cursor=cursor, max_chars=max_chars),
                            ensure_ascii=False)
 
     def job_wait_tool(job_id: str, timeout: int = 30, cursor: int = 0,
@@ -5164,13 +5171,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """Espera que un job termine (max 300 s) y devuelve su salida desde cursor."""
         import json as _json
         return _json.dumps(
-            _jobs().wait(job_id, timeout_s=timeout, cursor=cursor, max_chars=max_chars),
+            _job_o_error(_jobs().wait, job_id, timeout_s=timeout, cursor=cursor,
+                         max_chars=max_chars),
             ensure_ascii=False)
 
     def job_kill_tool(job_id: str) -> str:
         """Termina un job y todos sus hijos (taskkill /T /F en Windows)."""
         import json as _json
-        return _json.dumps(_jobs().kill(job_id), ensure_ascii=False)
+        return _json.dumps(_job_o_error(_jobs().kill, job_id), ensure_ascii=False)
 
     def job_list_tool() -> str:
         """Lista los jobs de esta sesión del backend con estado y tiempo transcurrido."""

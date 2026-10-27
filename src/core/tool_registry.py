@@ -177,6 +177,8 @@ ARG_ALIASES: dict[str, str] = {
     "regex": "pattern",
     "topic": "topic_key",
     "key": "topic_key",
+    # job_start devuelve `id`; job_read/wait/kill piden `job_id`.
+    "id": "job_id",
     "cmd": "command",
 }
 

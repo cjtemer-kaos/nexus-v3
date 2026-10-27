@@ -242,8 +242,12 @@ class JobRegistry:
         return "running" if code is None else ("done" if code == 0 else f"failed:{code}")
 
     def _public(self, rec: dict) -> dict:
+        # "id" y "job_id" con el mismo valor: las tools consumen `job_id` pero el
+        # registro publica `id`, y un modelo que copia la clave del resultado
+        # (`job_read(id=...)`) perdia el turno.
         return {
-            "id": rec["id"], "label": rec["label"], "command": rec["command"],
+            "id": rec["id"], "job_id": rec["id"],
+            "label": rec["label"], "command": rec["command"],
             "pid": rec["pid"], "state": self._state(rec), "log": rec["log"],
             "elapsed_s": round(time.time() - rec["started"], 1),
         }
