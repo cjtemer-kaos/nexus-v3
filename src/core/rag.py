@@ -2,7 +2,7 @@
 
 - Chunks de 800 chars con overlap 100 (igual que v2).
 - Embeddings cacheados por hash MD5.
-- Búsqueda por coseno en Python (sin dependencias).
+- Búsqueda por coseno con matriz numpy cacheada en proceso (fallback Python puro).
 - Fuente principal: nodos de knowledge_graph.db (cerebro propio v3).
 """
 from __future__ import annotations
@@ -272,23 +272,110 @@ def _mmr_rerank(scored: list[tuple], limit: int, lam: float = 0.7) -> list[tuple
     return [(s, src, content) for s, src, content, _ in chosen]
 
 
+_index_cache: dict = {"key": None, "matrix": None, "sources": None, "contents": None}
+_index_lock = threading.Lock()
+
+
+def _index_key(db: sqlite3.Connection):
+    """Clave barata de invalidacion: cantidad de chunks + ultimo id."""
+    try:
+        row = db.execute("SELECT count(*), coalesce(max(id), 0) FROM chunks").fetchone()
+        return (int(row[0] or 0), int(row[1] or 0))
+    except Exception:
+        return None
+
+
+def _cached_index(db: sqlite3.Connection):
+    """Matriz (N, dim) normalizada + fuentes + contenidos, cacheada en proceso.
+
+    Devuelve None si numpy no esta disponible o no hay chunks: ahi search cae al
+    coseno en Python puro de antes.
+    """
+    key = _index_key(db)
+    if key is None:
+        return None
+    with _index_lock:
+        if _index_cache["key"] == key and _index_cache["matrix"] is not None:
+            return _index_cache["matrix"], _index_cache["sources"], _index_cache["contents"]
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    rows = db.execute(
+        "SELECT source, content, embedding FROM chunks WHERE embedding IS NOT NULL"
+    ).fetchall()
+    if not rows:
+        return None
+    dim = min((len(b) // 4) for _, _, b in rows if b) if any(b for _, _, b in rows) else 0
+    if dim <= 0:
+        return None
+    mat = np.zeros((len(rows), dim), dtype=np.float32)
+    sources: list[str] = []
+    contents: list[str] = []
+    for i, (src, content, blob) in enumerate(rows):
+        if blob:
+            mat[i] = np.frombuffer(blob[: dim * 4], dtype=np.float32)
+        sources.append(src)
+        contents.append(content)
+    norms = np.linalg.norm(mat, axis=1)
+    norms[norms == 0] = 1.0
+    mat /= norms[:, None]
+    with _index_lock:
+        _index_cache.update(
+            {"key": key, "matrix": mat, "sources": sources, "contents": contents}
+        )
+    return mat, sources, contents
+
+
+def _score_numpy(index, qv: list[float], min_score: float, top: int = 200) -> list[tuple]:
+    """Coseno vectorizado. Devuelve top-N (score, source, content) ya ordenado."""
+    import numpy as np
+    mat, sources, contents = index
+    q = np.asarray(qv, dtype=np.float32)[: mat.shape[1]]
+    n = float(np.linalg.norm(q))
+    if n == 0 or q.size == 0:
+        return []
+    sims = mat @ (q / n)
+    keep = np.flatnonzero(sims >= min_score)
+    if keep.size == 0:
+        return []
+    keep = keep[np.argsort(-sims[keep])][:top]
+    return [(float(sims[i]), sources[i], contents[i]) for i in keep]
+
+
 def search(query: str, limit: int = 5, min_score: float = 0.25) -> list[dict]:
-    """Búsqueda semántica sobre el índice RAG. Descarta scores < min_score (fix: ruido ~0.05 pasaba)."""
+    """Búsqueda semántica sobre el índice RAG. Descarta scores < min_score (fix: ruido ~0.05 pasaba).
+
+    Con 19k chunks el coseno en Python puro tardaba 3.5-12 s por query. La matriz de
+    embeddings se arma una vez y se cachea en proceso (invalidada por count+max(id)).
+    """
     qvecs = embed(query)
     if not qvecs:
         return []
     qv = qvecs[0]
     db = _connect()
-    rows = db.execute("SELECT source, content, embedding FROM chunks").fetchall()
-    db.close()
-    scored = []
-    for src, content, blob in rows:
-        if not blob:
-            continue
-        s = _cos(qv, _blob_to_vec(blob))
-        if s >= min_score:
-            scored.append((s, src, content))
-    scored.sort(key=lambda x: -x[0])
+    try:
+        idx = _cached_index(db)
+    finally:
+        db.close()
+    if idx is not None:
+        scored = _score_numpy(idx, qv, min_score)
+    else:
+        db = _connect()
+        try:
+            rows = db.execute(
+                "SELECT source, content, embedding FROM chunks"
+            ).fetchall()
+        finally:
+            db.close()
+        scored = []
+        for src, content, blob in rows:
+            if not blob:
+                continue
+            s = _cos(qv, _blob_to_vec(blob))
+            if s >= min_score:
+                scored.append((s, src, content))
+        scored.sort(key=lambda x: -x[0])
     if len(scored) > limit:
         scored = _mmr_rerank(scored, limit)
     return [{"score": round(s, 4), "source": src, "content": content[:600]} for s, src, content in scored[:limit]]

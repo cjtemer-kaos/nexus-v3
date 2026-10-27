@@ -424,7 +424,11 @@ class ProviderRouter:
                         "de fallback (compactar y reintentar)", pname, m_id)
                     raise
                 self._record_fail(pname, m_id)
-                logger.warning(f"fallo chat enrutador {pname}/{m_id}: {e}")
+                logger.warning(
+                    f"fallo chat enrutador {pname}/{m_id}: "
+                    f"{type(e).__name__}: {e or repr(e)}"
+                )
+
                 continue
         # Ultimo recurso: si el turno requeria tools pero ningun modelo las soporta,
         # reintentar el principal SIN tools para que al menos responda.
@@ -531,7 +535,11 @@ class ProviderRouter:
                     logger.warning(f"stream {pname}/{m_id} falló a mitad: {e}")
                     raise
                 last_err = e
-                logger.warning(f"fallo stream enrutador {pname}/{m_id}: {e}")
+                logger.warning(
+                    f"fallo stream enrutador {pname}/{m_id}: "
+                    f"{type(e).__name__}: {e or repr(e)}"
+                )
+
                 continue
         # Degradado: reintentar el principal SIN tools (para que al menos responda).
         if tools and attempts:

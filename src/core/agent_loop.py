@@ -130,6 +130,8 @@ class LoopResult:
     steps: list[LoopStep]
     iterations: int
     total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     duration_ms: float = 0
     trajectory: Trajectory | None = None
     compact_metrics: Any | None = None
@@ -142,6 +144,8 @@ class LoopResult:
             "final_output": self.final_output,
             "iterations": self.iterations,
             "total_tokens": self.total_tokens,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
             "duration_ms": round(self.duration_ms, 1),
             "model": self.model,
             "steps": [
@@ -716,6 +720,8 @@ class AgentLoop:
         except Exception:
             pass
         total_tokens = 0
+        prompt_tokens_total = 0
+        completion_tokens_total = 0
         success = False
         final_output = ""
         self._empty_retries = 0  # type: ignore[attr-defined]
@@ -1122,6 +1128,8 @@ class AgentLoop:
                 _completion = len((llm_resp.content or "")) // 4
             turn_tokens = int(usage.get("total_tokens", 0) or _completion)
             total_tokens += turn_tokens
+            prompt_tokens_total += _prompt_tokens
+            completion_tokens_total += _completion
             self.budget.add_tokens(_completion)
 
             # Append assistant message to history
@@ -1557,6 +1565,8 @@ class AgentLoop:
             steps=steps,
             iterations=iteration,
             total_tokens=total_tokens,
+            prompt_tokens=prompt_tokens_total,
+            completion_tokens=completion_tokens_total,
             duration_ms=duration_ms,
             trajectory=trajectory,
             model=self._resp_model_last or self._req_model or "",

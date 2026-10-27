@@ -1481,7 +1481,8 @@ async def graph(
     min_weight = max(0.0, min(1.0, min_weight))
     if centrality not in ("hybrid", "degree", "pagerank"):
         centrality = "hybrid"
-    data = _load_graph_data(
+    data = await asyncio.to_thread(
+        _load_graph_data,
         limit=limit, q=(q or search).strip(), category=category.strip(),
         community=community.strip(), min_importance=min_importance,
         include_isolated=inc, relation=relation.strip(), min_weight=min_weight,
@@ -6090,9 +6091,9 @@ def _openai_model_target(model: str) -> dict:
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(req: Request):
-    """Compat OpenAI. `stream=true` es BUFFERED: el loop TDAO no expone tokens
-    incrementales por esta vía, así que se emite la respuesta completa en un chunk
-    y luego `[DONE]`. En error, el chunk trae `error` (detectable) además del texto."""
+    """Compat OpenAI. `stream=true` emite tokens a medida que el loop los produce
+    (los mismos eventos de /api/chat/stream, traducidos a chunks de OpenAI) y `usage`
+    sale del resultado real del turno. En error, el chunk final trae `error`."""
     try:
         body = await req.json()
     except Exception:
@@ -6123,6 +6124,19 @@ async def openai_chat_completions(req: Request):
         _lg.getLogger("nexus-v3").warning(
             "openai compat: modelo '%s' desconocido; se usa el routing automatico", model)
     stream = bool(body.get("stream"))
+    if stream:
+        # Streaming REAL (antes era buffered: el primer byte llegaba recien al final).
+        # Reusa el mismo motor de eventos que /api/chat/stream, sin correr el turno dos veces.
+        _hdrs_s = {"x-nexus-gema": target["gema"], "x-nexus-model": target["model"] or "auto"}
+        if target["fallback"]:
+            _hdrs_s["x-nexus-fallback"] = target["requested"]
+        return _openai_stream_response(
+            user_text,
+            model_id=target["gema"] or target["model"] or target["requested"] or "nexus-v3",
+            gema=target["gema"],
+            model=None if target["fallback"] else target["model"],
+            headers=_hdrs_s,
+        )
     error_msg = ""
     result = None
     try:
@@ -6178,22 +6192,76 @@ async def openai_chat_completions(req: Request):
     _hdrs = {"x-nexus-gema": target["gema"], "x-nexus-model": _modelo_real or target["model"] or "auto"}
     if target["fallback"]:
         _hdrs["x-nexus-fallback"] = target["requested"]
-    if not stream:
-        return JSONResponse({"id":"chatcmpl-nexus","object":"chat.completion","created":0,"model":model_id,"choices":[{"index":0,"message":{"role":"assistant","content": reply},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}, headers=_hdrs)
+    _uso = {
+        "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0) if result is not None else 0,
+        "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0) if result is not None else 0,
+        "total_tokens": int(getattr(result, "total_tokens", 0) or 0) if result is not None else 0,
+    }
+    return JSONResponse(
+        {
+            "id": "chatcmpl-nexus",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model_id,
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}
+            ],
+            "usage": _uso,
+        },
+        headers=_hdrs,
+    )
+
+
+def _openai_stream_response(message: str, model_id: str, gema: str | None = None,
+                            model: str | None = None, headers: dict | None = None):
+    """Traduce los eventos del turno al formato SSE de OpenAI (chunks delta + [DONE])."""
+    import json as _js
+
     async def gen():
-        # Buffered streaming: el loop no expone tokens incrementales por esta via,
-        # asi que se emite la respuesta completa en un chunk (valido para clientes
-        # OpenAI, aunque no sea token-a-token).
-        import json as _js
-        text = f"[error] {error_msg}" if error_msg else reply
-        chunk = {"id":"chatcmpl-nexus","object":"chat.completion.chunk","created":0,"model":model_id,"choices":[{"index":0,"delta":{"content": text},"finish_reason": None}]}
-        if error_msg:
-            chunk["error"] = {"message": error_msg, "type": "nexus_error"}
-        yield f"data: {_js.dumps(chunk, ensure_ascii=False)}\n\n"
-        done = {"id":"chatcmpl-nexus","object":"chat.completion.chunk","created":0,"model":model_id,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-        yield f"data: {_js.dumps(done)}\n\n"
+        _mid = model_id
+        _uso = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        enviado = False
+        error_final = None
+
+        def _chunk(delta: dict, finish=None, extra: dict | None = None) -> str:
+            body = {
+                "id": "chatcmpl-nexus",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": _mid,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            }
+            if extra:
+                body.update(extra)
+            return f"data: {_js.dumps(body, ensure_ascii=False)}\n\n"
+
+        async for item in _turn_events(
+            message, "", model or "auto", "", gema=gema,
+            hint=None if gema else None,
+        ):
+            if "delta" in item:
+                enviado = True
+                yield _chunk({"content": item["delta"]})
+            elif "reasoning" in item:
+                yield _chunk({"reasoning_content": item["reasoning"]})
+            elif "step" in item:
+                continue
+            elif "reply" in item:
+                _mid = item.get("model") or _mid
+                _uso = item.get("usage") or _uso
+                error_final = item.get("error")
+                if not enviado and item.get("reply"):
+                    enviado = True
+                    yield _chunk({"content": item["reply"]})
+        extra = {"usage": _uso}
+        if error_final:
+            extra["error"] = {"message": error_final, "type": "nexus_error"}
+        yield _chunk({}, finish="stop", extra=extra)
         yield "data: [DONE]\n\n"
-    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no", **_hdrs})
+
+    hdrs = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    hdrs.update(headers or {})
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=hdrs)
 @app.get("/v1/models")
 async def openai_models():
     """Compat OpenAI: expone las gemas (owned_by=nexus-gema) y los modelos reales.
@@ -6275,93 +6343,123 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
+async def _turn_events(message: str, session_id: str, model: str, agent_id: str = "",
+                       level: int | None = None, level_note: str = "",
+                       gema: str | None = None, hint: str | None = None):
+    """Generador de eventos de un turno (delta/reasoning/step + resumen final).
+
+    Fuente unica para /api/chat/stream y para el streaming OpenAI: el run se hace
+    UNA vez y cada transporte lo formatea a su manera.
+    """
+    import asyncio as _aio
+    q: _aio.Queue = _aio.Queue()
+
+    async def _on_delta(text: str):
+        if text:
+            await q.put({"delta": text})
+
+    async def _on_reasoning(text: str):
+        if text:
+            await q.put({"reasoning": text})
+
+    async def _on_step(step: dict):
+        if step:
+            await q.put({"step": step})
+
+    task = None
+    sess = None
+    ok = False
+    err = ""
+    steps_out: list = []
+    iters_out = 0
+    model_out = ""
+    usage_out = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    try:
+        # Fase 8: misma construccion estandar + streaming (pi).
+        from src.core.provider_router import infer_hint
+        slog = _session_log()
+        # Reusar la sesion activa si se pidio y existe; si no, crear una.
+        sess = slog.get_session(session_id) if session_id else None
+        if sess is None:
+            sess = slog.create_session(project="sse")
+        _RUNNING[sess.id] = {"steer": [], "started": __import__("time").time()}
+        task = _aio.create_task(_run_agent_once(
+            message,
+            session_id=sess.id,
+            hint=hint if hint is not None else (None if gema else infer_hint(message)),
+            model=None if model == "auto" else model,
+            gema=gema,
+            agent_id=(agent_id or None),
+            on_delta=_on_delta,
+            on_reasoning=_on_reasoning,
+            on_step=_on_step,
+            interactive=True,
+            source="chat-stream",
+            level=level,
+        ))
+        while not task.done():
+            try:
+                item = await _aio.wait_for(q.get(), timeout=0.25)
+                yield item
+            except _aio.TimeoutError:
+                continue
+        while not q.empty():
+            yield q.get_nowait()
+        result = await task
+        reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
+        ok = bool(result.success)
+        iters_out = int(getattr(result, "iterations", 0) or 0)
+        model_out = str(getattr(result, "model", "") or "")
+        for _k in usage_out:
+            usage_out[_k] = int(getattr(result, _k, 0) or 0)
+        try:
+            steps_out = [
+                {
+                    "iteration": s.iteration,
+                    "phase": s.phase,
+                    "content": (s.content or "")[:600],
+                    "tool_used": s.tool_used,
+                    "result": (s.result.output[:400] if s.result else None),
+                }
+                for s in (result.steps or [])
+            ]
+        except Exception:
+            steps_out = []
+    except Exception as e:
+        reply = f"[error] {e}"
+        err = f"{type(e).__name__}: {e}"
+    finally:
+        # Si el cliente desconecta (GeneratorExit), cancelar el run para no fugarlo.
+        if sess is not None:
+            _RUNNING.pop(sess.id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            import contextlib as _ctx
+            with _ctx.suppress(BaseException):
+                await task
+    yield {
+        "reply": reply,
+        "session_id": (sess.id if sess is not None else session_id),
+        "success": ok,
+        "error": err or None,
+        "iterations": iters_out,
+        "model": model_out,
+        "usage": usage_out,
+        "steps": steps_out,
+        "permission_level": level,
+        "permission_level_name": _level_name(level) if level is not None else None,
+        "permission_level_note": level_note or None,
+    }
+
+
 def _sse_stream_response(message: str, session_id: str, model: str, agent_id: str = "",
                          level: int | None = None, level_note: str = ""):
     async def gen():
         import json as _js3
-        import asyncio as _aio
-        q: _aio.Queue = _aio.Queue()
-
-        async def _on_delta(text: str):
-            if text:
-                await q.put({"delta": text})
-
-        async def _on_reasoning(text: str):
-            if text:
-                await q.put({"reasoning": text})
-
-        async def _on_step(step: dict):
-            if step:
-                await q.put({"step": step})
-
-        task = None
-        sess = None
-        ok = False
-        err = ""
-        steps_out: list = []
-        iters_out = 0
-        model_out = ""
-        try:
-            # Fase 8: misma construccion estandar + streaming (pi).
-            from src.core.provider_router import infer_hint
-            slog = _session_log()
-            # Reusar la sesion activa si se pidio y existe; si no, crear una.
-            sess = slog.get_session(session_id) if session_id else None
-            if sess is None:
-                sess = slog.create_session(project="sse")
-            _RUNNING[sess.id] = {"steer": [], "started": __import__("time").time()}
-            task = _aio.create_task(_run_agent_once(
-                message,
-                session_id=sess.id,
-                hint=infer_hint(message),
-                model=None if model == "auto" else model,
-                agent_id=(agent_id or None),
-                on_delta=_on_delta,
-                on_reasoning=_on_reasoning,
-                on_step=_on_step,
-                interactive=True,
-                source="chat-stream",
-                level=level,
-            ))
-            while not task.done():
-                try:
-                    item = await _aio.wait_for(q.get(), timeout=0.25)
-                    yield f"data: {_js3.dumps(item, ensure_ascii=False)}\n\n"
-                except _aio.TimeoutError:
-                    continue
-            while not q.empty():
-                yield f"data: {_js3.dumps(q.get_nowait(), ensure_ascii=False)}\n\n"
-            result = await task
-            reply = result.final_output or ("[sin respuesta]" if result.success else "[sin respuesta final del modelo]")
-            ok = bool(result.success)
-            iters_out = int(getattr(result, "iterations", 0) or 0)
-            model_out = str(getattr(result, "model", "") or "")
-            try:
-                steps_out = [
-                    {
-                        "iteration": s.iteration,
-                        "phase": s.phase,
-                        "content": (s.content or "")[:600],
-                        "tool_used": s.tool_used,
-                        "result": (s.result.output[:400] if s.result else None),
-                    }
-                    for s in (result.steps or [])
-                ]
-            except Exception:
-                steps_out = []
-        except Exception as e:
-            reply = f"[error] {e}"
-            err = f"{type(e).__name__}: {e}"
-        finally:
-            # Si el cliente desconecta (GeneratorExit), cancelar el run para no fugarlo.
-            if sess is not None:
-                _RUNNING.pop(sess.id, None)
-            if task is not None and not task.done():
-                task.cancel()
-                import contextlib as _ctx
-                with _ctx.suppress(BaseException):
-                    await task
-        yield f"data: {_js3.dumps({'reply': reply, 'session_id': (sess.id if sess is not None else session_id), 'success': ok, 'error': err or None, 'iterations': iters_out, 'model': model_out, 'steps': steps_out, 'permission_level': level, 'permission_level_name': _level_name(level) if level is not None else None, 'permission_level_note': level_note or None}, ensure_ascii=False)}\n\n"
+        async for item in _turn_events(
+            message, session_id, model, agent_id, level=level, level_note=level_note
+        ):
+            yield f"data: {_js3.dumps(item, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 
