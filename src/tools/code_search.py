@@ -90,8 +90,13 @@ async def code_search(
         import re
         try:
             pattern = re.compile(query)
-        except re.error:
-            return {"error": f"Invalid regex pattern: {query}"}
+        except re.error as e:
+            # El mensaje crudo ("Invalid regex pattern: def (") no decía qué
+            # escapar ni en qué idioma: el modelo repetía el mismo patrón.
+            return {"error": (
+                f"regex inválida {query!r}: {e}. "
+                f"Escapá los metacaracteres con barra invertida (\\( \\) \\[ \\] "
+                f"\\{{ \\}} \\| \\+ \\* \\.) o buscá el texto literal sin ellos.")}
         
         include_pattern = None
         if include:

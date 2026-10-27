@@ -4492,6 +4492,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     def write_file_tool(path: str, content: str) -> str:
         """Escribe un archivo dentro de allowed_roots (crea directorios intermedios)."""
         p = scope.check_path(path)
+        # Escribir sobre un directorio salía como "[Errno 13] Permission denied",
+        # que el modelo confundía con el scope jail y reintentaba igual.
+        if p.is_dir():
+            ejemplo = path.rstrip("/").rstrip("\\") + "/nota.md"
+            raise ValueError(
+                f"{path} es un directorio: write_file escribe archivos. Elegí un "
+                f"nombre dentro (ej: {ejemplo}).")
         scope.check_tool("write_file", {"path": path, "content": content})
 
         def _do() -> str:
@@ -4532,6 +4539,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """Reemplazo quirurgico (str_replace) en un archivo. `old` debe existir;
         si aparece >1 vez y replace_all=False -> error (evita ediciones ambiguas)."""
         p = scope.check_path(path)
+        # `old` vacío: `str.count("")` devuelve len+1, así que con replace_all=true
+        # el archivo quedaba "XuXnXoX" (un reemplazo entre cada caracter) y la tool
+        # respondía "editado (14 reemplazo/s)" como si hubiera salido bien.
+        if old == "":
+            raise ValueError(
+                f"el texto a reemplazar (`old`) está vacío en {path}: no se puede "
+                f"reemplazar 'nada' (rompería el archivo entero). Pasá el fragmento "
+                f"exacto a cambiar, con contexto suficiente para que sea único.")
         scope.check_tool("edit", {"path": path, "content": new})
         if not p.is_file():
             raise FileNotFoundError(f"no existe o no es archivo: {path}")
@@ -4645,6 +4660,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """
         import json as _json
         base = scope.check_path(path or ".")
+        # Un archivo existente no es "no existe": ese mensaje mandaba al modelo a
+        # reintentar la misma ruta (o a inventar otra) en vez de usar grep/read_file.
+        if base.exists() and base.is_file():
+            raise ValueError(
+                f"glob busca archivos dentro de un directorio y {path} es un archivo. "
+                f"Usá grep(pattern=..., path='{path}') para buscar adentro o "
+                f"read_file(path='{path}') para leerlo.")
         if not base.exists() or not base.is_dir():
             raise FileNotFoundError(f"directorio no existe: {path}")
         pat = (pattern or "*").strip() or "*"
