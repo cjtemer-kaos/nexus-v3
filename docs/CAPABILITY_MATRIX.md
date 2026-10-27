@@ -23,6 +23,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Diff review (UI) | ✅ | `ReviewPanel` (Cambios) + `/api/checkpoints/{id}/diff` |
 | Checkpoints / rollback de FS | ✅ | `checkpoints.snapshot` antes de cada `write_file`/`edit` + `/api/checkpoints/restore` |
 | Lista de tareas persistente por sesión | ✅ | tools `todo_write`/`todo_read` (`todo_store`, tabla `todos` en `session.db`), `GET/POST /api/todos` |
+| Comandos propios en markdown | ✅ | `custom_commands.py`: cada `.md` en `.nexus/commands/` (o `~/.nexus/commands/`) es `/nombre`, con `$ARGUMENTS`, `$1..$9` y `@ruta` acotado al proyecto; `GET/POST /api/slash` refresca en cada llamada |
 
 ## 2. Multi-agente / orquestación
 
@@ -150,6 +151,8 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Tools git por argv + `run_tests` | cierran §5.3 y §5.4: `git_status/diff/log/commit` parsean `--porcelain=v1 -z` (rutas con espacios y renombres), commit solo local y con mensaje como único `-m`; `run_tests` detecta pytest/npm/cargo/go y devuelve conteos + fallos parseados. Verificado por MCP real (`scripts/verify_new_tools_mcp.py`): 52 tools, `git_status` con head real, `run_tests` → `passed: 13` |
 | Parseo real de pytest | el resumen de pytest **no siempre** viene con `====` (con `-q` es `1 failed, 1 passed in 0.08s`): el regex viejo devolvía `counts: {}` en una corrida real aunque los tests sintéticos pasaran. Ahora acepta con/sin decoración, toma la última coincidencia e infiere por progreso (`.FsEx` con o sin `[ NN%]`) |
 | Checkpoints: id repetido | el id usaba `time.time_ns() % 1_000_000`; el reloj puede repetir valor en llamadas seguidas → dos snapshots del mismo archivo compartían nombre y **el segundo pisaba al primero** (undo intermedio perdido). Ahora busca un nombre libre y hay test con reloj congelado |
+| Comandos en markdown | **15 tests** en `test_custom_commands.py` (frontmatter, `$ARGUMENTS`/`$1..$9`, `@ruta` dentro y fuera del proyecto, include recortado, CRLF, nombre inválido, builtin protegido). En el `:9000` vivo: `GET /api/slash` → 18 comandos con `/revisar` (`origin: custom`); `POST /api/slash` con `/revisar src/core` → `action: send_prompt` y el prompt con `Alcance: src/core` expandido |
+| Comando roto no rompe el listado | un `.md` con nombre inválido, duplicado o que choca con un builtin se saltea con el motivo (`errors`/`skipped`) y el resto sigue funcionando; `/api/slash` refresca el registro en cada llamada, así un comando nuevo aparece sin reiniciar el backend |
 
 ### Código legacy absorbido (no es el camino del harness)
 
