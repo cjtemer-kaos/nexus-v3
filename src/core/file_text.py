@@ -69,6 +69,43 @@ def encode_text(text: str, enc: str) -> bytes:
         ) from e
 
 
+def _oem_cp() -> str:
+    """Code page OEM de la consola (la que usa `cmd.exe` al escribir).
+
+    En esta maquina `chcp` = 437; en un Windows en espanol suele ser 850. No se
+    puede usar `locale.getpreferredencoding()`: devuelve la ANSI (cp1252), que
+    NO es la que usa la consola.
+    """
+    try:
+        import ctypes
+        cp = int(ctypes.windll.kernel32.GetOEMCP() or 0)
+        if cp > 0:
+            return f"cp{cp}"
+    except Exception:
+        pass
+    return "cp850"
+
+
+def decode_output(raw: bytes) -> tuple[str, str]:
+    """Decodifica salida de un proceso: (texto, encoding).
+
+    No alcanza con utf-8+replace. Medido: `echo cañón del sur ñandú` por
+    `cmd.exe` devuelve `b'ca\\xa4\\xa2n del sur \\xa4and\\xa3'` (code page OEM
+    437) y decodificado como UTF-8 quedaba `ca\\ufffd\\ufffdn del sur
+    \\ufffdand\\ufffd`. En cambio un script de Python escribe UTF-8. Se prueba
+    UTF-8 estricto primero y, si no es UTF-8 valido, la OEM del sistema (despues
+    la ANSI como red).
+    """
+    if not raw:
+        return "", "utf-8"
+    for enc in ("utf-8", _oem_cp(), "cp1252", "latin-1"):
+        try:
+            return raw.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace"), "utf-8"
+
+
 def write_bytes_file(p: str | Path, data: bytes, intentos: int = 4) -> None:
     """Escribe bytes, reintentando un momento si Windows tiene el archivo tomado.
 

@@ -78,15 +78,17 @@ async def run_process_capture(
             out, err = await asyncio.wait_for(proc.communicate(), timeout=2.0)
         except Exception:
             out, err = b"", b""
-        partial = ((out or b"") + (err or b"")).decode("utf-8", errors="replace")[-2000:]
+        from src.core.file_text import decode_output
+        partial = decode_output((out or b"") + (err or b""))[0][-2000:]
         detail = f"proceso excedio {timeout_s}s y se mato el arbol"
         if partial.strip():
             detail += f"; salida parcial:\n{partial}"
         raise TimeoutError(detail) from None
+    from src.core.file_text import decode_output
     return (
         int(proc.returncode or 0),
-        (out or b"").decode("utf-8", errors="replace"),
-        (err or b"").decode("utf-8", errors="replace"),
+        decode_output(out or b"")[0],
+        decode_output(err or b"")[0],
     )
 
 
@@ -115,9 +117,11 @@ async def run_shell_capture(
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
         except Exception:
             out = b""
-        partial = (out or b"").decode("utf-8", errors="replace")[-2000:]
+        from src.core.file_text import decode_output
+        partial = decode_output(out or b"")[0][-2000:]
         detail = f"comando excedio {timeout_s}s y se mato el arbol de procesos"
         if partial.strip():
             detail += f"; salida parcial:\n{partial}"
         raise TimeoutError(detail) from None
-    return int(proc.returncode or 0), (out or b"").decode("utf-8", errors="replace")
+    from src.core.file_text import decode_output
+    return int(proc.returncode or 0), decode_output(out or b"")[0]

@@ -82,7 +82,10 @@ def _decode_tramo(raw: bytes) -> tuple[str, int]:
                     return raw[:corte].decode("utf-8"), corte
                 except UnicodeDecodeError:
                     continue
-        return raw.decode("utf-8", errors="replace"), len(raw)
+        # Salida de un comando de consola: en Windows suele ser la code page OEM
+        # (cp437/cp850), no UTF-8. Con `replace` cada acento quedaba U+FFFD.
+        from src.core.file_text import decode_output
+        return decode_output(raw)[0], len(raw)
 
 
 class JobRegistry:

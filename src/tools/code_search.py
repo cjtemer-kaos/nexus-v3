@@ -186,18 +186,22 @@ async def github_search(
         if language:
             cmd.extend(["--language", language])
         
-        # en hilo: rg puede tardar 30 s y esto corre en el event loop
+        # en hilo: gh puede tardar 30 s y esto corre en el event loop.
+        # Sin `text=True`: gh escribe UTF-8 y el locale de Windows lo decodifica
+        # como cp1252 (mojibake en repos con acentos).
         proc = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, timeout=30)
+            subprocess.run, cmd, capture_output=True, timeout=30)
         if proc.returncode == 0:
+            from src.core.file_text import decode_output
             return {
                 "success": True,
                 "query": query,
-                "content": proc.stdout.strip(),
+                "content": decode_output(proc.stdout or b"")[0].strip(),
                 "source": "github",
             }
         else:
-            return {"error": f"gh CLI error: {proc.stderr.strip()}"}
+            from src.core.file_text import decode_output
+            return {"error": f"gh CLI error: {decode_output(proc.stderr or b'')[0].strip()}"}
     except FileNotFoundError:
         return {"error": "gh CLI not installed. Run: gh auth login"}
     except Exception as e:

@@ -4676,8 +4676,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         rc, out = await run_shell_capture(cmd, cwd_p, timeout)
         from src.core.text_limits import truncate_head_tail
         out = truncate_head_tail(out, 20000, label="salida del comando")
-        if rc != 0 and not out.strip():
-            out = f"[exit {rc}]"
+        # El exit code tiene que verse SIEMPRE que no sea 0. Antes solo se
+        # informaba cuando la salida estaba vacia: un comando que fallaba
+        # imprimiendo algo (lo normal: `git status` fuera de un repo, un script
+        # que loguea y devuelve 1) llegaba al modelo como si hubiera funcionado.
+        if rc != 0:
+            return (out.rstrip() + f"\n[exit {rc}]") if out.strip() else f"[exit {rc}]"
         return out or f"[exit {rc} sin salida]"
 
     registry.register_function(read_file_tool, name="read_file",
