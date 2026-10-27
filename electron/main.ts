@@ -13,7 +13,7 @@
  *       npm start                (prod — backend + electron loading SPA from backend)
  */
 
-import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell } from "electron";
+import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell, screen } from "electron";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
@@ -415,9 +415,32 @@ function createWindow() {
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml)}`);
 
+  // Si el sistema recordó una posición en un monitor que ya no está (o el
+  // escalado cambió), la ventana puede nacer fuera de toda pantalla visible:
+  // se ve en la barra de tareas pero no hay forma de traerla. Si los bounds no
+  // tocan ningún display, se recentra en el primario.
+  const asegurarEnPantalla = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const b = mainWindow.getBounds();
+    const visible = screen.getAllDisplays().some(({ workArea: a }) =>
+      b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y);
+    if (visible) return;
+    const wa = screen.getPrimaryDisplay().workArea;
+    mainWindow.setBounds({
+      x: wa.x,
+      y: wa.y,
+      width: Math.min(1280, wa.width),
+      height: Math.min(800, wa.height),
+    });
+    mainWindow.center();
+    blog("[main]", `ventana fuera de pantalla (${b.x},${b.y}); recentrada en el primario`);
+  };
+  asegurarEnPantalla();
+
   mainWindow.once("ready-to-show", () => {
     // En pantallas con escalado (125/150%) el ancho en CSS queda por debajo de
     // 900px y la topbar/composer no entran. Maximizar usa el work area real.
+    asegurarEnPantalla();
     mainWindow?.maximize();
     mainWindow?.show();
   });
