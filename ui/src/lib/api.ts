@@ -306,6 +306,16 @@ export async function rewindSessionApi(sessionId: string, messageId: number): Pr
   return res.json()
 }
 
+export async function renameSessionApi(sessionId: string, title: string): Promise<{ ok: boolean; id: string; title: string }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(await resError(res, "no se pudo renombrar la sesión"));
+  return res.json()
+}
+
 export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean; deleted: boolean; id: string }> {
   const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) throw new Error(`sessions DELETE ${res.status}: ${await res.text()}`);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, Pencil, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -66,7 +66,7 @@ function NavButton({ item, active, onClick, indented }: { item: NavItem; active:
 }
 
 export function Sidebar() {
-  const { view, setView, sessions, sessionsError, activeSession, setActiveSession, createSession, forkSession, deleteSession } = useAppStore()
+  const { view, setView, sessions, sessionsError, activeSession, setActiveSession, createSession, forkSession, deleteSession, renameSession } = useAppStore()
   const [ajustesOpen, setAjustesOpen] = useState(false)
   useEffect(() => {
     const abrir = () => setAjustesOpen(true)
@@ -95,6 +95,15 @@ export function Sidebar() {
 
   const [filtro, setFiltro] = useState('')
   const [visibles, setVisibles] = useState(12)
+  // Renombrar en línea (opencode permite corregir el título autogenerado).
+  const [editando, setEditando] = useState<string | null>(null)
+  const [borrador, setBorrador] = useState('')
+  const empezarRenombre = (id: string, titulo: string) => { setEditando(id); setBorrador(titulo) }
+  const confirmarRenombre = () => {
+    if (editando) renameSession(editando, borrador)
+    setEditando(null)
+  }
+  const cancelarRenombre = () => { setEditando(null); setBorrador('') }
   const filtradas = useMemo(() => {
     const t = filtro.trim().toLowerCase()
     const orden = [...sessions].sort((a, b) =>
@@ -220,22 +229,52 @@ export function Sidebar() {
                 <div className="px-2 pt-2 text-[10px] uppercase tracking-wider text-[#59616D]">{g.titulo}</div>
                 {g.items.map((s) => (
                   <div key={s.id} className="group relative">
-                    <button
-                      onClick={() => { setActiveSession(s.id); setView('chat') }}
-                      className={cn('w-full text-left rounded-lg px-3 py-2 border text-sm cursor-pointer transition-colors',
-                        s.id === activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}
-                    >
-                      <div className="font-medium truncate pr-6">{s.title}</div>
-                      <div className="text-[11px] text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id}</div>
-                    </button>
-                    <button
-                      aria-label={`Borrar sesión ${s.title}`}
-                      title="Borrar sesión"
-                      onClick={(e) => { e.stopPropagation(); if (confirm(`¿Borrar la sesión "${s.title}"? No se puede deshacer.`)) deleteSession(s.id) }}
-                      className="absolute right-1.5 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#FF6259] transition-opacity"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {editando === s.id ? (
+                      <div className="rounded-lg border border-[#4C9DFF]/50 bg-[#1E2127] px-2 py-1.5">
+                        <input
+                          autoFocus
+                          value={borrador}
+                          onChange={(e) => setBorrador(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); confirmarRenombre() }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelarRenombre() }
+                          }}
+                          onBlur={confirmarRenombre}
+                          aria-label="Nuevo título de la sesión"
+                          maxLength={200}
+                          className="w-full bg-transparent text-sm text-[#EDEEF0] outline-none"
+                        />
+                        <div className="mt-0.5 text-[10px] text-[#59616D]">Enter guarda · Esc cancela</div>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => { setActiveSession(s.id); setView('chat') }}
+                          onDoubleClick={() => empezarRenombre(s.id, s.title)}
+                          className={cn('w-full text-left rounded-lg px-3 py-2 border text-sm cursor-pointer transition-colors',
+                            s.id === activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}
+                        >
+                          <div className="font-medium truncate pr-12">{s.title}</div>
+                          <div className="text-[11px] text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id}</div>
+                        </button>
+                        <button
+                          aria-label={`Renombrar sesión ${s.title}`}
+                          title="Renombrar (o doble clic en el título)"
+                          onClick={(e) => { e.stopPropagation(); empezarRenombre(s.id, s.title) }}
+                          className="absolute right-7 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#EDEEF0] transition-opacity"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          aria-label={`Borrar sesión ${s.title}`}
+                          title="Borrar sesión"
+                          onClick={(e) => { e.stopPropagation(); if (confirm(`¿Borrar la sesión "${s.title}"? No se puede deshacer.`)) deleteSession(s.id) }}
+                          className="absolute right-1.5 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#FF6259] transition-opacity"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

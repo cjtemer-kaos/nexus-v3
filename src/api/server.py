@@ -2136,6 +2136,28 @@ async def sessions_catalog(limit: int = 200):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.patch("/api/sessions/{session_id}")
+async def patch_session(session_id: str, request: Request):
+    """Renombra la sesión (lo único editable desde la UI por ahora).
+
+    El título se autogenera con el primer mensaje; en opencode se puede corregir
+    a mano y acá no había forma. Se recorta a 200 caracteres porque es lo que
+    entra en las pestañas y el sidebar.
+    """
+    body = await _json_body(request)
+    title = str(body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="el título no puede estar vacío")
+    if len(title) > 200:
+        title = title[:200]
+    slog = _session_log()
+    if slog.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
+    if not slog.update_session(session_id, title=title):
+        raise HTTPException(status_code=500, detail="no se pudo renombrar la sesión")
+    return {"ok": True, "id": session_id, "title": title}
+
+
 @app.get("/api/sessions/{session_id}/export")
 async def export_session(session_id: str):
     """Exporta el log de la sesión como ZIP (JSON adentro)."""

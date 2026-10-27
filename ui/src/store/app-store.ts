@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { providersApi, sessionsApi, createSessionApi, forkSessionApi, deleteSessionApi, sessionMessagesApi, statusApi, type NexusStatus } from '@/lib/api'
+import { providersApi, sessionsApi, createSessionApi, forkSessionApi, deleteSessionApi, renameSessionApi, sessionMessagesApi, statusApi, type NexusStatus } from '@/lib/api'
 
 export type ProviderStatus = 'online' | 'offline' | 'loading'
 export type ModelOption = { id: string; provider: string; label: string; ctx: number; status: ProviderStatus }
@@ -53,6 +53,7 @@ type AppState = {
   createSession: () => void
   forkSession: (id: string) => void
   deleteSession: (id: string) => void
+  renameSession: (id: string, title: string) => void
   messages: ChatMessage[]
   messagesError: string | null
   addMessage: (m: ChatMessage) => void
@@ -256,6 +257,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         _creatingSession = false
       }
     })()
+  },
+  renameSession: (id, title) => {
+    const limpio = title.trim()
+    if (!limpio) return
+    // Optimista: el título se ve al instante; si el server falla, se revierte.
+    const previo = get().sessions.find((x) => x.id === id)?.title ?? ''
+    set((st) => ({ sessions: st.sessions.map((x) => (x.id === id ? { ...x, title: limpio } : x)) }))
+    void renameSessionApi(id, limpio).catch((e) => {
+      set((st) => ({
+        sessions: st.sessions.map((x) => (x.id === id ? { ...x, title: previo } : x)),
+        sessionsError: `no se pudo renombrar ${id}: ${(e as Error).message}`,
+      }))
+    })
   },
   deleteSession: (id) => {
     void (async () => {
