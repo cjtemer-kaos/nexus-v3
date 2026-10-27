@@ -282,6 +282,82 @@ def test_write_file_convierte_avisando_si_el_texto_no_entra(tmp_path, tools):
     assert f.read_text(encoding="utf-8") == "flecha →\n"
 
 
+# ------------------------------------------------------------- tool apply_patch
+
+
+def _patch_update(path, borrar, poner):
+    return (f"*** Begin Patch\n*** Update File: {path}\n@@\n-{borrar}\n+{poner}\n"
+            f"*** End Patch")
+
+
+@pytest.fixture()
+def patch_aislado(monkeypatch):
+    """apply_patch crea un checkpoint git real del repo: en tests no."""
+    monkeypatch.setattr("src.core.checkpoints.snapshot", lambda *a, **k: None)
+    monkeypatch.setattr("src.core.checkpoints.restore", lambda *a, **k: None)
+    try:
+        monkeypatch.setattr("src.core.git_checkpoints.create_git_checkpoint",
+                            lambda *a, **k: {"ok": False})
+    except Exception:
+        pass
+
+
+def test_apply_patch_preserva_cp1252_y_la_linea_no_tocada(tmp_path, tools, patch_aislado):
+    """Mismo defecto que tenia `edit`: leia utf-8+replace y escribia utf-8, asi
+    que la linea que el parche NO tocaba quedaba con U+FFFD."""
+    usar, _ = tools
+    f = _cp1252(tmp_path)
+
+    out = usar("apply_patch", patch=_patch_update(f, "resumen: cañón del sur",
+                                                  "RESUMEN: canon del sur"))
+
+    assert '"ok": true' in out
+    despues = f.read_bytes()
+    assert despues.decode("cp1252").splitlines() == ["RESUMEN: canon del sur",
+                                                     "no tocar: ñandú"]
+    assert b"no tocar: \xf1and\xfa" in despues, "la linea no tocada, byte por byte"
+    assert b"\xef\xbf\xbd" not in despues
+
+
+def test_apply_patch_falla_sin_escribir_si_el_texto_no_entra_en_el_encoding(tmp_path, tools, patch_aislado):
+    usar, intentar = tools
+    f = _cp1252(tmp_path)
+    antes = f.read_bytes()
+
+    est, out = intentar("apply_patch", patch=_patch_update(f, "no tocar: ñandú",
+                                                           "flecha →"))
+
+    assert est == "err"
+    assert "no puede representar" in out
+    assert f.read_bytes() == antes, "el parche es atomico: no se escribe nada"
+
+
+def test_apply_patch_no_traduce_lf_a_crlf(tmp_path, tools, patch_aislado):
+    usar, _ = tools
+    f = tmp_path / "lf.txt"
+    f.write_bytes(b"uno\ndos\ntres\n")
+
+    usar("apply_patch", patch=_patch_update(f, "dos", "DOS"))
+
+    assert f.read_bytes() == b"uno\nDOS\ntres\n"
+
+
+def test_apply_patch_dry_run_informa_el_encoding_y_no_escribe(tmp_path, tools, patch_aislado):
+    import json as _json
+
+    usar, _ = tools
+    f = _cp1252(tmp_path)
+    antes = f.read_bytes()
+
+    j = _json.loads(usar("apply_patch", patch=_patch_update(f, "no tocar: ñandú",
+                                                            "otra cosa: ñ"),
+                         dry_run=True))
+
+    assert j["dry_run"] is True
+    assert j["encodings"][str(f)] == "cp1252"
+    assert f.read_bytes() == antes
+
+
 # -------------------------------------------------------------- API fs/read
 
 

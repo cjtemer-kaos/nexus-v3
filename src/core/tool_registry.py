@@ -144,6 +144,52 @@ def _coerce(val, want):
     return val
 
 
+# Nombres del MISMO parametro en otras familias de modelos (opencode/Claude Code
+# manda `filePath`, `oldString`, `newString`, `replaceAll`; casi todo lo demas
+# manda `path`). Se aplica solo si el schema declara el destino y no la clave
+# recibida, asi que no puede pisar un parametro real del mismo nombre.
+ARG_ALIASES: dict[str, str] = {
+    "filePath": "path",
+    "file_path": "path",
+    "filename": "path",
+    "fileName": "path",
+    "file": "path",
+    "dir": "path",
+    "directory": "path",
+    "folder": "path",
+    "path": "root",
+    "oldString": "old",
+    "old_string": "old",
+    "old_str": "old",
+    "oldText": "old",
+    "newString": "new",
+    "new_string": "new",
+    "new_str": "new",
+    "newText": "new",
+    "replaceAll": "replace_all",
+    "query": "pattern",
+    "pattern": "query",
+    "regex": "pattern",
+    "cmd": "command",
+}
+
+
+# Nombres de tool de otras familias de modelos (opencode/Claude Code: read,
+# write, list, bash, patch). Se resuelven al canonico ANTES del guard de scope,
+# para que la politica (blocklist de `exec`, read_only, etc.) siga aplicando.
+TOOL_ALIASES: dict[str, str] = {
+    "read": "read_file",
+    "write": "write_file",
+    "list": "list_dir",
+    "ls": "list_dir",
+    "bash": "exec",
+    "shell": "exec",
+    "patch": "apply_patch",
+    "webfetch": "web_fetch",
+    "todowrite": "todo_write",
+}
+
+
 def validate_args(name: str, args: dict, schema: dict) -> dict:
     """Valida args contra JSON Schema (ligero). Coerciona tipos y descarta claves extra
     (los modelos chicos mandan "3"/"true"/campos inventados). Lanza ValueError accionable."""
@@ -157,8 +203,20 @@ def validate_args(name: str, args: dict, schema: dict) -> dict:
         spec = props.get(k)
         want = spec.get("type") if isinstance(spec, dict) else None
         out[k] = _coerce(v, want) if want else v
-    # Descartar claves extra (evita "argumentos no permitidos" que rompe el run)
+    # Descartar claves extra (evita "argumentos no permitidos" que rompe el run),
+    # pero antes intentar el alias: el mismo parametro tiene otro nombre en otras
+    # familias de modelos. Caso real: `repo_map` usa `root`, y un modelo que manda
+    # `path` (como en todas las demas tools) recibia el mapa del proyecto entero
+    # con 200, como si hubiera buscado ahi. Silencioso y equivocado.
     if not schema.get("additionalProperties", True):
+        for k in [k for k in out if k not in props]:
+            dest = ARG_ALIASES.get(k)
+            if not dest or dest not in props or dest in out:
+                continue
+            spec = props.get(dest)
+            want = spec.get("type") if isinstance(spec, dict) else None
+            val = out.pop(k)
+            out[dest] = _coerce(val, want) if want else val
         for k in [k for k in out if k not in props]:
             out.pop(k, None)
     for key in required:
@@ -346,6 +404,9 @@ class ToolRegistry:
         if call_log is None:
             call_log = getattr(self, "call_log", None)
         args = args or {}
+        canon = TOOL_ALIASES.get(name)
+        if canon and self.has(canon):
+            name = canon
         entry = self.get(name)
         if not entry or not entry.handler:
             import difflib

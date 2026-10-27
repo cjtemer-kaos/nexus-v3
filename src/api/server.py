@@ -4737,18 +4737,25 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         # Fase 1: resolver scope + leer el estado actual (sin escribir).
         resolved: dict[str, Path] = {}
         current_files: dict[str, str] = {}
+        encodings: dict[str, str] = {}
+        # Se lee con el encoding REAL del archivo. Con utf-8+replace un cp1252
+        # llegaba al matcher con U+FFFD y la escritura posterior dejaba
+        # `no tocar: \ufffdand\ufffd` en las lineas que el parche no tocaba.
+        from src.core.file_text import encode_text, read_text_file, write_bytes_file
         for op, rel_path in operations:
             p = scope.check_path(rel_path)
             resolved[rel_path] = p
             if op in (PatchActionType.UPDATE, PatchActionType.DELETE):
                 if not p.is_file():
                     raise FileNotFoundError(f"no existe o no es archivo: {rel_path}")
-                current_files[rel_path] = p.read_text(
-                    encoding="utf-8", errors="replace", newline="")
+                texto, enc = read_text_file(p)
+                current_files[rel_path] = texto
+                encodings[rel_path] = enc
             elif op is PatchActionType.ADD and p.is_file():
                 # El parser rechaza Add sobre un archivo existente; necesita verlo.
-                current_files[rel_path] = p.read_text(
-                    encoding="utf-8", errors="replace", newline="")
+                texto, enc = read_text_file(p)
+                current_files[rel_path] = texto
+                encodings[rel_path] = enc
 
         try:
             result = compute_patch_changes(patch, current_files)
@@ -4767,6 +4774,20 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     f"Move to: el destino ya existe: {change.move_path}")
             moves[rel_path] = target
 
+        # Bytes exactos a escribir, con el encoding de cada archivo. Se calculan
+        # ANTES de tocar nada: si el texto nuevo no entra en el encoding (un `→`
+        # en un cp1252) se falla sin escribir ningun archivo del parche. Antes se
+        # escribia utf-8 igual y el archivo quedaba convertido a medias.
+        datos: dict[str, bytes] = {}
+        for rel_path, change in result.changes.items():
+            if change.type is PatchActionType.DELETE:
+                continue
+            if change.type is PatchActionType.ADD:
+                datos[rel_path] = (change.new_content or "").encode("utf-8")
+            else:
+                datos[rel_path] = encode_text(
+                    change.new_content or "", encodings.get(rel_path, "utf-8"))
+
         if dry_run:
             return _json.dumps({
                 "ok": True,
@@ -4774,6 +4795,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 "files": list(result.changes),
                 "operations": {path: change.type.value for path, change in result.changes.items()},
                 "moves": {src: str(dst) for src, dst in moves.items()},
+                "encodings": encodings,
                 "fuzz": result.fuzz,
             }, ensure_ascii=False)
 
@@ -4804,7 +4826,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 elif change.type is PatchActionType.ADD:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     created.append(p)
-                    p.write_text(change.new_content or "", encoding="utf-8", newline="")
+                    write_bytes_file(p, datos[rel_path])
                 else:
                     target = moves.get(rel_path, p)
                     cid = snapshot(session_id, p)
@@ -4812,8 +4834,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     if target != p and not target.exists():
                         target.parent.mkdir(parents=True, exist_ok=True)
                         created.append(target)
-                    target.write_text(
-                        change.new_content or "", encoding="utf-8", newline="")
+                    write_bytes_file(target, datos[rel_path])
                     if target != p:
                         p.unlink()
         except Exception as e:
