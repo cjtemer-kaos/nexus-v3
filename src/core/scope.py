@@ -88,7 +88,7 @@ IDEMPOTENT_TOOLS = frozenset({
     "browser_snapshot", "browser_console", "mcp_filesystem_read_file",
     "mcp_filesystem_list_directory", "mcp_filesystem_get_file_info",
     "glob", "grep", "search_observations", "repo_map", "code_search", "recall",
-    "checkpoint_list", "checkpoint_diff", "team_list", "team_await",
+    "checkpoint_list", "checkpoint_diff", "team_list", "team_await", "image_describe",
     # La mesa redonda solo razona (no tools adentro): es seguro en read_only.
     "roundtable", "gema_list", "agent_list",
 })

@@ -22,6 +22,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Git (status/diff/commit/branch/PR) | ⚠️ | Vía `exec` (sin tools git dedicadas) |
 | Diff review (UI) | ✅ | `ReviewPanel` (Cambios) + `/api/checkpoints/{id}/diff` |
 | Checkpoints / rollback de FS | ✅ | `checkpoints.snapshot` antes de cada `write_file`/`edit` + `/api/checkpoints/restore` |
+| Lista de tareas persistente por sesión | ✅ | tools `todo_write`/`todo_read` (`todo_store`, tabla `todos` en `session.db`), `GET/POST /api/todos` |
 
 ## 2. Multi-agente / orquestación
 
@@ -43,7 +44,7 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 |---|---|---|
 | Multi-modelo local + cloud + BYOK | ✅ | `provider_router`, `provider_catalog`, providers ollama/cloud/llamacpp |
 | Routing por capacidad (tools / visión) | ✅ | `provider_router` (`supports_tools`/`supports_vision`) |
-| Multimodal (imagen / screenshots) | ✅ | `/api/upload` → `AgentLoop(images=)` → modelo con `supports_vision`; `describe_image` (bridge MCP) para la gema `vision` |
+| Multimodal (imagen / screenshots) | ✅ | `/api/upload` → `AgentLoop(images=)` → modelo con `supports_vision`; tool `image_describe` (lee una imagen de disco con el modelo de visión local y devuelve texto, para cuando el canal es solo texto) |
 | Permisos / approval gates | ✅ | `scope`, `approval_gate`, `/api/permission` |
 | Sandbox de ejecución | ✅ | `sandbox_service` |
 | Streaming (SSE + WS) | ✅ | `/api/chat/stream`, `/ws/chat` |

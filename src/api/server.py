@@ -3248,6 +3248,30 @@ async def skills_list(q: str = "", limit: int = 0, refresh: bool = False):
 # sentido ("zzzz-no-existe-xyz") da 0.8-1.2 solo por coincidencias sueltas de cuerpo.
 UMBRAL_SKILL_FLOJO = 5.0
 
+# Imagenes que se le pueden pasar al modelo de vision. tope: un PNG de 40 MP
+# pesa ~30 MB y no entra en ningun contexto util.
+_IMAGE_MIMES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _image_data_uri(path) -> tuple[str, str]:
+    """(mime, data URI) de una imagen de disco. Falla claro si no es imagen."""
+    import base64
+
+    p = Path(path)
+    mime = _IMAGE_MIMES.get(p.suffix.lower())
+    if mime is None:
+        raise ValueError(
+            f"no es una imagen soportada ({p.suffix or 'sin extension'}): {p}. "
+            f"Soportados: {', '.join(sorted(e.lstrip('.') for e in _IMAGE_MIMES))}")
+    size = p.stat().st_size
+    if size > MAX_IMAGE_BYTES:
+        raise ValueError(f"imagen demasiado grande ({size} bytes, tope {MAX_IMAGE_BYTES}): {p}")
+    return mime, f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
+
 
 @app.get("/api/tools")
 async def tools_list():
@@ -4102,12 +4126,12 @@ _SUB_TOOLSETS: dict[str, tuple[str, ...]] = {
     # Código: lectura/escritura + shell + web. La delegación queda fuera.
     "code": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
              "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write",
-             "todo_read"),
+             "todo_read", "image_describe"),
     "engineer": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
                  "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write",
                  "todo_read"),
     "debugger": ("read_file", "list_dir", "glob", "grep", "code_search", "exec", "web_search",
-                 "web_fetch", "recall", "learn", "todo_write", "todo_read"),
+                 "web_fetch", "recall", "learn", "todo_write", "todo_read", "image_describe"),
 }
 
 
@@ -5735,6 +5759,52 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
+    async def image_describe_tool(path: str, prompt: str = "") -> str:
+        """Mira una imagen (captura, foto, diagrama) y devuelve lo que muestra, en texto.
+
+        opcional `prompt` para pedir algo puntual ("que error se ve?", "transcribi
+        el texto"). Usa el modelo de vision local (qwen2.5vl via ollama).
+        """
+        scope.check_tool("image_describe", {"path": path})
+        if router is None:
+            raise RuntimeError("image_describe requiere router (helpers=True)")
+        p = scope.check_path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"no existe o no es archivo: {path}")
+        _mime, data_uri = _image_data_uri(p)
+        from src.core.provider_base import LLMMessage
+
+        pregunta = (prompt or "").strip() or (
+            "Describe la imagen: que se ve, que textos aparecen (transcribilos) y "
+            "cualquier error, numero o detalle relevante. Responde en espanol, sin adornos.")
+        try:
+            resp = await router.chat(
+                [LLMMessage(role="system",
+                            content="Sos un lector de imagenes preciso. No inventes: si algo "
+                                    "no se ve, decilo."),
+                 LLMMessage(role="user", content=pregunta, images=(data_uri,))],
+                tools=None, hint="vision", force_tools=False, require_vision=True)
+        except Exception as e:
+            raise RuntimeError(
+                f"no se pudo mirar la imagen ({p.name}): {e}. "
+                f"Si no hay modelo de vision instalado: ollama pull qwen2.5vl:7b") from None
+        out = (getattr(resp, "content", "") or "").strip()
+        if not out:
+            raise RuntimeError(f"el modelo de vision ({getattr(resp, 'model', '?')}) "
+                               f"no devolvio texto para {p.name}")
+        return f"[{p.name} · {_mime} · {getattr(resp, 'model', '?')}]\n{out}"
+    registry.register_function(
+        image_describe_tool, name="image_describe",
+        description=("Mira una imagen de disco (png/jpg/webp/gif/bmp) con el modelo de vision "
+                     "local y devuelve en texto lo que muestra: uso para capturas, fotos, "
+                     "diagramas y OCR. `prompt` para preguntar algo puntual."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "path": {"type": "string", "description": "Ruta de la imagen (dentro del proyecto)."},
+            "prompt": {"type": "string", "description": "Pregunta opcional sobre la imagen."},
+        }, "required": ["path"], "additionalProperties": False},
+    )
+
     async def image_generate_tool(prompt: str, mode: str = "t2i", image: str = "", steps: int = 20,
                             cfg_scale: float = 2.5, negative: str = "", width: int = 1024,
                             height: int = 1024, lightning: bool = False) -> str:
