@@ -15,6 +15,7 @@ import { ApprovalsPanel } from '@/components/approvals/ApprovalsPanel'
 import { PlanPanel } from '@/components/plan/PlanPanel'
 import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { useAppStore } from '@/store/app-store'
 import { Search, Bell, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -152,6 +153,8 @@ export default function App() {
           </div>
 
         </header>
+
+        <UpdateBanner />
 
         {/* content */}
         <main className="flex-1 min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.06),_transparent_55%)]">
