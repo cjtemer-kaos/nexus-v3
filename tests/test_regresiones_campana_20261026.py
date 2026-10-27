@@ -6,6 +6,7 @@ Cubre los defectos encontrados y corregidos:
 - rag.search O(n) en Python puro (ahora matriz numpy cacheada)
 - /api/graph/search y la tool recall devolviendo 0 con consultas multi-palabra
   (fts_search une los tokens con AND; ahora hay fallback a search_terms)
+- /api/graph tardando 3.5 s por un len(set(...)) recalculado por nodo (O(n^2))
 """
 from __future__ import annotations
 
@@ -191,6 +192,77 @@ def test_post_mensaje_a_sesion_inexistente_da_404_y_no_500():
         json={"role": "user", "content": "huerfano?"},
     )
     assert r.status_code == 404, r.text
+
+
+def _grafo_sintetico(dir_brain, nodos, aristas):
+    """Crea un knowledge_graph.db minimo con el esquema que lee _load_graph_data."""
+    import sqlite3
+
+    dir_brain.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(dir_brain / "knowledge_graph.db"))
+    con.execute(
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, content TEXT, title TEXT,"
+        " category TEXT, source TEXT, importance INTEGER, tags TEXT,"
+        " content_hash TEXT, created_at TEXT, updated_at TEXT, access_count INTEGER,"
+        " last_accessed TEXT, topic_key TEXT, revision_count INTEGER)"
+    )
+    con.execute(
+        "CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, from_node INTEGER,"
+        " to_node INTEGER, relation TEXT, weight REAL, note TEXT, created_at TEXT)"
+    )
+    for nid, titulo, cat in nodos:
+        con.execute(
+            "INSERT INTO nodes (id, content, title, category, source, importance, tags,"
+            " content_hash, created_at, updated_at, access_count, topic_key, revision_count)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (nid, f"contenido {nid}", titulo, cat, "test", 5, "[]", f"h{nid}",
+             "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 0, "", 1),
+        )
+    for u, v in aristas:
+        con.execute(
+            "INSERT INTO edges (from_node, to_node, relation, weight, note, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (u, v, "relates_to", 0.5, "", "2026-01-01T00:00:00Z"),
+        )
+    con.commit()
+    con.close()
+
+
+def test_graph_data_reporta_las_comunidades_reales(tmp_path, monkeypatch):
+    """stats['communities'] debe coincidir con las comunidades que traen los nodos.
+
+    El conteo se calculaba dentro del loop de nodos (len(set(...)) por nodo):
+    O(n^2) y 3.3 s de CPU con 12k nodos. Ahora se calcula una sola vez.
+    """
+    from src.api.server import _load_graph_data
+
+    brain = tmp_path / "brain"
+    _grafo_sintetico(
+        brain,
+        [(1, "uno", "concept"), (2, "dos", "concept"), (3, "tres", "fix"), (4, "cuatro", "fix")],
+        [(1, 2), (3, 4)],
+    )
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(brain))
+
+    data = _load_graph_data(limit=100)
+    assert len(data["nodes"]) == 4, "los 4 nodos tienen aristas, no son aislados"
+    comunidades = {n["community"] for n in data["nodes"]}
+    assert data["stats"]["communities"] == len(comunidades)
+    assert all(n["color"].startswith("#") and len(n["color"]) == 7 for n in data["nodes"])
+
+
+def test_graph_data_comunidad_unica_usa_color_por_categoria(tmp_path, monkeypatch):
+    """Con una sola comunidad el color sale de la categoria, no de la paleta."""
+    from src.api.server import _load_graph_data
+
+    brain = tmp_path / "brain"
+    _grafo_sintetico(brain, [(1, "uno", "fix"), (2, "dos", "fix")], [(1, 2)])
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(brain))
+
+    data = _load_graph_data(limit=100)
+    assert data["stats"]["communities"] == 1
+    # "fix" -> #3DDC84 en CATEGORY_COLOR (local a _load_graph_data)
+    assert all(n["color"] == "#3DDC84" for n in data["nodes"])
 
 
 def test_mensajes_de_sesion_real_sigue_funcionando():

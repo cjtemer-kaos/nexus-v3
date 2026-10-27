@@ -1391,6 +1391,9 @@ def _load_graph_data(
     # Prepare node list with computed fields
     PALETTE = ["#4C9DFF", "#3DDC84", "#FFC857", "#61C5D9", "#FF756D", "#A7B8CC", "#7AABFF", "#66C2A5", "#F2A65A", "#83B8FF", "#C5A3FF", "#6DD3CE"]
     CATEGORY_COLOR: dict[str,str] = {"general":"#788493","architecture":"#4C9DFF","concept":"#61C5D9","deploy":"#FFC857","fix":"#3DDC84","fact":"#F2A65A","lesson":"#A7B8CC"}
+    # Se calculaba DENTRO del loop de nodos: len(set(...)) sobre 12k comunidades
+    # por cada uno de los 12k nodos => ~144M inserciones, 3.3 s de CPU por request.
+    comm_count = len(set(comm_map.values())) if comm_map else 0
 
     nodes_tmp: list[dict] = []
     for r in rows:
@@ -1410,7 +1413,7 @@ def _load_graph_data(
         # normalize size 4..18
         size = max(4, min(18, size))
         cat = (r["category"] or "general").strip() or "general"
-        color = PALETTE[comm % len(PALETTE)] if len(set(comm_map.values())) > 1 else CATEGORY_COLOR.get(cat, PALETTE[0])
+        color = PALETTE[comm % len(PALETTE)] if comm_count > 1 else CATEGORY_COLOR.get(cat, PALETTE[0])
         nodes_tmp.append({
             "id": nid,
             "label": label,
@@ -1475,7 +1478,7 @@ def _load_graph_data(
         "filtered_edges": len(edge_objs),
         "visible_nodes": len(visible_nodes),
         "visible_edges": len(visible_edges),
-        "communities": len(set(comm_map.values())) if comm_map else 0,
+        "communities": comm_count,
         "avg_degree": round(sum(deg.values())/(2*len(all_node_ids)), 2) if all_node_ids else 0,
         "max_pagerank": max(pr_map.values()) if pr_map else 0,
         "categories": all_categories,
