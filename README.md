@@ -1,4 +1,4 @@
-﻿# Nexus v3 â€” Harness Profesional para Agentes Autonomos
+# Nexus v3 â€” Harness Profesional para Agentes Autonomos
 
 **Cerebro:** Knowledge Graph + RAG + memoria jerarquica (local `./brain`, portable, sin vendor lock-in)
 **Harness:** Agent loop + ToolRegistry + Scope + Swap on-demand + Hooks + Compaction (inspirado en DeepSeek Harness, Hermes, OpenCode)
@@ -141,3 +141,10 @@ npm run dist:dir              # unpacked dir para test rÃ¡pido
 ### Config
 Ver `config/config.yaml` y `config/config.schema.json`. Puerto del harness lo elige Electron (free port); el backend tambiÃ©n acepta `--port 0` (random).
 
+## Actualizaciones
+
+La app se actualiza sola al abrirse: antes de arrancar el backend hace
+`git fetch` + `git pull --ff-only` de su rama y recompila `ui/dist` y
+`electron/dist` solo si cambio algo ahi. Si el arbol tiene cambios locales o
+commits sin publicar no toca nada, y deja el detalle en `data/self_update.log`.
+Estado y boton "actualizar ahora" en Ajustes > Resumen.
