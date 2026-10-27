@@ -51,6 +51,29 @@ def test_dos_snapshots_en_el_mismo_segundo_no_colisionan(tmp_path):
     assert (base / c2).read_text(encoding="utf-8") == "dos"
 
 
+def test_reloj_repetido_no_pisa_el_checkpoint_anterior(tmp_path, monkeypatch):
+    """Con el reloj congelado el id igual tiene que ser unico.
+
+    En Windows `time_ns()` puede devolver el mismo valor en llamadas seguidas:
+    antes, dos snapshots del mismo archivo en el mismo tick compartian nombre y
+    el segundo borraba el primero (undo intermedio perdido). Este test congela
+    el reloj a proposito; es el que fallaba de forma intermitente en la suite.
+    """
+    monkeypatch.setattr(cp.time, "time_ns", lambda: 1_700_000_000_123_456_789)
+    monkeypatch.setattr(cp.time, "strftime", lambda *a, **k: "20260101_000000")
+
+    f = tmp_path / "a.txt"
+    ids = []
+    for i in range(3):
+        f.write_text(str(i), encoding="utf-8")
+        ids.append(cp.snapshot("s1", f))
+
+    assert len(set(ids)) == 3
+    base = tmp_path / "checkpoints" / "s1"
+    # Los tres archivos siguen ahi, con su contenido original.
+    assert [ (base / i).read_text(encoding="utf-8") for i in ids ] == ["0", "1", "2"]
+
+
 def test_restore_vuelve_al_contenido_previo(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("original", encoding="utf-8")

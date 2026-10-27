@@ -91,6 +91,8 @@ IDEMPOTENT_TOOLS = frozenset({
     "checkpoint_list", "checkpoint_diff", "team_list", "team_await", "image_describe",
     # La mesa redonda solo razona (no tools adentro): es seguro en read_only.
     "roundtable", "gema_list", "agent_list",
+    # Lecturas de git: mismo perfil que `repo_map`/`code_search`.
+    "git_status", "git_diff", "git_log",
 })
 
 MUTATING_TOOLS = frozenset({
@@ -99,6 +101,9 @@ MUTATING_TOOLS = frozenset({
     "send_message", "delegate_task", "execute", "exec", "pty_exec", "job_start", "job_kill",
     "learn", "todo_write", "image_generate", "sub_agent", "agent_run", "gema_run", "agent_create",
     "team_spawn", "team_mailbox", "checkpoint_create", "checkpoint_restore",
+    # git_commit mueve HEAD; run_tests ejecuta codigo del proyecto; repl ejecuta
+    # Python con los permisos del usuario (mismo perfil que exec).
+    "git_commit", "run_tests", "repl",
 })
 
 NETWORK_TOOLS = frozenset({

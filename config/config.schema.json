@@ -684,6 +684,15 @@
       },
       "additionalProperties": false
     },
+    "repl": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeout_s": { "type": "number", "minimum": 1, "maximum": 600 },
+        "idle_s": { "type": "number", "minimum": 0, "maximum": 86400 }
+      },
+      "additionalProperties": false
+    },
     "skills": {
       "type": "object",
       "properties": {

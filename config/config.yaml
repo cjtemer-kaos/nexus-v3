@@ -288,6 +288,16 @@ checkpoints:
 reminders:
   min_every_s: 300
   max_active: 50
+repl:
+  # Kernel de Python persistente para la tool `repl` (estado entre llamadas:
+  # imports y variables sobreviven). Corre con los permisos del usuario, igual
+  # que `exec`; apagalo si preferis que el modelo use solo scripts sueltos.
+  enabled: true
+  # Segundos que puede tardar una celda antes de matar el kernel (el estado se
+  # pierde y se avisa; la proxima celda arranca limpia).
+  timeout_s: 30
+  # Kernel ocioso: se apaga solo despues de estos segundos sin uso.
+  idle_s: 1800
 skills:
   roots:
   - ./data/skills

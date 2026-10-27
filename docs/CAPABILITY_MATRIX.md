@@ -69,8 +69,12 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 
 1. ~~**Tool `edit` (str_replace)**~~ — **CERRADO**: agregada tool `edit` (reemplazo quirúrgico).
 2. ~~**Búsqueda web**~~ — **CERRADO**: tool `web_search` (SearXNG open source vía `SEARXNG_URL` + fallback Wikipedia).
-3. **Tools git** (status/diff/commit/branch) dedicadas — hoy solo vía `exec`.
-4. **Test runner** con parseo de fallos — hoy solo `exec`.
+3. ~~**Tools git** (status/diff/commit/branch) dedicadas~~ — **CERRADO**: `src/tools/git_tools.py`
+   + tools `git_status`, `git_diff`, `git_log`, `git_commit` (argv, nunca shell; commit solo local,
+   sin push/pull/reset). Ver `docs/PRIME_AGENT_AUTOPSY.md` §1.2.
+4. ~~**Test runner** con parseo de fallos~~ — **CERRADO**: `src/tools/test_runner.py`
+   (pytest/npm/cargo/go, conteos + fallos parseados + timeout honesto) expuesto como `run_tests`.
+   Ver `docs/PRIME_AGENT_AUTOPSY.md` §1.3.
 5. ~~**Diff review en la UI**~~ — **CERRADO**: `ReviewPanel` (Cambios) con `/api/checkpoints/{id}/diff`.
 6. ~~**Instrucciones de proyecto** (AGENTS.md)~~ — **CERRADO**: inyección jerárquica en `agent_loop`.
 7. ~~**Rewind** de conversación~~ — **CERRADO**: `POST /api/sessions/{id}/rewind`.
@@ -78,6 +82,10 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 > Bug sistémico corregido: `_infer_schema` mapeaba toda anotación string (`from __future__ import annotations`)
 > a `"string"` → los params `int` (exec.timeout, recall.limit…) se declaraban string. Ahora se resuelven con
 > `get_type_hints`.
+
+**Estado 2026-10-27**: §5 queda sin gaps abiertos. Lo único pendiente son opcionales por hardware
+(STT local) y el roadmap de `docs/PRIME_AGENT_AUTOPSY.md` §3 (continual harness, cron/heartbeats,
+mailbox tipado, skills ejecutables), que son features nuevas, no paridad.
 
 ## 6. Conclusión
 
@@ -138,6 +146,10 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Dependencias | `pyproject.toml` declara `ruamel.yaml` (lo usa `save_config` para preservar comentarios; sin él, cada guardado de config los perdía) y el extra `lsp` (`python-lsp-server`). Sin pylsp el diagnóstico post-edit sigue con `py_compile`; el semántico degrada, no rompe |
 | Re-auditoría de tests v2 | los 10 "sin cobertura" ya estaban cubiertos salvo `self_learning_loop` (**5 tests nuevos**: learn/cycle, judge, router, persistencia SQLite, patrones, stats). `test_config` ya usa `monkeypatch`+`tmp_path` (el claim de `/tmp` hardcodeado era del informe v1); `test_e2e_live` ya no usa `os.getcwd()`. Los `sleep` fijos de `test_subagent_sprint` (5 s), `test_audit_fixes` y `test_phase9_learning` se cambiaron por polling acotado (sin carreras de 40-120 ms) |
 | Re-auditoría UI v2 | 10 de 12 hallazgos ya estaban corregidos en el árbol (errores de historial/borrado/búsqueda/grafo visibles, `parent_id` real vía `forkSessionApi`, `SLASH_FALLBACK` en español con `/herramientas`, `sessionMessagesApi` limit 10000, `tabs.tsx` oscuro, dobles submits con `busy`). Se cerró lo que faltaba: `/api/status` expone `approvals_pending` y la campana lo muestra con badge (antes ignoraba aprobaciones); enums de sub-agentes en español; se quitó el tipo muerto `images` de `chatApi` y el `sessionModeApi` duplicado |
+| `repl`: kernel de Python persistente (idea central de prime-agent) | una sola tool con **estado entre llamadas**: `6*7` en una celda → `42` en la siguiente, mismo pid; timeout mata el kernel y avisa que el estado se perdió (la próxima celda arranca limpia); reciclado por `idle_s`; `repl.enabled=false` la desactiva. Tests: 10 en `test_python_repl.py` |
+| Tools git por argv + `run_tests` | cierran §5.3 y §5.4: `git_status/diff/log/commit` parsean `--porcelain=v1 -z` (rutas con espacios y renombres), commit solo local y con mensaje como único `-m`; `run_tests` detecta pytest/npm/cargo/go y devuelve conteos + fallos parseados. Verificado por MCP real (`scripts/verify_new_tools_mcp.py`): 52 tools, `git_status` con head real, `run_tests` → `passed: 13` |
+| Parseo real de pytest | el resumen de pytest **no siempre** viene con `====` (con `-q` es `1 failed, 1 passed in 0.08s`): el regex viejo devolvía `counts: {}` en una corrida real aunque los tests sintéticos pasaran. Ahora acepta con/sin decoración, toma la última coincidencia e infiere por progreso (`.FsEx` con o sin `[ NN%]`) |
+| Checkpoints: id repetido | el id usaba `time.time_ns() % 1_000_000`; el reloj puede repetir valor en llamadas seguidas → dos snapshots del mismo archivo compartían nombre y **el segundo pisaba al primero** (undo intermedio perdido). Ahora busca un nombre libre y hay test con reloj congelado |
 
 ### Código legacy absorbido (no es el camino del harness)
 

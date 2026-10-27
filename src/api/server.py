@@ -5399,6 +5399,160 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     except Exception:
         pass
 
+    # --- Git (argv, sin shell) y runner de tests ---
+    from src.tools import git_tools as _gitt
+    from src.tools import test_runner as _testr
+
+    def _git_root_of(cwd: str):
+        return _gitt.repo_root(_resolve_exec_cwd(cwd))
+
+    async def git_status_tool(cwd: str = "") -> str:
+        """Rama, head, upstream, ahead/behind y archivos staged/unstaged/untracked."""
+        import json as _j
+        scope.check_tool("git_status", {})
+        try:
+            return _j.dumps(_gitt.status(_git_root_of(cwd)), ensure_ascii=False)
+        except _gitt.GitError as e:
+            raise ValueError(str(e)) from e
+
+    async def git_diff_tool(cwd: str = "", staged: bool = False, stat: bool = False,
+                            paths: str = "") -> str:
+        """Diff de trabajo o del index. `paths` acepta rutas separadas por coma."""
+        import json as _j
+        scope.check_tool("git_diff", {})
+        rutas = [p.strip() for p in (paths or "").split(",") if p.strip()]
+        try:
+            return _j.dumps(_gitt.diff(_git_root_of(cwd), staged=staged, stat=stat,
+                                       paths=rutas or None), ensure_ascii=False)
+        except _gitt.GitError as e:
+            raise ValueError(str(e)) from e
+
+    async def git_log_tool(cwd: str = "", limit: int = 10, paths: str = "") -> str:
+        """Últimos commits (sha, fecha, autor, asunto)."""
+        import json as _j
+        scope.check_tool("git_log", {})
+        rutas = [p.strip() for p in (paths or "").split(",") if p.strip()]
+        try:
+            return _j.dumps(_gitt.log(_git_root_of(cwd), limit=limit,
+                                      paths=rutas or None), ensure_ascii=False)
+        except _gitt.GitError as e:
+            raise ValueError(str(e)) from e
+
+    async def git_commit_tool(message: str, cwd: str = "", all: bool = False,
+                              paths: str = "", confirm: bool = False) -> str:
+        """Commit local (add + commit). Nunca push ni reset."""
+        import json as _j
+        scope.check_tool("git_commit", {"message": message, "confirm": confirm})
+        rutas = [p.strip() for p in (paths or "").split(",") if p.strip()]
+        try:
+            return _j.dumps(
+                _gitt.commit(_git_root_of(cwd), message=message, all=all,
+                             paths=rutas or None),
+                ensure_ascii=False)
+        except _gitt.GitError as e:
+            raise ValueError(str(e)) from e
+
+    async def run_tests_tool(cwd: str = "", runner: str = "auto", args: str = "",
+                             keyword: str = "", timeout: int = 600) -> str:
+        """Corre los tests del proyecto y devuelve conteos + fallos parseados."""
+        import json as _j
+        scope.check_tool("run_tests", {})
+        extra = _testr.split_command(args) if (args or "").strip() else []
+        root = _resolve_exec_cwd(cwd)
+        try:
+            res = await asyncio.to_thread(
+                _testr.run, root, runner, extra, keyword,
+                max(30, min(3600, int(timeout))))
+        except (RuntimeError, NotADirectoryError) as e:
+            raise ValueError(str(e)) from e
+        return _j.dumps(res, ensure_ascii=False)
+
+    async def repl_tool(code: str, reset: bool = False, timeout: int = 0) -> str:
+        """Celda de Python en un kernel persistente (estado entre llamadas)."""
+        import json as _j
+        from src.core import python_repl as _repl
+        scope.check_tool("repl", {"code": code})
+        rep_cfg = (_load_config_safe().get("repl") or {})
+        if not rep_cfg.get("enabled", True):
+            raise PermissionError("la tool repl esta desactivada (repl.enabled=false en config.yaml)")
+        root = _resolve_exec_cwd("")
+        key = f"{session_id}:{root}"
+        if reset:
+            _repl.drop_kernel(key)
+        kernel = _repl.get_kernel(
+            key, root,
+            timeout_s=float(rep_cfg.get("timeout_s") or 30),
+            idle_s=float(rep_cfg.get("idle_s") or 1800),
+        )
+        to = int(timeout or 0) or int(rep_cfg.get("timeout_s") or 30)
+        res = await asyncio.to_thread(kernel.run, code, float(to))
+        res["kernel"] = kernel.info()
+        if len(res.get("stdout") or "") > 20000:
+            res["stdout"] = res["stdout"][:20000] + "\n... [truncado]"
+        if len(res.get("stderr") or "") > 8000:
+            res["stderr"] = res["stderr"][:8000] + "\n... [truncado]"
+        return _j.dumps(res, ensure_ascii=False)
+
+    registry.register_function(git_status_tool, name="git_status",
+        description=("Estado git del proyecto: rama, commit, upstream, ahead/behind y archivos "
+                     "staged / unstaged / untracked / en conflicto. Usalo antes de commitear."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "cwd": {"type": "string", "description": "Directorio dentro del repo (default raíz del proyecto)"}},
+            "additionalProperties": False})
+    registry.register_function(git_diff_tool, name="git_diff",
+        description=("Diff del proyecto (working tree o --staged), opcionalmente de rutas puntuales. "
+                     "`stat=true` da solo el resumen de líneas cambiadas."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "cwd": {"type": "string", "description": "Directorio dentro del repo"},
+            "staged": {"type": "boolean", "description": "Ver lo que está en el index (default false)"},
+            "stat": {"type": "boolean", "description": "Solo resumen --stat (default false)"},
+            "paths": {"type": "string", "description": "Rutas separadas por coma (ej: 'src/api/server.py,ui/src')"}},
+            "additionalProperties": False})
+    registry.register_function(git_log_tool, name="git_log",
+        description="Últimos commits del repo (sha corto, fecha, autor, asunto).",
+        category="local",
+        parameters={"type": "object", "properties": {
+            "cwd": {"type": "string", "description": "Directorio dentro del repo"},
+            "limit": {"type": "integer", "description": "Cuántos commits (1-50, default 10)"},
+            "paths": {"type": "string", "description": "Filtrar por rutas separadas por coma"}},
+            "additionalProperties": False})
+    registry.register_function(git_commit_tool, name="git_commit",
+        description=("Commit LOCAL: agrega (all=true o paths) y commitea con el mensaje dado. "
+                     "No hace push, pull ni reset. Falla si no hay mensaje o no hay cambios."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "message": {"type": "string", "description": "Mensaje de commit (obligatorio)"},
+            "cwd": {"type": "string", "description": "Directorio dentro del repo"},
+            "all": {"type": "boolean", "description": "Agregar todo el árbol (default false)"},
+            "paths": {"type": "string", "description": "Rutas a agregar, separadas por coma"},
+            "confirm": {"type": "boolean", "description": "Confirmación (peldaño #3 la exige)"}},
+            "required": ["message"], "additionalProperties": False})
+    registry.register_function(run_tests_tool, name="run_tests",
+        description=("Corre los tests del proyecto (pytest / npm test / cargo / go) y devuelve "
+                     "ok, exit_code, conteos (passed/failed/skipped/error), los primeros fallos "
+                     "con su mensaje y la salida recortada. `runner=auto` detecta."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "cwd": {"type": "string", "description": "Directorio del proyecto (default raíz)"},
+            "runner": {"type": "string", "description": "auto | pytest | npm | cargo | go | custom"},
+            "args": {"type": "string", "description": "Argumentos extra (ej: 'tests/test_x.py -x')"},
+            "keyword": {"type": "string", "description": "Filtro -k de pytest"},
+            "timeout": {"type": "integer", "description": "Segundos (30-3600, default 600)"}},
+            "additionalProperties": False})
+    registry.register_function(repl_tool, name="repl",
+        description=("Ejecuta una celda de Python en un kernel PERSISTENTE de la sesión: imports y "
+                     "variables sobreviven entre llamadas (cargá un archivo una vez y seguí "
+                     "trabajando). Devuelve stdout, stderr, el valor de la última expresión como `_` "
+                     "y el traceback si falló. `reset=true` arranca un kernel limpio."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "code": {"type": "string", "description": "Código Python de la celda"},
+            "reset": {"type": "boolean", "description": "Matar el kernel antes de correr (estado limpio)"},
+            "timeout": {"type": "integer", "description": "Segundos para esta celda (default config)"}},
+            "required": ["code"], "additionalProperties": False})
+
     def _jobs():
         from src.core.jobs import get_jobs
         return get_jobs()
