@@ -1,10 +1,31 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import { X, Settings, Database, Cpu, Shield, FileCode2, Layers, PlugZap, KeyRound, Mic } from 'lucide-react'
+import { X, Settings, Database, Cpu, Shield, FileCode2, Layers, PlugZap, KeyRound, Mic, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ProvidersPanel } from '@/components/providers/ProvidersPanel'
 import { useState, useEffect } from 'react'
-import { keysApi, keyPutApi, permissionApi, permissionPutApi, voiceStatusApi, type KeyEntry, type VoiceStatus } from '@/lib/api'
+import { apiFetch, keysApi, keyPutApi, permissionApi, permissionPutApi, voiceStatusApi, type KeyEntry, type VoiceStatus } from '@/lib/api'
+
+type UpdateState = {
+  ok?: boolean
+  enabled?: boolean
+  is_repo?: boolean
+  branch?: string
+  head?: string
+  remote_head?: string
+  running_head?: string
+  behind?: number
+  ahead?: number
+  dirty?: number
+  update_available?: boolean
+  blocked?: string
+  reason?: string
+  cached?: boolean
+  commits?: string[]
+  applied?: boolean
+  restart_required?: boolean
+  changed_count?: number
+}
 
 function KeysTab() {
   const [keys, setKeys] = useState<KeyEntry[] | null>(null)
@@ -164,6 +185,114 @@ function VozTab() {
   )
 }
 
+function UpdatesCard() {
+  const [st, setSt] = useState<UpdateState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [ok, setOk] = useState(true)
+
+  const load = async (refresh = false) => {
+    try {
+      const r = await apiFetch(`/api/updates/auto${refresh ? '?refresh=1' : ''}`, { timeoutMs: 120000 })
+      setSt(await r.json())
+    } catch (e) {
+      setOk(false)
+      setMsg(String(e).slice(0, 160))
+    }
+  }
+  useEffect(() => { void load(false) }, [])
+
+  const applyNow = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await apiFetch('/api/updates/auto/apply', { method: 'POST', timeoutMs: 300000 })
+      const j = await r.json()
+      setSt(j)
+      if (j.applied) {
+        setOk(true)
+        const w = window as unknown as { nexus?: { restartBackend?: () => Promise<unknown> }; location: Location }
+        if (j.restart_required && w.nexus?.restartBackend) {
+          setMsg('Actualizado. Reiniciando el backend para tomar el código nuevo…')
+          await w.nexus.restartBackend()
+          setTimeout(() => w.location.reload(), 1800)
+        } else {
+          setMsg('Actualizado. Recargá la ventana para ver la UI nueva.')
+          setTimeout(() => w.location.reload(), 1500)
+        }
+      } else {
+        setOk(false)
+        setMsg(j.reason || j.blocked || 'No se aplicó nada.')
+      }
+    } catch (e) {
+      setOk(false)
+      setMsg(String(e).slice(0, 160))
+    }
+    setBusy(false)
+  }
+
+  const nuevo = !!st?.update_available
+  const desfasado = !!st?.running_head && !!st?.head && st.running_head !== st.head
+  const estado = !st
+    ? 'consultando…'
+    : !st.is_repo
+      ? 'sin git en esta instalación'
+      : nuevo
+        ? `${st.behind} commit${st.behind === 1 ? '' : 's'} nuevo${st.behind === 1 ? '' : 's'}`
+        : desfasado
+          ? 'código nuevo en disco — falta reiniciar'
+          : 'al día'
+
+  return (
+    <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-semibold flex items-center gap-2">
+          <RefreshCw className={`h-3.5 w-3.5 ${nuevo ? 'text-[#FFB86B]' : 'text-[#3DDC84]'}`} /> Actualizaciones
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => load(true)} disabled={busy} className="text-[11px] text-[#4C9DFF] hover:text-[#8CC1FF] disabled:opacity-40">
+            buscar ahora
+          </button>
+          <button
+            onClick={applyNow}
+            disabled={busy || !nuevo || !!st?.blocked}
+            className="rounded-lg border border-[#4C9DFF]/30 bg-[#4C9DFF]/10 px-2 py-1 text-[11px] text-[#8CC1FF] hover:bg-[#4C9DFF]/20 disabled:opacity-40"
+          >
+            {busy ? 'actualizando…' : 'actualizar ahora'}
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 text-xs text-[#9BA1AA] leading-relaxed">
+        Se actualiza sola al abrir la app (<span className="font-mono text-[#EDEEF0]">git pull --ff-only</span>) y recompila
+        lo que haga falta. Si hay cambios locales sin commitear o commits propios sin publicar, no toca nada.
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className="rounded-full border border-[#2C3037] bg-[#22262D] px-2 py-0.5 font-mono text-[#9BA1AA]">
+          {st?.branch || '—'}
+        </span>
+        <span className="rounded-full border border-[#2C3037] bg-[#22262D] px-2 py-0.5 font-mono text-[#9BA1AA]">
+          {st?.head || '—'}
+        </span>
+        <span className={`rounded-full px-2 py-0.5 border ${nuevo || desfasado ? 'border-[#FFB86B]/30 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#3DDC84]/30 bg-[#3DDC84]/10 text-[#3DDC84]'}`}>
+          {estado}
+        </span>
+        {!!st?.dirty && (
+          <span className="rounded-full border border-[#FFB86B]/30 bg-[#FFB86B]/10 px-2 py-0.5 text-[#FFB86B]">
+            {st.dirty} cambio{st.dirty === 1 ? '' : 's'} local{st.dirty === 1 ? '' : 'es'}
+          </span>
+        )}
+      </div>
+      {!!st?.commits?.length && (
+        <div className="mt-2 rounded-lg border border-[#2C3037] bg-[#15171B] p-2 font-mono text-[11px] text-[#9BA1AA] space-y-0.5">
+          {st.commits.slice(0, 4).map((c) => <div key={c} className="truncate">· {c}</div>)}
+        </div>
+      )}
+      {st?.blocked && <div className="mt-2 text-[11px] text-[#FFB86B]">{st.blocked}</div>}
+      {!st?.ok && !!st?.reason && <div className="mt-1 text-[11px] text-[#9BA1AA]">{st.reason}</div>}
+      {msg && <div className={`mt-2 text-[11px] ${ok ? 'text-[#3DDC84]' : 'text-[#FF6259]'}`}>{msg}</div>}
+    </div>
+  )
+}
+
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { providerHealth, selectedModel, models, isProvidersLoading, refreshProviders } = useAppStore()
   const current = models.find(m => m.id === selectedModel)
@@ -259,6 +388,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     <div className="text-[11px] text-[#9BA1AA]">Jaula FS activa</div>
                   </div>
                 </div>
+
+                <UpdatesCard />
               </TabsContent>
 
               <TabsContent value="proveedores">

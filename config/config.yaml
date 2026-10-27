@@ -364,7 +364,23 @@ voice:
 updates:
   # URL (http/https) o ruta al manifiesto. Vacio = chequeo deshabilitado.
   # Apunta al asset del ultimo release: la URL no cambia entre versiones.
+  # Sirve para COMPARAR archivos; la actualizacion real va por git (abajo).
   manifest_url: "https://github.com/cjtemer-kaos/nexus-v3/releases/latest/download/updates-manifest.json"
   timeout_s: 10
-  # Deteccion y planificacion solamente: no descarga ni reemplaza archivos.
+  # Deteccion y planificacion por manifiesto: no descarga ni reemplaza archivos.
   auto_apply: false
+
+  # ---- Auto-actualizacion por git (src/core/self_update.py) ----
+  # La app se actualiza sola al abrirse: pull --ff-only ANTES de arrancar el
+  # backend, y recompila ui/dist o electron/dist solo si cambio algo de eso.
+  # Si el arbol tiene cambios locales o hay commits sin publicar, NO toca nada
+  # (podria ser trabajo tuyo) y sigue con la version que ya esta.
+  auto: true
+  apply_on_start: true
+  git_remote: origin
+  git_branch: ""            # vacio = la rama actual (master)
+  check_interval_s: 21600   # mientras corre, avisa cada 6 h si hay algo nuevo
+  build_on_update: true
+  fetch_timeout_s: 25
+  pull_timeout_s: 180
+  build_timeout_s: 300

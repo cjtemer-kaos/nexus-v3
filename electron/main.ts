@@ -14,7 +14,7 @@
  */
 
 import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell } from "electron";
-import { spawn, ChildProcess } from "node:child_process";
+import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -470,6 +470,22 @@ async function start() {
   ipcMain.handle("nexus:getBackendUrl", () => backendUrl);
   ipcMain.handle("nexus:getBackendPort", () => backendPort);
   ipcMain.handle("nexus:restartBackend", async () => restartBackend());
+
+  // Auto-actualizacion: pull --ff-only + recompilar lo que cambio, antes de
+  // spawnear el backend. Normalmente ya lo hizo el .vbs del acceso directo;
+  // `--min-age` evita repetir el `git fetch` dos segundos despues. Si falla,
+  // se arranca con el codigo que ya esta (nunca bloquea).
+  try {
+    const py = getPythonExecutable();
+    const args = ["-m", "src.core.self_update", "--apply-on-start", "--quiet", "--min-age", "120"];
+    const r = spawnSync(py === "py" ? "py" : py, py === "py" ? ["-3", ...args] : args, {
+      cwd: ROOT, timeout: 240000, windowsHide: true, encoding: "utf8",
+    });
+    const out = `${r.stdout || ""}${r.stderr || ""}`.trim();
+    blog("[main]", `self-update: code=${r.status} ${out.slice(0, 300)}`);
+  } catch (e) {
+    blog("[main]", `self-update omitido: ${(e as Error).message}`);
+  }
 
   // Spawn backend BEFORE window so health check can run in parallel
   pyProc = await spawnBackend(backendPort);

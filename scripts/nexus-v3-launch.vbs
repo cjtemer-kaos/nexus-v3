@@ -47,5 +47,16 @@ Set env = sh.Environment("PROCESS")
 env("NEXUS_PYTHON") = py
 env("ELECTRON_IS_DEV") = "0"
 
+' Auto-actualizacion (src/core/self_update.py): pull --ff-only + recompilar lo
+' que cambio, ANTES de abrir Electron. Asi la ventana ya abre con la version
+' nueva. Va con 0,True = oculto y esperando; si falla (sin red, cambios
+' locales, no es repo git) el script termina igual y la app abre como siempre.
+Dim rc
+rc = sh.Run("cmd /c """ & py & """ -m src.core.self_update --apply-on-start --quiet", 0, True)
+If rc <> 0 Then
+  ' Nunca bloquea el arranque: queda el detalle en data\self_update.log
+  sh.Run "cmd /c echo " & rc & " >> data\self_update.log", 0, True
+End If
+
 ' 0 = ventana oculta para el lanzador; Electron abre su propia ventana.
 sh.Run """" & electron & """ """ & mainJs & """", 0, False

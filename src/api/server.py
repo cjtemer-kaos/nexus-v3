@@ -517,6 +517,11 @@ async def _startup():
         _spawn_bg(_distill_orphan_sessions())
     except Exception:
         pass
+    # Auto-update: se aplica al abrir la app; mientras corre, solo avisa.
+    try:
+        _spawn_bg(_self_update_watcher())
+    except Exception as e:
+        logger.debug("auto-update watcher no arrancó: %s", e)
     # llama.cpp DESCARTADO (2026-09-28): autostart solo si config lo pide explicito.
     # Sin bloque llamacpp en config -> ni se intenta.
     try:
@@ -1877,6 +1882,85 @@ async def updates_check(manifest_url: str = ""):
         raise HTTPException(status_code=502, detail=f"no se pudo leer el manifiesto: {e}")
     res["enabled"] = True
     return JSONResponse(res)
+
+
+# ---- Auto-actualizacion por git (src/core/self_update.py) ----
+@app.get("/api/updates/auto")
+async def updates_auto_status(refresh: bool = False):
+    """Estado del auto-update: rama, commit, si hay algo nuevo y por que no se aplico.
+
+    `refresh=1` sale a la red (`git fetch`); sin eso responde con el ultimo
+    chequeo guardado para no colgar la UI cuando alguien abre Ajustes.
+    """
+    from src.core import self_update as _su
+
+    up = (_load_config_safe().get("updates") or {})
+    if refresh:
+        res = await asyncio.to_thread(_su.check, _PROJECT_ROOT, up, True, 0.0)
+    else:
+        res = ((_su.last_state() or {}).get("last_check") or {})
+        if not res:
+            res = await asyncio.to_thread(_su.check, _PROJECT_ROOT, up, False, 0.0)
+        else:
+            res = {**res, "cached": True}
+    # El backend corre el codigo que importó al arrancar: si el pull ya se
+    # aplicó en disco, `head` y `running_head` difieren y hace falta reiniciar.
+    res["running_head"] = (_su.repo_state(_PROJECT_ROOT) or {}).get("head", "")
+    return JSONResponse(res)
+
+
+@app.post("/api/updates/auto/apply")
+async def updates_auto_apply():
+    """Aplica el update ahora (git pull --ff-only + builds).
+
+    El proceso NO se reinicia solo: sigue con los módulos ya importados. La UI
+    tiene que llamar a `nexus.restartBackend()` para que tome el código nuevo.
+    """
+    from src.core import self_update as _su
+
+    up = (_load_config_safe().get("updates") or {})
+    if not up.get("auto", True):
+        raise HTTPException(status_code=400, detail="updates.auto está desactivado en config.yaml")
+    res = await asyncio.to_thread(_su.apply, _PROJECT_ROOT, up, True)
+    if res.get("applied"):
+        logger.info(
+            "auto-update aplicado: %s -> %s (%s archivos, builds=%s, reinicio=%s)",
+            res.get("from_head"), res.get("to_head"), res.get("changed_count"),
+            res.get("built") or "-", res.get("restart_required"),
+        )
+    elif res.get("update_available"):
+        logger.info("auto-update no aplicado: %s", res.get("reason") or res.get("blocked"))
+    _state["self_update"] = res
+    return JSONResponse(res)
+
+
+async def _self_update_watcher() -> None:
+    """Avisa si hay version nueva mientras la app está abierta.
+
+    No aplica nada en caliente: reemplazar módulos ya importados deja el proceso
+    en un estado raro (y el turno en curso se corta). El pull se hace al abrir
+    la app; acá solo se detecta y se deja el dato para la UI.
+    """
+    while True:
+        interval = 3600
+        try:
+            up = (_load_config_safe().get("updates") or {})
+            interval = int(up.get("check_interval_s") or 21600) if up.get("auto", True) else 3600
+            if up.get("auto", True):
+                from src.core import self_update as _su
+
+                res = await asyncio.to_thread(_su.check, _PROJECT_ROOT, up, True, 0.0)
+                _state["self_update"] = res
+                if res.get("update_available"):
+                    logger.info(
+                        "auto-update: hay %s commit(s) nuevos (%s); se aplican al reiniciar la app",
+                        res.get("behind"), res.get("blocked") or "listo para aplicar",
+                    )
+                elif not res.get("ok"):
+                    logger.debug("auto-update: %s", res.get("reason"))
+        except Exception as e:
+            logger.debug("auto-update watcher: %s", e)
+        await asyncio.sleep(max(300, interval))
 
 
 # ---- Sessions ----

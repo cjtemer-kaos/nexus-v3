@@ -845,7 +845,16 @@
       "properties": {
         "manifest_url": { "type": "string" },
         "timeout_s": { "type": "number", "minimum": 1 },
-        "auto_apply": { "type": "boolean" }
+        "auto_apply": { "type": "boolean" },
+        "auto": { "type": "boolean" },
+        "apply_on_start": { "type": "boolean" },
+        "git_remote": { "type": "string" },
+        "git_branch": { "type": "string" },
+        "check_interval_s": { "type": "number", "minimum": 0 },
+        "build_on_update": { "type": "boolean" },
+        "fetch_timeout_s": { "type": "number", "minimum": 1 },
+        "pull_timeout_s": { "type": "number", "minimum": 1 },
+        "build_timeout_s": { "type": "number", "minimum": 1 }
       },
       "additionalProperties": false
     }
