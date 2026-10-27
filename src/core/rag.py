@@ -349,6 +349,11 @@ def search(query: str, limit: int = 5, min_score: float = 0.25) -> list[dict]:
     Con 19k chunks el coseno en Python puro tardaba 3.5-12 s por query. La matriz de
     embeddings se arma una vez y se cachea en proceso (invalidada por count+max(id)).
     """
+    # Una consulta vacia no es una busqueda: el embedding de "" matchea el chunk
+    # "# No sources found." que el indexador guardo por su cuenta, y el llamador
+    # recibe esa "fuente" con score alto. Sin consulta, sin resultados.
+    if not (query or "").strip():
+        return []
     qvecs = embed(query)
     if not qvecs:
         return []

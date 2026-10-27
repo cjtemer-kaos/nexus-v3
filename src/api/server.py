@@ -1553,9 +1553,19 @@ async def embed_text(request: Request):
 async def rag_search(q: str, limit: int = 5):
     """Búsqueda semántica RAG sobre el índice propio."""
     from src.core import rag as _rag
+    # `q=""` devolvia 200 con un resultado y score 0.62: el chunk
+    # "# No sources found." que el propio indexador habia guardado. El embedding
+    # de una cadena vacia se parece a ese ruido, no a conocimiento; el cliente
+    # recibia una "fuente" que no responde nada. Mismo contrato que
+    # /api/graph/search -> 400 cuando falta la consulta.
+    if not (q or "").strip():
+        raise HTTPException(status_code=400, detail="q required")
+    # `limit=-1` (un cliente pidiendo "todas") caia en max(1, min(20, -1)) = 1:
+    # MENOS resultados que el default. Un valor <= 0 significa "el default".
+    tope = limit if limit and int(limit) > 0 else 5
     try:
         import asyncio as _aio
-        res = await _aio.to_thread(_rag.search, q, max(1, min(20, limit)))
+        res = await _aio.to_thread(_rag.search, q, max(1, min(20, tope)))
         return {"query": q, "results": res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2366,6 +2376,38 @@ async def fs_list(path: str = "./workspace"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+_BOMS_TEXTO = (
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+
+
+def _leer_como_texto(p, size: int, etiqueta: str) -> str:
+    """Contenido de texto, o 415 si el archivo es binario.
+
+    `fs/read` decodificaba cualquier cosa con `errors="replace"`: leer
+    `.venv-ft314\\Scripts\\python.exe` (241 KB) devolvia 237 393 caracteres con
+    **71 533 U+FFFD** y `data/session.db` otros 63 874. Basura binaria servida
+    como texto: no se puede mostrar ni razonar sobre ella, y si el cliente la
+    mete en un prompt ocupa decenas de miles de tokens para nada.
+
+    Un NUL en la cabeza es la senal clasica de binario. Un archivo UTF-16/32
+    tambien tiene NULs, pero empieza con BOM: esos se decodifican con su
+    encoding en vez de rechazarse.
+    """
+    with open(p, "rb") as fh:
+        cabeza = fh.read(8192)
+    for bom, enc in _BOMS_TEXTO:
+        if cabeza.startswith(bom):
+            return p.read_text(encoding=enc, errors="replace")
+    if b"\x00" in cabeza:
+        raise HTTPException(status_code=415,
+                            detail=f"no es texto (binario, {size} bytes): {etiqueta}")
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
 @app.get("/api/fs/read")
 async def fs_read(path: str):
     from src.core.scope import ScopeDenied
@@ -2380,7 +2422,7 @@ async def fs_read(path: str):
         size = p.stat().st_size
         if size > max_b:
             raise HTTPException(status_code=413, detail=f"archivo excede límite {max_b} bytes (tiene {size})")
-        content = p.read_text(encoding="utf-8", errors="replace")
+        content = _leer_como_texto(p, size, path)
         return {"path": path, "content": content, "size": size}
     except ScopeDenied as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -3040,6 +3082,18 @@ async def session_replay(session_id: str, limit: int = 500):
         evs = _event_store().get_events(session_id=session_id, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"replay failed: {e}")
+    # `{"events": []}` para un id que no existe hace creer al cliente que la
+    # sesion esta vacia (mismo criterio que /messages, /tree y /export -> 404).
+    # Pero los eventos viven en otro store: una sesion podada de `session_log`
+    # puede conservarlos, y esos SI hay que devolverlos. Solo es 404 cuando no
+    # hay eventos Y el id tampoco existe como sesion.
+    if not evs:
+        try:
+            existe = _session_log().get_session(session_id) is not None
+        except Exception:
+            existe = True  # si el log no se puede leer, no se inventa un 404
+        if not existe:
+            raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
     return {"events": [e.to_dict() for e in evs]}
 
 
