@@ -4436,6 +4436,11 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         with open(p, "rb") as fh:
             cabeza = fh.read(8192)
         if parece_binario(cabeza) and not detectar_bom(cabeza):
+            if p.suffix.lower() in _IMAGE_MIMES:
+                raise ValueError(
+                    f"es una imagen ({p.suffix.lower()[1:]}, {size} bytes): {path}. "
+                    f"No se puede devolver como texto; usá image_describe(path=...) "
+                    f"para que la mire el modelo de vision.")
             raise ValueError(
                 f"no es texto (binario, {size} bytes): {path}. No se decodifica: "
                 f"usa exec con una herramienta adecuada si necesitas inspeccionarlo.")

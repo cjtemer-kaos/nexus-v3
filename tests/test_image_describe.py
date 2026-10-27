@@ -140,3 +140,55 @@ def test_esta_registrada_y_es_de_lectura():
     from src.core.scope import IDEMPOTENT_TOOLS
 
     assert "image_describe" in IDEMPOTENT_TOOLS
+
+
+@pytest.fixture()
+def leer_archivo(tmp_path):
+    """Registry real con una raiz permitida temporal (sin tocar data/ ni workspace/)."""
+    import copy
+
+    cfg = copy.deepcopy(S._load_config_safe())
+    cfg.setdefault("scope", {})
+    cfg["scope"]["allowed_roots"] = [str(tmp_path)]
+    cfg["scope"]["permission"] = "full"
+    scope = S._build_scope(cfg)
+    reg = S._build_registry(scope, f"test-read-{uuid.uuid4().hex[:8]}", cfg)
+
+    def usar(path):
+        return asyncio.run(reg.dispatch("read_file", {"path": str(path)}, scope=scope, hooks=None))
+
+    return usar
+
+
+def test_read_file_de_una_imagen_manda_a_image_describe(tmp_path, leer_archivo):
+    """Antes decia \"no es texto (binario)\" y el modelo no sabia que tenia image_describe."""
+    p = _png(tmp_path / "captura.png")
+
+    with pytest.raises(ValueError) as e:
+        leer_archivo(p)
+
+    msg = str(e.value)
+    assert "es una imagen" in msg and "png" in msg
+    assert "image_describe" in msg
+    assert "no es texto" not in msg
+
+
+def test_read_file_de_un_binario_que_no_es_imagen_sigue_generico(tmp_path, leer_archivo):
+    p = tmp_path / "programa.bin"
+    p.write_bytes(b"\x00\x01\x02\x03" * 512)
+
+    with pytest.raises(ValueError) as e:
+        leer_archivo(p)
+
+    msg = str(e.value)
+    assert "no es texto (binario" in msg
+    assert "image_describe" not in msg
+
+
+def test_read_file_de_texto_sigue_leyendo(tmp_path, leer_archivo):
+    p = tmp_path / "notas.txt"
+    p.write_text("hola\nmundo\n", encoding="utf-8")
+
+    out = leer_archivo(p)
+
+    assert "hola" in out and "mundo" in out
