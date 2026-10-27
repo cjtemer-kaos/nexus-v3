@@ -141,6 +141,19 @@ def test_grep_lee_archivos_cp1252(arbol, tools):
     assert "legacy.txt:1:" in out, out
 
 
+def test_grep_con_patron_vacio_falla_en_vez_de_devolver_todo(arbol, tools):
+    """Patrón vacío matchea cada línea del árbol: una lista enorme que se come el
+    contexto del turno. Tiene que decir que falta el patrón."""
+    _, intentar = tools
+
+    est, out = intentar("grep", pattern="", path=str(arbol))
+    assert est == "err"
+    assert "vac" in out.lower()
+
+    est, out = intentar("grep", pattern="   ", path=str(arbol))
+    assert est == "err"
+
+
 # ------------------------------------------------------------ code_search
 
 

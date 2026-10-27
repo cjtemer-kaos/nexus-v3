@@ -20,19 +20,44 @@ class TodoItem:
     content: str
     status: str  # pending | in_progress | completed
 
+FORMA = 'lista de objetos [{"content": "...", "status": "pending|in_progress|completed"}]'
+
+
 def _validate(todos: List[dict], allow_parallel: bool) -> List[TodoItem]:
+    # El registry coerciona `todos: "x"` a `["x"]` (los modelos chicos mandan un
+    # string suelto), asi que aca puede llegar una lista de strings. Validar la
+    # forma con un mensaje accionable evita el AttributeError del `.get`.
+    if isinstance(todos, (str, bytes)) or not isinstance(todos, (list, tuple)):
+        raise ValueError(f"todos invalido: se esperaba {FORMA} (recibido {type(todos).__name__})")
     seen = set()
     active = 0
     out: List[TodoItem] = []
-    for item in todos:
-        content = str(item.get("content", "")).strip()
-        status = str(item.get("status", ""))
+    for i, item in enumerate(todos):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"todos[{i}] invalido: se esperaba un objeto con content y status, "
+                f"no {type(item).__name__}. Forma esperada: {FORMA}")
+        raw_content = item.get("content")
+        if raw_content is None:
+            raw_content = ""
+        if not isinstance(raw_content, str):
+            raise ValueError(
+                f"todos[{i}].content invalido: debe ser string (recibido {type(raw_content).__name__})")
+        content = raw_content.strip()
+        raw_status = item.get("status")
+        if raw_status is None:
+            raw_status = ""
+        if not isinstance(raw_status, str):
+            raise ValueError(
+                f"todos[{i}].status invalido: debe ser string (recibido {type(raw_status).__name__})")
+        status = raw_status.strip()
         if not content:
-            raise ValueError("invalid todo: `content` must be non-empty string")
+            raise ValueError(f"todos[{i}].content invalido: no puede estar vacio")
         if status not in VALID_STATUSES:
-            raise ValueError(f"invalid todo status: {status!r} — must be one of {VALID_STATUSES}")
+            raise ValueError(
+                f"todos[{i}].status invalido: {status!r}. Valores validos: {list(VALID_STATUSES)}")
         if content in seen:
-            raise ValueError(f"invalid todos: duplicate content {content!r}")
+            raise ValueError(f"todos duplicados: {content!r} aparece mas de una vez")
         seen.add(content)
         if status == "in_progress":
             active += 1

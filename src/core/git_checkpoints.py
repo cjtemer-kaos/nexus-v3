@@ -204,14 +204,34 @@ def list_git_checkpoints(session_id: str, limit: int = 50,
     return items
 
 
+_ID_RE = re.compile(r"[0-9a-fA-F]{4,64}")
+
+
+def _commit_de(gitdir: Path, root_p: Path, checkpoint_id: str) -> str:
+    """Resuelve el checkpoint a un commit, con un error que diga qué hacer.
+
+    Antes el fallo de `rev-parse` llegaba crudo al modelo
+    ("fatal: Needed a single revision"), que no le dice nada ni cómo seguir.
+    """
+    if not checkpoint_id or not _ID_RE.fullmatch(checkpoint_id):
+        raise ValueError(
+            f"checkpoint_id invalido: {checkpoint_id!r}. Es el id hexadecimal que "
+            f"devuelve checkpoint_create / checkpoint_list.")
+    try:
+        return _run(_base(gitdir, root_p) + ["rev-parse", "--verify", f"{checkpoint_id}^{{commit}}"],
+                    cwd=root_p).stdout.strip()
+    except Exception:
+        raise ValueError(
+            f"checkpoint no encontrado: {checkpoint_id}. Usá checkpoint_list para ver "
+            f"los ids de esta sesión.")
+
+
 def restore_git_checkpoint(session_id: str, checkpoint_id: str,
                            clean: bool = False,
                            root: str | Path | None = None) -> dict:
     """Restaura el work-tree al checkpoint. `clean` borra archivos posteriores."""
     if not _git():
         return {"ok": False, "error": "git no esta disponible"}
-    if not checkpoint_id or not re.fullmatch(r"[0-9a-fA-F]{4,64}", checkpoint_id):
-        return {"ok": False, "error": "checkpoint_id invalido"}
     root_p = Path(root).resolve() if root else workspace_root().resolve()
     gitdir = _checkpoints_root() / _session_key(session_id)
     if not (gitdir / "HEAD").exists():
@@ -219,8 +239,7 @@ def restore_git_checkpoint(session_id: str, checkpoint_id: str,
     with _lock_for(gitdir):
         base = _base(gitdir, root_p)
         try:
-            commit = _run(base + ["rev-parse", "--verify", f"{checkpoint_id}^{{commit}}"],
-                          cwd=root_p).stdout.strip()
+            commit = _commit_de(gitdir, root_p, checkpoint_id)
             _run(base + ["checkout", commit, "--", "."], cwd=root_p, timeout=180)
             cleaned = False
             if clean:
@@ -245,8 +264,7 @@ def diff_git_checkpoint(session_id: str, checkpoint_id: str,
     with _lock_for(gitdir):
         base = _base(gitdir, root_p)
         try:
-            commit = _run(base + ["rev-parse", "--verify", f"{checkpoint_id}^{{commit}}"],
-                          cwd=root_p).stdout.strip()
+            commit = _commit_de(gitdir, root_p, checkpoint_id)
             _run(base + ["add", "-A"], cwd=root_p, timeout=180)
             out = _run(base + ["diff", "--cached", commit, "--", "."], cwd=root_p).stdout
             return {"ok": True, "id": commit,

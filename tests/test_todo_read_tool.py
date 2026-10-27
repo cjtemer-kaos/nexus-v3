@@ -97,3 +97,38 @@ def test_todo_write_sigue_validando(registrar):
         llamar("todo_write", {"todos": [{"content": "", "status": "pending"}]})
     with pytest.raises(ValueError):
         llamar("todo_write", {"todos": [{"content": "x", "status": "inventado"}]})
+
+
+def test_todo_write_con_string_no_revienta(registrar):
+    """Un modelo chico manda `todos` como string: el registry lo coerciona a
+    ["no-es-lista"] y el handler hacia `item.get` -> AttributeError sin mensaje.
+    Tiene que ser un ValueError que diga la forma esperada."""
+    _, llamar = registrar(f"test-todo-{uuid.uuid4().hex[:8]}")
+
+    with pytest.raises(ValueError) as exc:
+        llamar("todo_write", {"todos": "no-es-lista"})
+    assert "todos[0]" in str(exc.value) and "content" in str(exc.value)
+
+    # La lista previa no se toca cuando el write falla.
+    llamar("todo_write", {"todos": [{"content": "sigue", "status": "pending"}]})
+    with pytest.raises(ValueError):
+        llamar("todo_write", {"todos": ["texto suelto"]})
+    assert "sigue" in llamar("todo_read")
+
+
+@pytest.mark.parametrize(
+    "todos, esperado",
+    [
+        (["suelto"], "todos[0]"),
+        ([{"content": 123, "status": "pending"}], "content"),
+        ([{"content": "ok", "status": 1}], "status"),
+        ([{"content": "ok"}], "status"),
+        ([{"status": "pending"}], "content"),
+    ],
+)
+def test_todo_write_items_mal_formados(registrar, todos, esperado):
+    _, llamar = registrar(f"test-todo-{uuid.uuid4().hex[:8]}")
+    with pytest.raises(ValueError) as exc:
+        llamar("todo_write", {"todos": todos})
+    assert esperado in str(exc.value)
+    assert isinstance(exc.value, ValueError)

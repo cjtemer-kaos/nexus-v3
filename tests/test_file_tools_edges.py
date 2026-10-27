@@ -64,6 +64,19 @@ def test_edit_con_old_vacio_falla_tambien_sin_replace_all(tools):
     assert (raiz / "sub" / "nota.txt").read_text(encoding="utf-8").startswith("uno")
 
 
+def test_edit_con_old_igual_a_new_no_dice_que_edito(tools):
+    """Un no-op respondía "editado (1 reemplazo/s)": el modelo creía que había
+    aplicado el cambio y seguía adelante con el archivo intacto."""
+    llamar, raiz = tools
+    antes = (raiz / "sub" / "nota.txt").read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError) as e:
+        llamar("edit", {"path": "sub/nota.txt", "old": "uno", "new": "uno"})
+
+    assert "idéntic" in str(e.value) or "identic" in str(e.value)
+    assert (raiz / "sub" / "nota.txt").read_text(encoding="utf-8") == antes
+
+
 def test_glob_sobre_un_archivo_manda_a_grep(tools):
     llamar, raiz = tools
     archivo = str(raiz / "sub" / "nota.txt")

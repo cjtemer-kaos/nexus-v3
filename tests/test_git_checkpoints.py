@@ -59,3 +59,28 @@ def test_restore_rejects_bad_id(tmp_path, monkeypatch):
     root.mkdir()
     res = gc.restore_git_checkpoint("s3", "../etc/passwd", root=root)
     assert res["ok"] is False
+
+
+def test_diff_y_restore_con_id_inexistente_no_filtran_el_error_de_git(tmp_path, monkeypatch):
+    """Antes el fallo de `rev-parse` llegaba crudo: "fatal: Needed a single
+    revision". El modelo no sabe que hacer con eso; tiene que decir que el
+    checkpoint no existe y como listar los validos."""
+    monkeypatch.setenv("NEXUS_GIT_CHECKPOINTS_DIR", str(tmp_path / "shadow"))
+    root = tmp_path / "work"
+    root.mkdir()
+    (root / "a.txt").write_text("uno", encoding="utf-8")
+    primero = gc.create_git_checkpoint("s4", "inicial", root=root)
+    assert primero["ok"]
+
+    diff = gc.diff_git_checkpoint("s4", "deadbeef", root=root)
+    assert diff["ok"] is False
+    assert "no encontrado" in diff["error"]
+    assert "fatal" not in diff["error"]
+    assert "checkpoint_list" in diff["error"]
+
+    r = gc.restore_git_checkpoint("s4", "deadbeef", root=root)
+    assert r["ok"] is False
+    assert "no encontrado" in r["error"] and "fatal" not in r["error"]
+
+    malo = gc.diff_git_checkpoint("s4", "", root=root)
+    assert malo["ok"] is False and "invalido" in malo["error"]

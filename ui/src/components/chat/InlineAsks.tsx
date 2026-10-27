@@ -45,9 +45,10 @@ export function InlineAsks() {
     setBusy(q.id)
     setError(null)
     try {
+      // Sin eco local: la respuesta viaja en el resultado de la tool `question`
+      // y el historial la muestra ahí. Antes se agregaba un mensaje de usuario y
+      // el merge lo dejaba al final del hilo, después de la réplica del agente.
       await questionAnswerApi(q.id, valor)
-      const visible = Array.isArray(valor) ? valor.join(' / ') : valor
-      addMessage({ id: uid(), role: 'user', content: visible, timestamp: hora() })
       setPreguntas((prev) => prev.filter((x) => x.id !== q.id))
       setTexto((prev) => ({ ...prev, [q.id]: '' }))
       setMarcadas((prev) => ({ ...prev, [q.id]: [] }))

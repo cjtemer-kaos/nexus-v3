@@ -4637,6 +4637,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 f"el texto a reemplazar (`old`) está vacío en {path}: no se puede "
                 f"reemplazar 'nada' (rompería el archivo entero). Pasá el fragmento "
                 f"exacto a cambiar, con contexto suficiente para que sea único.")
+        if old == new:
+            # No-op silencioso: la tool respondía "editado (1 reemplazo/s)" sin
+            # cambiar nada y el modelo seguía como si hubiera aplicado el cambio.
+            raise ValueError(
+                f"`old` y `new` son idénticos en {path}: no hay nada que cambiar. "
+                f"Si el archivo ya tiene el contenido buscado, seguí con el próximo paso.")
         scope.check_tool("edit", {"path": path, "content": new})
         if not p.is_file():
             raise FileNotFoundError(f"no existe o no es archivo: {path}")
@@ -5359,7 +5365,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     def todo_write(todos):
         """Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed."""
         if not isinstance(todos, list):
-            raise ValueError("todos must be array")
+            raise ValueError(f"todos debe ser una lista de objetos {{content, status}} (recibido {type(todos).__name__})")
         scope.check_tool("todo_write", {"todos": todos})
         res = _todo_store.write(session_id, todos)
         return _json2.dumps(res, ensure_ascii=False)

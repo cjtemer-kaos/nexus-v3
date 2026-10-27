@@ -100,3 +100,20 @@ def test_clear_only_affects_target_session(store):
     store.clear("s1")
     assert store.read("s1")["todos"] == []
     assert len(store.read("s2")["todos"]) == 1
+
+
+@pytest.mark.parametrize(
+    "todos",
+    [
+        "no-es-lista",
+        ["suelto"],
+        [{"content": 123, "status": "pending"}],
+        [{"content": "a", "status": 2}],
+        [{"content": "a", "status": None}],
+        [{"content": None, "status": "pending"}],
+    ],
+)
+def test_forma_invalida_es_valueerror_no_attributeerror(store, todos):
+    with pytest.raises(ValueError):
+        store.write("s1", todos)
+    assert store.read("s1")["todos"] == []

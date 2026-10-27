@@ -38,6 +38,12 @@ async def code_search(
         Dict with success, results, and metadata.
     """
     search_path = path or os.getcwd()
+    # Patrón vacío no es "buscar todo": en rg/grep matchea cada línea del repo y
+    # devuelve una lista enorme que se come el contexto. Es casi siempre un modelo
+    # que se olvidó el argumento.
+    if not str(query or "").strip():
+        return {"error": ("query vacía: pasá un patrón de búsqueda "
+                          "(ej: 'def main', 'TODO|FIXME', 'class Foo').")}
     if not os.path.isabs(search_path):
         search_path = os.path.abspath(search_path)
     
