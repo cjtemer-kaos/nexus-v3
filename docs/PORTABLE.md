@@ -63,3 +63,23 @@ de ESTA pc (`nomic-embed-text` o familia), crea `rag_index.db` si falta y
 hace smoke test. `ensure_learning()` crea el brain, verifica el grafo
 (upsert por `topic_key`), ejecuta `maintain()` y comprueba gates
 (Thompson + held-out fail-closed + mantenimiento cada 6h).
+
+## 3bis. Skills (catálogo local, NO viaja en el repo)
+
+`data/skills` está en `.gitignore` (pesa cientos de MB), así que después de
+clonar el catálogo arranca vacío y el agente no puede cargar ninguna skill.
+Se puebla **copiando** (nunca enlazando: nexus no lee rutas de otra
+instalación, ver `test_skills_catalog.py::test_roots_fuera_del_proyecto_se_ignoran`):
+
+```powershell
+python scripts\skills_import.py --from D:\ruta\al\hub            # un hub explícito
+python scripts\skills_import.py --from A --from B                # varias fuentes
+python scripts\skills_import.py --from-opencode                  # ~/.claude/skills + ~/.config/opencode/skills
+python scripts\skills_import.py --from-opencode --dry-run        # medir antes de copiar
+```
+
+El índice se refresca solo (TTL 5 min) o al instante con
+`GET /api/skills?refresh=true`. Verificación: `skill(query="pytest")` en el
+agente devuelve el nombre real, y `skill(name="python-testing")` trae el
+SKILL.md completo.
+

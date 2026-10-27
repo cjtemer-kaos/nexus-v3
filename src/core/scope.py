@@ -84,7 +84,7 @@ def _glob_match(path_str: str, pattern: str) -> bool:
 
 # Tool categories for permission gating (from supernexus-v2/tool_guardrails.py)
 IDEMPOTENT_TOOLS = frozenset({
-    "read", "read_file", "todo_write", "web_fetch", "search_files", "web_search", "web_fetch",
+    "read", "read_file", "todo_write", "todo_read", "web_fetch", "search_files", "web_search", "web_fetch",
     "browser_snapshot", "browser_console", "mcp_filesystem_read_file",
     "mcp_filesystem_list_directory", "mcp_filesystem_get_file_info",
     "glob", "grep", "search_observations", "repo_map", "code_search", "recall",

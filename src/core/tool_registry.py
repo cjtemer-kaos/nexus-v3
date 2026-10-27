@@ -187,6 +187,7 @@ TOOL_ALIASES: dict[str, str] = {
     "patch": "apply_patch",
     "webfetch": "web_fetch",
     "todowrite": "todo_write",
+    "todoread": "todo_read",
 }
 
 

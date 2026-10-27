@@ -3243,6 +3243,12 @@ async def skills_list(q: str = "", limit: int = 0, refresh: bool = False):
     }
 
 
+# Puntaje minimo para creer que una busqueda de skills encontro el tema. Medido con
+# las 2.161 reales: consultas legitimas dan >= 11 en el primer hit; una cadena sin
+# sentido ("zzzz-no-existe-xyz") da 0.8-1.2 solo por coincidencias sueltas de cuerpo.
+UMBRAL_SKILL_FLOJO = 5.0
+
+
 @app.get("/api/tools")
 async def tools_list():
     cfg = _load_config_safe()
@@ -3922,7 +3928,7 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
     if not sys_prompt:
         sys_prompt = ("Eres un ayudante/gema de nexus-v3 especializado. Tenés tools de archivos "
                       "(read_file/write_file/edit/list_dir/exec/code_search), web (web_search/web_fetch), "
-                      "memoria (recall/learn) y todo_write. NO delegues: resolvé la tarea VOS MISMO. "
+                      "memoria (recall/learn), todo_write/todo_read. NO delegues: resolvé la tarea VOS MISMO. "
                       "Devolvé un resultado conciso y verificable.")
     assign = assign_model(router, gema=use_gema, explicit=(agent or {}).get("model") or None, overrides=_assign_overrides(cfg))
     model = assign.get("model") or None
@@ -4092,14 +4098,16 @@ def _steer_drain(session_id: str) -> list:
 _SUB_TOOLSETS: dict[str, tuple[str, ...]] = {
     # Investigación: solo lectura + web + memoria. Sin mutaciones ni shell.
     "scholar": ("read_file", "list_dir", "glob", "grep", "code_search", "web_search", "web_fetch",
-                "recall", "learn", "todo_write"),
+                "recall", "learn", "todo_write", "todo_read"),
     # Código: lectura/escritura + shell + web. La delegación queda fuera.
     "code": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
-             "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
+             "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write",
+             "todo_read"),
     "engineer": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
-                 "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
+                 "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write",
+                 "todo_read"),
     "debugger": ("read_file", "list_dir", "glob", "grep", "code_search", "exec", "web_search",
-                 "web_fetch", "recall", "learn", "todo_write"),
+                 "web_fetch", "recall", "learn", "todo_write", "todo_read"),
 }
 
 
@@ -4166,7 +4174,7 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
                                    distill_hook=_build_distill_hook(cfg or {}),
                                    approval=_appr)
             _sub_sys = ("Eres un sub-agente de nexus-v3. Tenés tools de archivos (read_file/write_file/edit/"
-                        "list_dir/exec/code_search), web (web_search/web_fetch), memoria (recall/learn) y todo_write. "
+                        "list_dir/exec/code_search), web (web_search/web_fetch), memoria (recall/learn) y todo_write/todo_read. "
                         "NO tenés delegación: hacé la tarea VOS MISMO. Devolvé un resultado conciso y verificable.")
             res = await loop.run(task=(context + "\n\n" if context else "") + task, session_id=child_sid, system_prompt=_sub_sys)
             return res.final_output or ""
@@ -4314,12 +4322,23 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             }, ensure_ascii=False)
         if query:
             hits = _sk.search(query, cfg_live, limit=max(1, min(50, int(limit or 10))))
-            return _js.dumps({
+            out: dict = {
                 "query": query,
                 "count": len(hits),
                 "results": hits,
                 "hint": 'carga la elegida con skill(name="<nombre>")',
-            }, ensure_ascii=False)
+            }
+            # Con 2.161 skills siempre hay *algun* match por coincidencias sueltas
+            # ("zzzz-no-existe-xyz" devolvia 4 skills con score 0.81-1.2 como si
+            # fueran respuestas). El score se dice y, si el mejor es flojo, se
+            # avisa: el modelo cargaba la skill equivocada y seguia sus pasos.
+            if not hits:
+                out["aviso"] = (f"no hay ninguna skill para '{query}'. Probá con una "
+                                f"palabra del tema (ej: 'video', 'obs', 'testing').")
+            elif float(hits[0].get("score") or 0) < UMBRAL_SKILL_FLOJO:
+                out["aviso"] = ("coincidencias debiles (score < 5): probablemente NO hay "
+                                "una skill para este tema; mirá la descripcion antes de cargarla.")
+            return _js.dumps(out, ensure_ascii=False)
         st = _sk.stats(cfg_live)
         return _js.dumps({
             "installed": st["count"],
@@ -5176,6 +5195,24 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         res = _todo_store.write(session_id, todos)
         return _json2.dumps(res, ensure_ascii=False)
     registry.register_function(todo_write, name="todo_write", description="Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed", category="local", parameters={"type":"object","properties":{"todos":{"type":"array","description":"The COMPLETE task list, replacing any previous list.","items":{"type":"object","additionalProperties":False,"properties":{"content":{"type":"string","description":"What the task is — short imperative line."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"pending|in_progress|completed"}}}}},"required":["todos"],"additionalProperties":False})
+
+    def todo_read():
+        """Devuelve la lista de tareas de esta sesión (counts incluidos)."""
+        scope.check_tool("todo_read", {})
+        res = _todo_store.read(session_id)
+        if not res.get("todos"):
+            return "No hay lista de tareas en esta sesión (usá todo_write para crearla)."
+        lineas = [f"[x] {t['content']}" if t["status"] == "completed"
+                  else (f"[~] {t['content']}" if t["status"] == "in_progress"
+                        else f"[ ] {t['content']}")
+                  for t in res["todos"]]
+        c = res["counts"]
+        return ("\n".join(lineas) +
+                f"\n\npending={c['pending']} in_progress={c['inProgress']} completed={c['completed']}")
+    registry.register_function(todo_read, name="todo_read",
+        description="Lee la lista de tareas de esta sesión (la que escribió todo_write). Úsala al retomar un trabajo o después de una compactación: la lista NO se repite en el contexto.",
+        category="local",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False})
 
     def web_fetch(url: str, timeout: int = 12) -> str:
         """Fetch URL and return text (Scope network gate applies). Truncates to 15k."""

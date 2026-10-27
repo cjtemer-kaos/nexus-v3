@@ -304,7 +304,7 @@ def check_tool_approval(
             reason = f"tool mutante en modo strict: {tool}"
         elif category in ("local", "registered") and tool not in (
                 "echo", "read_file", "list_dir", "glob", "code_search",
-                "web_search", "web_fetch", "recall", "todo_write"):
+                "web_search", "web_fetch", "recall", "todo_write", "todo_read", "grep", "repo_map"):
             # strict = cualquier tool que no sea de lectura conocida
             reason = f"tool no clasificada como lectura: {tool}"
 

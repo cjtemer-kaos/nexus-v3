@@ -91,7 +91,7 @@ def test_los_alias_declarados_tienen_destino_conocido():
                              "pattern", "query", "command"}
     assert set(TOOL_ALIASES.values()) <= {
         "read_file", "write_file", "list_dir", "exec", "apply_patch",
-        "web_fetch", "todo_write"}
+        "web_fetch", "todo_write", "todo_read"}
 
 
 # --------------------------------------------------- dispatch: tool y args
