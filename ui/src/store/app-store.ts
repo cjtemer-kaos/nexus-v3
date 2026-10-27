@@ -305,6 +305,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const raw = await sessionMessagesApi(sessionId)
       if (get().activeSession !== sessionId) return // carrera: la sesión cambió
       const mapped: ChatMessage[] = raw
+        // Un assistant que solo emitió tool_calls se persiste para emparejar el
+        // resultado al reanudar, pero en el chat la llamada ya se ve en el bloque
+        // de la tool: no se muestra una burbuja vacía.
+        .filter((m) => !(m.role === 'assistant' && !(m.content || '').trim() && (m.tool_calls?.length ?? 0) > 0))
         .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool' ||
           (m.role === 'system' && (m.kind === 'compaction_summary' || m.display_role === 'system' ||
             /^\[(resumen de |handoff\])/i.test(m.content || ''))))

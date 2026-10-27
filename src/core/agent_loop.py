@@ -46,6 +46,89 @@ def _parallel_tools_on() -> bool:
     return _os.environ.get("NEXUS_PARALLEL_TOOLS", "1").lower() not in ("0", "false", "no")
 
 
+def _wire_tool_calls(tcs) -> tuple[dict, ...]:
+    """Llamadas -> shape del wire (el mismo que `_to_dicts` y que se guarda en la DB)."""
+    out: list[dict] = []
+    for tc in tcs or ():
+        out.append({
+            "id": getattr(tc, "id", "") or "",
+            "type": "function",
+            "function": {
+                "name": getattr(tc, "name", "") or "",
+                "arguments": getattr(tc, "arguments", {}) or {},
+            },
+        })
+    return tuple(out)
+
+
+def _tool_calls_from_rows(raw) -> tuple[ToolCall, ...]:
+    """Columna `tool_calls` (lista de dicts) -> ToolCall. Acepta el shape plano también."""
+    out: list[ToolCall] = []
+    for tc in raw or ():
+        if isinstance(tc, ToolCall):
+            out.append(tc)
+            continue
+        if not isinstance(tc, dict):
+            continue
+        _fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        out.append(ToolCall(
+            id=str(tc.get("id") or ""),
+            name=str((_fn.get("name") if _fn else "") or tc.get("name") or ""),
+            arguments=(_fn.get("arguments") if _fn else None) or tc.get("arguments") or {},
+        ))
+    return tuple(out)
+
+
+_SIN_RESULTADO = "[sin resultado: el turno se interrumpió antes de ejecutar esta herramienta]"
+
+
+def _replay_history(rows: list[dict]) -> list[LLMMessage]:
+    """Historial persistido -> mensajes para el provider, con los pares intactos.
+
+    `assistant(tool_calls)` seguido de sus `tool` es lo que el protocolo exige.
+    Dos casos se reparan acá:
+
+    - filas viejas sin `tool_calls` (antes de persistirlas): el `tool` queda
+      huérfano y se degrada a nota de assistant, como se hacía siempre;
+    - cadena cortada (proceso muerto, ventana de historial que arranca en el
+      medio): se cierra con un resultado sintético, porque un `assistant` con
+      `tool_calls` sin todas sus respuestas es un 400 en providers OpenAI-compat.
+    """
+    out: list[LLMMessage] = []
+    pendientes: list[str] = []
+
+    def cerrar_pendientes() -> None:
+        for _id in pendientes:
+            out.append(LLMMessage(role="tool", content=_SIN_RESULTADO, tool_call_id=_id))
+        pendientes.clear()
+
+    for m in rows:
+        rol = m.get("role")
+        if rol == "tool":
+            _id = str(m.get("tool_call_id") or "")
+            if _id and _id in pendientes:
+                pendientes.remove(_id)
+                out.append(LLMMessage(role="tool", content=m.get("content") or "",
+                                      tool_call_id=_id))
+            else:
+                # Sin llamada que lo empareje: nota de assistant (comportamiento
+                # histórico). No se manda como rol tool para no romper el wire.
+                _label = m.get("tool_name") or "herramienta"
+                _narr = (m.get("content") or "")[:2000]
+                out.append(LLMMessage(role="assistant", content=f"[resultado {_label}] {_narr}"))
+            continue
+        cerrar_pendientes()
+        if rol in ("user", "assistant"):
+            _tcs = _tool_calls_from_rows(m.get("tool_calls"))
+            out.append(LLMMessage(role=rol, content=m.get("content") or "",
+                                  tool_calls=_tcs))
+            if _tcs:
+                pendientes.extend(tc.id for tc in _tcs)
+        # role=="system" se ignora: el system prompt fresco ya va arriba.
+    cerrar_pendientes()
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Calibracion del estimador de tokens frente al `prompt_tokens` real.
 # El estimador `len/4` subcuenta en CJK, minificado y JSON denso. Cuando el
@@ -937,16 +1020,6 @@ class AgentLoop:
                     _from = self.session_log.get_messages_from(
                         session_id, int(_summary_msg["id"]), limit=10000)
                     _tail = _from[-history_limit:]
-                    from src.core.session_log import Message as _SLMessage
-                    recent = [
-                        _SLMessage(role=r["role"], content=r["content"],
-                                   tool_call_id=r.get("tool_call_id", ""),
-                                   tool_name=r.get("tool_name", ""),
-                                   tokens=int(r.get("tokens") or 0),
-                                   model=r.get("model", ""),
-                                   created_at=r.get("created_at", ""))
-                        for r in _tail
-                    ]
                     _sc = str(_summary_msg.get("content") or "").strip()
                     if _sc:
                         _pref = str(getattr(self.compaction, "handoff_prefix", "") or "")
@@ -959,23 +1032,14 @@ class AgentLoop:
                     # contexto reciente (capa 2, contaminacion/olvido).
                     _total = self.session_log.count_messages(session_id)
                     _off = max(0, _total - history_limit)
-                    recent = self.session_log.get_messages(session_id, limit=history_limit, offset=_off)
-                # Skip the just-appended user message duplicate
-                for m in recent[:-1]:
-                    if m.role in ("user", "assistant"):
-                        messages.append(LLMMessage(role=m.role, content=m.content))
-                    elif m.role == "tool":
-                        # session_log NO persiste los tool_calls del assistant,
-                        # asi que reenviar el tool tal cual deja mensajes
-                        # huerfanos (400 en providers OpenAI-compat, capa 10).
-                        # Se reencuadra como nota de asistente: conserva la
-                        # informacion sin romper el protocolo.
-                        _label = m.tool_name or "herramienta"
-                        _narr = (m.content or "")[:2000]
-                        messages.append(LLMMessage(role="assistant", content=f"[resultado {_label}] {_narr}"))
-                    # role=="system" se ignora: el system prompt fresco ya esta
-                    # inyectado arriba. Evita instrucciones conflictivas y
-                    # bloquea system-msgs inyectables via POST /sessions/{id}/messages.
+                    _tail = [
+                        m.to_dict()
+                        for m in self.session_log.get_messages(
+                            session_id, limit=history_limit, offset=_off)
+                    ]
+                # Skip the just-appended user message duplicate: la tarea actual
+                # se agrega al final, fresca, mas abajo.
+                messages.extend(_replay_history(_tail[:-1]))
             except Exception as e:
                 logger.debug(f"load history falló: {e}")
 
@@ -1271,15 +1335,6 @@ class AgentLoop:
             else:
                 trajectory.append_assistant(assistant_content, iteration=iteration, turn=iteration, step="assistant", tokens=turn_tokens, model=_resp_model)
 
-            # Session log (NO persistir assistant vacio: ensucia historial/UI con
-            # burbujas vacias — pasa cuando el modelo solo emite tool_calls).
-            if self.session_log is not None and (assistant_content or "").strip():
-                try:
-                    from .session_log import Message
-                    self.session_log.append(session_id, Message(role="assistant", content=assistant_content, model=getattr(llm_resp, "model", ""), tokens=turn_tokens))
-                except Exception:
-                    pass
-
             # ---- DECIDE: tool_calls vs final ----
             _tcs = list(llm_resp.tool_calls) if llm_resp.has_tool_calls else []
             if not _tcs:
@@ -1296,6 +1351,25 @@ class AgentLoop:
                     # provider veria tool sin tool_calls previos) — capa 10.
                     if messages and messages[-1].role == "assistant" and not getattr(messages[-1], "tool_calls", None):
                         messages[-1] = LLMMessage(role="assistant", content=assistant_content, tool_calls=tuple(_tcs))
+
+            # Session log: se persiste también el assistant que solo emitió
+            # tool_calls (sin texto). Antes se descartaba para no dejar burbujas
+            # vacías, y al reanudar el resultado de la tool no tenía llamada que
+            # lo empareje: el historial se degradaba a notas y la cadena no se
+            # podía continuar. La UI filtra la fila si no hay texto.
+            if self.session_log is not None and ((assistant_content or "").strip() or _tcs):
+                try:
+                    from .session_log import Message
+                    self.session_log.append(session_id, Message(
+                        role="assistant",
+                        content=assistant_content or "",
+                        model=getattr(llm_resp, "model", ""),
+                        tokens=turn_tokens,
+                        tool_calls=_wire_tool_calls(_tcs),
+                    ))
+                except Exception:
+                    pass
+
             if not _tcs:
                 # Final answer
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta final ({len(assistant_content)} caracteres)"))

@@ -34,6 +34,12 @@ class Message:
     # depender del rol crudo del provider.
     kind: str = ""
     display_role: str = ""
+    # Llamadas que emitió este mensaje assistant, en el shape del wire
+    # ({"id","type":"function","function":{"name","arguments"}}), igual que
+    # `AgentLoop._to_dicts`. Sin esto, al reanudar el resultado de una tool no
+    # tiene llamada que lo empareje y el historial queda invalido para
+    # providers OpenAI-compat.
+    tool_calls: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -46,7 +52,44 @@ class Message:
             "created_at": self.created_at,
             "kind": self.kind,
             "display_role": self.display_role,
+            "tool_calls": [dict(tc) for tc in self.tool_calls],
         }
+
+
+def parse_tool_calls(raw: str | None) -> tuple[dict, ...]:
+    """JSON de la columna `tool_calls` -> tupla de dicts. Tolerante: '' o basura -> ()."""
+    if not raw:
+        return ()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return ()
+    if not isinstance(data, list):
+        return ()
+    return tuple(tc for tc in data if isinstance(tc, dict))
+
+
+def dump_tool_calls(tcs) -> str:
+    """Tupla de dicts (o de ToolCall) -> JSON para la columna. Vacio -> ''."""
+    out: list[dict] = []
+    for tc in tcs or ():
+        if isinstance(tc, dict):
+            out.append(tc)
+            continue
+        _fn = getattr(tc, "function", None) or {}
+        name = _fn.get("name") if isinstance(_fn, dict) else ""
+        args = _fn.get("arguments") if isinstance(_fn, dict) else None
+        out.append({
+            "id": getattr(tc, "id", "") or "",
+            "type": "function",
+            "function": {
+                "name": name or getattr(tc, "name", "") or "",
+                "arguments": args if args is not None else (getattr(tc, "arguments", {}) or {}),
+            },
+        })
+    if not out:
+        return ""
+    return json.dumps(out, ensure_ascii=False, default=str)
 
 
 @dataclass
@@ -114,7 +157,8 @@ CREATE TABLE IF NOT EXISTS messages (
   model TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   kind TEXT DEFAULT '',
-  display_role TEXT DEFAULT ''
+  display_role TEXT DEFAULT '',
+  tool_calls TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
@@ -210,6 +254,8 @@ class SessionLog:
                     self._conn.execute("ALTER TABLE messages ADD COLUMN kind TEXT DEFAULT ''")
                 if "display_role" not in _mcols:
                     self._conn.execute("ALTER TABLE messages ADD COLUMN display_role TEXT DEFAULT ''")
+                if "tool_calls" not in _mcols:
+                    self._conn.execute("ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT ''")
             except Exception:
                 pass
             # Backfill FTS una vez (marcador user_version): en una tabla FTS5
@@ -315,10 +361,11 @@ class SessionLog:
     def append(self, session_id: str, msg: Message) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO messages(session_id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role, tool_calls)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, msg.role, msg.content, msg.tool_call_id, msg.tool_name, msg.tokens,
-                 msg.model, msg.created_at, msg.kind, msg.display_role),
+                 msg.model, msg.created_at, msg.kind, msg.display_role,
+                 dump_tool_calls(msg.tool_calls)),
             )
             self._conn.execute(
                 "UPDATE sessions SET last_active=?, total_tokens=total_tokens+? WHERE id=?",
@@ -329,23 +376,24 @@ class SessionLog:
     def get_messages(self, session_id: str, limit: int = 100, offset: int = 0) -> list[Message]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role FROM messages"
+                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role, tool_calls FROM messages"
                 " WHERE session_id=? ORDER BY id ASC LIMIT ? OFFSET ?",
                 (session_id, limit, offset),
             ).fetchall()
-        return [Message(*r) for r in rows]
+        return [Message(*r[:9], tool_calls=parse_tool_calls(r[9])) for r in rows]
 
     def messages_with_ids(self, session_id: str, limit: int = 10000) -> list[dict]:
         """Mensajes con id (para UI de rewind/edición). Shape completo."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role"
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role, tool_calls"
                 " FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
         return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
                  "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7],
-                 "kind": r[8] or "", "display_role": r[9] or ""} for r in rows]
+                 "kind": r[8] or "", "display_role": r[9] or "",
+                 "tool_calls": list(parse_tool_calls(r[10]))} for r in rows]
 
     def rewind(self, session_id: str, message_id: int) -> int:
         """Borra los mensajes posteriores a message_id (exclusive). Devuelve cuántos borró."""
@@ -382,12 +430,12 @@ class SessionLog:
     def get_recent_messages(self, session_id: str, n: int = 10) -> list[Message]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role FROM messages"
+                "SELECT role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role, tool_calls FROM messages"
                 " WHERE session_id=? ORDER BY id DESC LIMIT ?",
                 (session_id, n),
             ).fetchall()
         # reverse to ASC order
-        return [Message(*r) for r in reversed(rows)]
+        return [Message(*r[:9], tool_calls=parse_tool_calls(r[9])) for r in reversed(rows)]
 
     # ------------------------------------------------------------------
     # FTS search
@@ -567,13 +615,14 @@ class SessionLog:
         """Mensajes con id > after_id (ASC), con shape completo."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role"
+                "SELECT id, role, content, tool_call_id, tool_name, tokens, model, created_at, kind, display_role, tool_calls"
                 " FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?",
                 (session_id, int(after_id), int(limit)),
             ).fetchall()
         return [{"id": r[0], "role": r[1], "content": r[2], "tool_call_id": r[3],
                  "tool_name": r[4], "tokens": r[5], "model": r[6], "created_at": r[7],
-                 "kind": r[8] or "", "display_role": r[9] or ""} for r in rows]
+                 "kind": r[8] or "", "display_role": r[9] or "",
+                 "tool_calls": list(parse_tool_calls(r[10]))} for r in rows]
 
     def fork(self, session_id: str) -> Session:
         """Branch: nueva sesion con parent_session_id = session_id (OpenCode multi-session)."""

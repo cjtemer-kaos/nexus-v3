@@ -384,6 +384,16 @@ Es una **deuda estructural**, no un bug de una línea: arreglarlo implica migrar
 `session.db` y el formato de `Message`, y tocar todos los que escriben en el log (loop, subagentes,
 server, MCP).
 
+> **Nota de revisión (2026-10-27, posterior al informe).** Se cerró la **etapa 1**: `messages`
+> tiene columna `tool_calls` (JSON) con migración `ALTER` para las DB existentes, y el loop
+> persiste el `assistant` **aunque venga sin texto** cuando emitió llamadas, así el `role=tool`
+> que sigue encuentra su par al reanudar. `_replay_history` (`agent_loop.py`) reconstruye los
+> pares, degrada a nota el `tool` huérfano de filas viejas y responde sintéticamente las llamadas
+> de una cadena cortada (`[sin resultado: …]`) para no producir el 400. Cubierto por
+> `tests/test_session_tool_calls.py` (11 tests). **Sigue pendiente** la otra mitad del punto 7.2:
+> el flush incremental después de cada tool y el pinneo de `system_prompt` + set de tools, que es
+> lo que hace idéntica la request al reanudar.
+
 ### 7.2 Hermes persiste el turno completo
 
 `state.db` tiene `sessions`, `messages`, `messages_fts`, `gateway_routing`, `compression_locks`,
@@ -402,7 +412,7 @@ de "perdí eventos".
 
 | Escenario | Hermes | Nexus |
 |---|---|---|
-| Corte a mitad de un batch de tools | Reanuda con pares completos | Reanuda con notas, sin cadena |
+| Corte a mitad de un batch de tools | Reanuda con pares completos | Reanuda con los pares persistidos; la llamada sin resultado se cierra sintéticamente (etapa 1) |
 | Proceso muerto durante una tool | Resultado ya persistido (flush incremental) | El resultado se pierde si no llegó a `session_log.append` |
 | Reabrir sesión de 200 turnos | Historial completo + compresión | Últimos 20 mensajes (por diseño) |
 | Reconexión de UI | seq + epoch + gap | replay sin gap |
@@ -472,7 +482,7 @@ rate limit y quota (buena decisión: antes un 429 disparaba compactación inúti
 | Compresor | 5.744 líneas + 5 mixins | 704 líneas |
 | Tool dispatch | 1.966 líneas + registry + gates + middleware | 671 líneas |
 | Prompts | `prompt_builder.py` 1.778 + `system_prompt.py` + slots | inline en el loop + `prompt_assembler` muerto |
-| Tests | 6.785 archivos | 137 archivos / **1.592 tests**, exit 0 (medido 2026-10-27) |
+| Tests | 6.785 archivos | 138 archivos / **1.603 tests**, exit 0 (medido 2026-10-27) |
 | Superficies | CLI, TUI, desktop, web, 21 plataformas | Electron + web local |
 
 El costo de Hermes es **complejidad**: para entender un turno hay que leer el facade, el estado y los
@@ -502,7 +512,7 @@ Corrección conceptual: **Hermes sí manda todas las tools core en cada request*
 | Caché de prompt | prompt persistido + tools pinneados | reconstrucción por turno | Hermes + |
 | Compactación | anclada a usage + anti-thrash | 4 capas + histéresis + calibración | **=** |
 | Resumen de compactación | auxiliar, protege cabeza/cola | 9 secciones, modelo ya cargado | Nexus + (contenido) |
-| Persistencia de tool_calls | completa e incremental | **no existe** | **Hermes +** |
+| Persistencia de tool_calls | completa e incremental | pares sí; falta flush incremental | Hermes + (incremental) |
 | Tools | segmentos con barreras + deadline + interrupción | política + scope + secuencia | **=** |
 | Memoria | curada, al inicio | grafo por turno, auditado | **=** |
 | Seguridad | modos + guardián LLM + redacción | scope jail + hard-deny + secuencia | **=** |
@@ -510,7 +520,7 @@ Corrección conceptual: **Hermes sí manda todas las tools core en cada request*
 | Grafo / RAG | no en el loop | 12.411 nodos / 19.286 chunks | Nexus + |
 | Superficies | 5 + 21 plataformas | 1 app | Hermes + |
 | Checkpoints FS | sí, no central | repo sombra git + diff/restore UI | Nexus + |
-| Tests | 6.785 archivos | 137 archivos / 1.592 tests | Hermes + (volumen) |
+| Tests | 6.785 archivos | 138 archivos / 1.603 tests | Hermes + (volumen) |
 
 ---
 
