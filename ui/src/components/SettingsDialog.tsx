@@ -250,6 +250,27 @@ function UpdatesCard() {
             ? 'código nuevo en disco — falta reiniciar'
             : 'al día'
 
+  const restartNow = async () => {
+    const w = window as unknown as { nexus?: { restartBackend?: () => Promise<unknown> }; location: Location }
+    if (!w.nexus?.restartBackend) {
+      setOk(false)
+      setMsg('Esta ventana no puede reiniciar el backend; cerrá y abrí Nexus para tomar el código nuevo.')
+      return
+    }
+    setBusy(true)
+    setMsg('Reiniciando el backend para tomar el código nuevo…')
+    try {
+      await w.nexus.restartBackend()
+      setOk(true)
+      setTimeout(() => w.location.reload(), 2000)
+    } catch (e) {
+      setOk(false)
+      setMsg(String(e).slice(0, 160))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-4">
       <div className="flex items-center justify-between">
@@ -260,6 +281,15 @@ function UpdatesCard() {
           <button onClick={() => load(true)} disabled={busy} className="text-[11px] text-[#4C9DFF] hover:text-[#8CC1FF] disabled:opacity-40">
             buscar ahora
           </button>
+          {desfasado && (
+            <button
+              onClick={restartNow}
+              disabled={busy}
+              className="rounded-lg border border-[#FFB86B]/30 bg-[#FFB86B]/10 px-2 py-1 text-[11px] text-[#FFB86B] hover:bg-[#FFB86B]/20 disabled:opacity-40"
+            >
+              reiniciar backend
+            </button>
+          )}
           <button
             onClick={applyNow}
             disabled={busy || !nuevo || !!st?.blocked}
@@ -280,6 +310,11 @@ function UpdatesCard() {
         <span className="rounded-full border border-[#2C3037] bg-[#22262D] px-2 py-0.5 font-mono text-[#9BA1AA]">
           {st?.head || '—'}
         </span>
+        {desfasado && (
+          <span className="rounded-full border border-[#FFB86B]/30 bg-[#FFB86B]/10 px-2 py-0.5 font-mono text-[#FFB86B]">
+            corriendo {st?.running_head}
+          </span>
+        )}
         <span className={`rounded-full px-2 py-0.5 border ${nuevo || desfasado || st?.ui_stale ? 'border-[#FFB86B]/30 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#3DDC84]/30 bg-[#3DDC84]/10 text-[#3DDC84]'}`}>
           {estado}
         </span>

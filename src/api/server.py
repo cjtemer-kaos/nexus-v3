@@ -598,6 +598,14 @@ async def _startup():
     logger.info("Starting Nexus v3 harness backend")
     _state["config"] = _load_config_safe()
     _state["brain"] = _brain_info_safe()
+    # Commit que este proceso tiene realmente importado. Si despues el pull deja
+    # otro HEAD en disco, la UI puede avisar "falta reiniciar" comparando ambos.
+    try:
+        from src.core import self_update as _su_boot
+        _state["running_head"] = (_su_boot.repo_state(_PROJECT_ROOT) or {}).get("head", "")
+    except Exception as e:  # git ausente o instalacion por zip
+        logger.debug("no se pudo leer el HEAD de arranque: %s", e)
+        _state["running_head"] = ""
     # Concurrencia adaptativa: el agent loop lee NEXUS_PARALLEL_TOOLS (config concurrency.parallel_tools)
     try:
         import os as _os
@@ -2036,7 +2044,9 @@ async def updates_auto_status(refresh: bool = False):
             res = {**res, "cached": True}
     # El backend corre el codigo que importó al arrancar: si el pull ya se
     # aplicó en disco, `head` y `running_head` difieren y hace falta reiniciar.
-    res["running_head"] = (_su.repo_state(_PROJECT_ROOT) or {}).get("head", "")
+    # `running_head` sale del arranque, NO del disco: leerlo del disco lo hacia
+    # identico a `head` y el aviso de "falta reiniciar" nunca aparecia.
+    res["running_head"] = _state.get("running_head") or ""
     return JSONResponse(res)
 
 

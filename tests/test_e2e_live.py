@@ -869,3 +869,28 @@ def test_skills_limit_negativo_no_devuelve_vacio(monkeypatch):
 
     r = client.get("/api/skills?limit=2")
     assert [s["name"] for s in r.json()["skills"]] == ["s0", "s1"]
+
+
+def test_updates_auto_running_head_sale_del_arranque(monkeypatch):
+    """`running_head` es el commit que el proceso importo, no el del disco.
+
+    Antes se leia con `repo_state()`, o sea el mismo HEAD que `head`: nunca
+    podian diferir y el aviso "codigo nuevo en disco, falta reiniciar" era
+    inalcanzable.
+    """
+    from src.api import server as _srv
+    from src.core import self_update as _su
+
+    monkeypatch.setitem(_srv._state, "running_head", "aaaaaaa")
+    monkeypatch.setattr(_su, "last_state", lambda: {})
+    monkeypatch.setattr(
+        _su, "check",
+        lambda root, cfg, fetch=False, min_age=0.0: {"ok": True, "head": "bbbbbbb", "behind": 7},
+    )
+    monkeypatch.setattr(_su, "repo_state", lambda root: {"head": "bbbbbbb"})
+
+    r = client.get("/api/updates/auto")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["head"] == "bbbbbbb"
+    assert data["running_head"] == "aaaaaaa"
