@@ -952,6 +952,48 @@ async def health():
     }
 
 
+_contract_cache: dict = {}
+
+
+def _api_path(path: str) -> bool:
+    return path.startswith("/api/") or path.startswith("/v1/") or path == "/{full_path:path}"
+
+
+@app.get("/api/contract")
+async def api_contract_endpoint():
+    """Contrato de la API: lo declarado en el código contra lo registrado de verdad.
+
+    La UI importa el `.ts` generado por `scripts/gen_api_contract.py`; este
+    endpoint permite comprobar en caliente que ese artefacto no derivó y que el
+    código no declara rutas que FastAPI nunca registró (o al revés).
+    """
+    from src.core import api_contract as _contract
+
+    if _contract_cache:
+        return _contract_cache
+    fuente = Path(__file__).resolve().read_text(encoding="utf-8")
+    rutas = _contract.extract_routes(fuente)
+    code = {(r.method, r.path) for r in rutas}
+    metodos = {m.upper() for m in _contract.HTTP_METHODS}
+    runtime = set()
+    for r in app.routes:
+        path = getattr(r, "path", "")
+        if not _api_path(path):
+            continue
+        for m in getattr(r, "methods", None) or ():
+            if str(m).upper() in metodos:
+                runtime.add((str(m).upper(), path))
+    payload = {
+        "version": _contract.contract_version(rutas),
+        "count": len(rutas),
+        "routes": [r.to_dict() for r in rutas],
+        "only_in_code": sorted(f"{m} {p}" for m, p in code - runtime),
+        "only_in_runtime": sorted(f"{m} {p}" for m, p in runtime - code),
+    }
+    _contract_cache.update(payload)
+    return payload
+
+
 @app.get("/api/mcp/status")
 async def mcp_status(refresh: bool = False):
     """Estado del bundle MCP (instalado/falta/clave) sin salir de la app."""

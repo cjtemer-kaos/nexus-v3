@@ -4,6 +4,11 @@
  * In dev web, uses Vite proxy (/api) or window.location.
  */
 
+import { findApiRoute } from './api-contract.generated'
+
+export { API_CONTRACT_VERSION, API_PATHS, API_ROUTES, findApiRoute } from './api-contract.generated'
+export type { ApiRoute } from './api-contract.generated'
+
 export async function getBackendUrl(): Promise<string> {
   // Electron: via preload
   const w = window as unknown as { nexus?: { getBackendUrl: () => Promise<string> } };
@@ -25,7 +30,27 @@ export type ApiInit = RequestInit & { timeoutMs?: number };
  *  girando para siempre y apilaba polls de /api/status cada 4 s. */
 const DEFAULT_TIMEOUT_MS = 30000;
 
+/**
+ * En desarrollo, pedir una ruta que el backend no declara es un 404 mudo que
+ * aparece recién cuando alguien usa esa pantalla. El contrato se genera del
+ * fuente de Python, así que acá se detecta un typo o una ruta renombrada antes
+ * de tocar la red.
+ */
+function avisarRutaDesconocida(path: string, method: string): void {
+  if (!import.meta.env.DEV) return
+  const limpio = path.startsWith('/') ? path : `/${path}`
+  if (!limpio.startsWith('/api/')) return
+  if (findApiRoute(method, limpio)) return
+  const detalle = `${method} ${limpio.split('?')[0]}`
+  console.error(
+    `[api] ruta no declarada en el contrato: ${detalle}. ` +
+      'Si es nueva, agregala en src/api/server.py y regenerá el contrato ' +
+      '(scripts/gen_api_contract.py).',
+  )
+}
+
 export async function apiFetch(path: string, init?: ApiInit): Promise<Response> {
+  avisarRutaDesconocida(path, (init?.method ?? 'GET').toUpperCase())
   const base = await getBackendUrl();
   const url = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
   // El backend local no manda Cache-Control: sin no-store Chromium reusa

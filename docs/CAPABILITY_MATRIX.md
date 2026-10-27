@@ -102,7 +102,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 | Prueba | Resultado |
 |---|---|
-| Suite completa (`pytest`) | **1.579 tests en 136 archivos, exit 0** (2026-10-27; `--collect-only -q` + corrida completa sin fallos) |
+| Suite completa (`pytest`) | **1.592 tests en 137 archivos, exit 0** (2026-10-27; `--collect-only -q` + corrida completa sin fallos) |
 | Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
 | Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
 | Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
@@ -155,6 +155,8 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 | Checkpoints: id repetido | el id usaba `time.time_ns() % 1_000_000`; el reloj puede repetir valor en llamadas seguidas → dos snapshots del mismo archivo compartían nombre y **el segundo pisaba al primero** (undo intermedio perdido). Ahora busca un nombre libre y hay test con reloj congelado |
 | Comandos en markdown | **15 tests** en `test_custom_commands.py` (frontmatter, `$ARGUMENTS`/`$1..$9`, `@ruta` dentro y fuera del proyecto, include recortado, CRLF, nombre inválido, builtin protegido). En el `:9000` vivo: `GET /api/slash` → 18 comandos con `/revisar` (`origin: custom`); `POST /api/slash` con `/revisar src/core` → `action: send_prompt` y el prompt con `Alcance: src/core` expandido |
 | Comando roto no rompe el listado | un `.md` con nombre inválido, duplicado o que choca con un builtin se saltea con el motivo (`errors`/`skipped`) y el resto sigue funcionando; `/api/slash` refresca el registro en cada llamada, así un comando nuevo aparece sin reiniciar el backend |
+| Contrato de transporte | **la fuente es Python**: `src/core/api_contract.py` parsea `server.py` con `ast` (no regex) y `scripts/gen_api_contract.py` escribe `ui/src/lib/api-contract.generated.ts` → **139 rutas** con método, path/query params, claves de body que el handler lee, claves del return, `bodyOpen` (patch parcial) y `stream`, más un hash de versión (`70132782ee27`). `GET /api/contract` compara el fuente contra `app.routes` en caliente: `only_in_code=[]`, `only_in_runtime=[]` verificado en la app viva (`:11726`). La UI reexporta el contrato desde `lib/api.ts` y en `import.meta.env.DEV` avisa si `apiFetch` pide una ruta inexistente; el artefacto no se tipea a mano (lo dice el encabezado) |
+| Frescura del contrato | `tests/test_api_contract.py` (**13** tests): `render()` == archivo en disco, `--check` real por subprocess (exit 1 si derivó, exit 0 al día), rutas `/api/*` de los 46 archivos de la UI declaradas en el contrato, sin duplicados método+path, y `/api/contract` runtime == generado. Un rename de ruta en `server.py` rompe el test, no la app |
 
 ### Código legacy absorbido (no es el camino del harness)
 
