@@ -1390,12 +1390,25 @@ class AgentLoop:
                     _tn = _tot.get(tool_name, 0) + 1
                     _tot[tool_name] = _tn
                     if _tn == self.anti_loop_tool_warn:
-                        messages.append(LLMMessage(role="user", content=(
-                            f"[recordatorio del sistema] ya llamaste '{tool_name}' {_tn} veces en este "
-                            "turno. Si con esta herramienta no estás llegando al objetivo, cambiá de "
-                            "enfoque: usá una vía más directa (glob para listar, exec para contar o "
-                            "resumir en un comando, code_search para buscar) en vez de repetir la misma "
-                            "herramienta, y respondé con lo que ya tengas.")))
+                        if tool_name in ("job_read", "job_wait"):
+                            # Polling en incrementos minimos fue el bucle real
+                            # observado: job_read(cursor=0), luego cursor=100, 200...
+                            # El aviso tiene que ensenar el uso correcto del cursor.
+                            _aviso = (
+                                f"[recordatorio del sistema] ya llamaste '{tool_name}' {_tn} veces en "
+                                "este turno. Para leer un job no hace falta pedir tramos chicos: pasa "
+                                "como `cursor` el `next_cursor` que devolvio la lectura anterior, subi "
+                                "`max_chars` (hasta 200000) o usa `job_wait` con ese mismo `cursor` para "
+                                "recibir todo junto cuando el proceso termine. Si ya tenes lo necesario, "
+                                "responde con eso.")
+                        else:
+                            _aviso = (
+                                f"[recordatorio del sistema] ya llamaste '{tool_name}' {_tn} veces en este "
+                                "turno. Si con esta herramienta no estas llegando al objetivo, cambia de "
+                                "enfoque: usa una via mas directa (glob para listar, exec para contar o "
+                                "resumir en un comando, code_search para buscar) en vez de repetir la misma "
+                                "herramienta, y responde con lo que ya tengas.")
+                        messages.append(LLMMessage(role="user", content=_aviso))
                     elif _tn >= self.anti_loop_tool_stop:
                         final_output = (
                             f"[bucle de herramienta: '{tool_name}' llamada {_tn} veces sin llegar a una "

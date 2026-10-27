@@ -4888,10 +4888,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return _json.dumps(_jobs().read(job_id, cursor=cursor, max_chars=max_chars),
                            ensure_ascii=False)
 
-    def job_wait_tool(job_id: str, timeout: int = 30) -> str:
-        """Espera que un job termine (máx 300 s) y devuelve su salida completa y exit code."""
+    def job_wait_tool(job_id: str, timeout: int = 30, cursor: int = 0,
+                      max_chars: int = 30000) -> str:
+        """Espera que un job termine (max 300 s) y devuelve su salida desde cursor."""
         import json as _json
-        return _json.dumps(_jobs().wait(job_id, timeout_s=timeout), ensure_ascii=False)
+        return _json.dumps(
+            _jobs().wait(job_id, timeout_s=timeout, cursor=cursor, max_chars=max_chars),
+            ensure_ascii=False)
 
     def job_kill_tool(job_id: str) -> str:
         """Termina un job y todos sus hijos (taskkill /T /F en Windows)."""
@@ -4921,10 +4924,13 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "max_chars": {"type": "integer", "description": "Máximo de caracteres a devolver (default 20000)"}},
             "required": ["job_id"], "additionalProperties": False})
     registry.register_function(job_wait_tool, name="job_wait",
-        description="Espera a que un job termine (hasta 300 s) y devuelve toda su salida.",
+        description=("Espera a que un job termine (hasta 300 s) y devuelve su salida. "
+                     "Pasa el cursor de la lectura anterior para recibir solo lo nuevo."),
         category="local",
         parameters={"type": "object", "properties": {
             "job_id": {"type": "string"},
+            "cursor": {"type": "integer", "description": "Byte desde donde leer (el next_cursor anterior; default 0)"},
+            "max_chars": {"type": "integer", "description": "Maximo de bytes a devolver (default 30000, tope 200000)"},
             "timeout": {"type": "integer", "description": "Segundos a esperar (default 30, máx 300)"}},
             "required": ["job_id"], "additionalProperties": False})
     registry.register_function(job_kill_tool, name="job_kill",

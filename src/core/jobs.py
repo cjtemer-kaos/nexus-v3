@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 
 def _jobs_root() -> Path:
@@ -28,6 +29,60 @@ def _jobs_root() -> Path:
         return data_home() / "jobs"
     except Exception:
         return Path(__file__).parents[2] / "data" / "jobs"
+
+
+# Techo por lectura. Sin techo, `job_read(max_chars=10**12)` hacia que
+# `fh.read(n)` intentara reservar ese tamano: MemoryError silencioso (el except
+# de read lo tragaba) y el agente recibia `output: ""` con `pending_bytes` > 0,
+# o sea un job con salida que parecia mudo para siempre.
+MAX_READ_CHARS = 200_000
+DEFAULT_READ_CHARS = 20_000
+
+
+def _clamp_chars(value: Any, default: int = DEFAULT_READ_CHARS) -> int:
+    """Cuantos bytes leer: [4, MAX_READ_CHARS]. 0/negativo/no numerico = default.
+
+    El piso es 4 (un caracter UTF-8 completo): con menos, el tramo siempre
+    terminaria a mitad de un caracter.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    if n <= 0:
+        return default
+    return max(4, min(n, MAX_READ_CHARS))
+
+
+def _decode_tramo(raw: bytes) -> tuple[str, int]:
+    """Decodifica UTF-8 sin partir un caracter multibyte al final del tramo.
+
+    Devuelve (texto, bytes_consumidos). El corte de `max_chars` caia donde cayera:
+    si partia un `á` (2 bytes), la salida traia U+FFFD y el siguiente tramo
+    arrancaba en medio del caracter, otro U+FFFD. Con logs en castellano eso es
+    corrupcion constante. Se retrocede hasta 3 bytes para terminar en un limite
+    de caracter y el cursor queda ahi.
+
+    Solo se retrocede si el error es una secuencia INCOMPLETA al final. Un byte
+    invalido de verdad se decodifica con reemplazo y se consume entero: si no,
+    un log binario avanzaria de a 1 byte por lectura y el agente quedaria
+    pidiendo tramos hasta que el anti-loop lo corte.
+    """
+    if not raw:
+        return "", 0
+    try:
+        return raw.decode("utf-8"), len(raw)
+    except UnicodeDecodeError as e:
+        if e.reason.startswith("unexpected end of data"):
+            for back in range(1, 4):
+                corte = len(raw) - back
+                if corte <= 0:
+                    break
+                try:
+                    return raw[:corte].decode("utf-8"), corte
+                except UnicodeDecodeError:
+                    continue
+        return raw.decode("utf-8", errors="replace"), len(raw)
 
 
 class JobRegistry:
@@ -75,7 +130,7 @@ class JobRegistry:
             recs = list(self._jobs.values())
         return [self._public(r) for r in sorted(recs, key=lambda r: r["started"], reverse=True)]
 
-    def read(self, job_id: str, cursor: int = 0, max_chars: int = 20000) -> dict:
+    def read(self, job_id: str, cursor: int = 0, max_chars: int = DEFAULT_READ_CHARS) -> dict:
         rec = self._get_rec(job_id)
         log = Path(rec["log"])
         # Solo el tramo pedido: antes hacia `log.read_bytes()` y cargaba el log
@@ -85,8 +140,17 @@ class JobRegistry:
             size = log.stat().st_size if log.exists() else 0
         except Exception:
             size = 0
-        start = max(0, int(cursor or 0))
-        want = max(1, int(max_chars))
+        want = _clamp_chars(max_chars)
+        try:
+            start = max(0, int(cursor or 0))
+        except (TypeError, ValueError):
+            start = 0
+        reseteado = start > size
+        if reseteado:
+            # Cursor de un log que ya no esta (backend reiniciado con el job
+            # reusado) o inventado por el modelo: leer desde 0 y decirlo, en vez
+            # de devolver "" para siempre con pending_bytes 0.
+            start = 0
         chunk = b""
         if size > start:
             try:
@@ -95,23 +159,31 @@ class JobRegistry:
                     chunk = fh.read(want)
             except Exception:
                 chunk = b""
-        end = start + len(chunk)
-        return {
+        texto, consumidos = _decode_tramo(chunk)
+        end = start + consumidos
+        out = {
             **self._public(rec),
             "cursor": end,
             "next_cursor": end,
             "pending_bytes": max(0, size - end),
-            "output": chunk.decode("utf-8", errors="replace"),
+            "output": texto,
         }
+        if reseteado:
+            out["reset"] = True
+        return out
 
-    def wait(self, job_id: str, timeout_s: float = 30.0) -> dict:
+    def wait(self, job_id: str, timeout_s: float = 30.0,
+             cursor: int = 0, max_chars: int = 30_000) -> dict:
         rec = self._get_rec(job_id)
         deadline = time.time() + max(0.0, min(300.0, float(timeout_s)))
         while time.time() < deadline:
             if rec["proc"].poll() is not None:
                 break
             time.sleep(0.2)
-        return self.read(job_id, cursor=0, max_chars=30000)
+        # `cursor` se respeta: antes `wait` leia siempre desde 0, asi que un agente
+        # que ya habia leido 50 KB volvia a recibir la cabeza (y su cursor
+        # retrocedia a 30000, lo que invita a re-leer en circulo).
+        return self.read(job_id, cursor=cursor, max_chars=max_chars)
 
     def kill(self, job_id: str) -> dict:
         rec = self._get_rec(job_id)
