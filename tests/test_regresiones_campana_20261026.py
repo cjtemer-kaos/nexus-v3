@@ -1,9 +1,11 @@
 """Regresiones de la campana de pruebas del 2026-10-26.
 
-Cubre los tres defectos encontrados y corregidos:
+Cubre los defectos encontrados y corregidos:
 - usage en cero en /v1/chat/completions (el split prompt/completion no salia del loop)
 - /api/graph bloqueando el event loop (movido a to_thread)
 - rag.search O(n) en Python puro (ahora matriz numpy cacheada)
+- /api/graph/search y la tool recall devolviendo 0 con consultas multi-palabra
+  (fts_search une los tokens con AND; ahora hay fallback a search_terms)
 """
 from __future__ import annotations
 
@@ -86,3 +88,82 @@ def test_cached_index_invalida_por_conteo(tmp_path, monkeypatch):
 def test_blob_roundtrip():
     v = [0.5, -1.25, 3.0]
     assert rag._blob_to_vec(rag._vec_to_blob(v)) == v
+
+
+class _FakeKM:
+    """Grafo falso: reproduce el AND de fts_search y la fusion por termino."""
+
+    def __init__(self, estricto: dict[str, list[dict]] | None = None,
+                 por_termino: list[dict] | None = None):
+        self.estricto = estricto or {}
+        self.por_termino = por_termino or []
+        self.llamadas: list[tuple] = []
+
+    def fts_search(self, query: str, limit: int = 20):
+        self.llamadas.append(("fts", query, limit))
+        return self.estricto.get(query, [])
+
+    def search_terms(self, terms, limit: int = 10, per_term: int = 24):
+        self.llamadas.append(("terms", list(terms), limit))
+        return self.por_termino
+
+
+def _nodo(nid=14324):
+    return {"id": nid, "title": "contenido uno de la prueba de dedupe",
+            "category": "general", "topic_key": "barrido/prueba-dedupe",
+            "revision": 1, "snippet": "contenido uno", "rank": -1.0}
+
+
+def test_fts_tolerante_cae_a_search_terms_con_varias_palabras():
+    """'barrido prueba dedupe' no matchea con AND: el fallback debe encontrar el nodo."""
+    from src.api.server import _fts_search_tolerant
+
+    km = _FakeKM(estricto={}, por_termino=[_nodo()])
+    res = _fts_search_tolerant(km, "barrido prueba dedupe", limit=20)
+
+    assert [r["id"] for r in res] == [14324]
+    assert km.llamadas[0][0] == "fts", "primero intenta la busqueda estricta"
+    assert km.llamadas[1][0] == "terms"
+    assert "barrido" in km.llamadas[1][1] and "dedupe" in km.llamadas[1][1]
+
+
+def test_fts_tolerante_respeta_hits_estrictos():
+    """Si la busqueda estricta encuentra algo, no se degrada a la fusion."""
+    from src.api.server import _fts_search_tolerant
+
+    km = _FakeKM(estricto={"dedupe": [_nodo()]}, por_termino=[_nodo(999)])
+    res = _fts_search_tolerant(km, "dedupe", limit=20)
+
+    assert [r["id"] for r in res] == [14324]
+    assert [c[0] for c in km.llamadas] == ["fts"]
+
+
+def test_fts_tolerante_una_sola_palabra_sin_hits_no_fusiona():
+    """Una sola palabra que no existe no debe inventar resultados."""
+    from src.api.server import _fts_search_tolerant
+
+    km = _FakeKM(estricto={}, por_termino=[_nodo()])
+    assert _fts_search_tolerant(km, "inexistentexyz", limit=20) == []
+    assert [c[0] for c in km.llamadas] == ["fts"]
+
+
+def test_fts_tolerante_query_vacia():
+    from src.api.server import _fts_search_tolerant
+
+    km = _FakeKM(por_termino=[_nodo()])
+    assert _fts_search_tolerant(km, "   ") == []
+    assert km.llamadas == []
+
+
+def test_fts_tolerante_no_propaga_excepciones():
+    """Si el grafo falla, la API debe devolver vacio y no un 500."""
+    from src.api.server import _fts_search_tolerant
+
+    class _Roto:
+        def fts_search(self, *a, **k):
+            raise RuntimeError("db bloqueada")
+
+        def search_terms(self, *a, **k):
+            raise RuntimeError("db bloqueada")
+
+    assert _fts_search_tolerant(_Roto(), "barrido prueba dedupe") == []

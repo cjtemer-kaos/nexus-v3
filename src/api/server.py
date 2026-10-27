@@ -317,6 +317,34 @@ def _wordset(s: str) -> set[str]:
     return set(_re.findall(r"\w{4,}", (s or "").lower()))
 
 
+def _fts_search_tolerant(km, query: str, limit: int = 20) -> list[dict]:
+    """Busca en el grafo sin perder nodos por culpa del AND de `fts_search`.
+
+    `fts_search` envuelve cada token y los une con AND, asi que una consulta de
+    varias palabras ("barrido prueba dedupe") devuelve 0 aunque el nodo exista y
+    el RAG lo encuentre. Si la busqueda estricta viene vacia y hay 2+ terminos
+    utiles, se cae a `search_terms` (consulta por termino, fusion RRF + IDF).
+    """
+    import re as _re
+    q = (query or "").strip()
+    if not q:
+        return []
+    limit = max(1, min(100, int(limit)))
+    try:
+        hits = km.fts_search(q, limit=limit) or []
+    except Exception:
+        hits = []
+    if hits:
+        return hits
+    terms = [t for t in _re.findall(r"\w{3,}", q.lower())]
+    if len(terms) < 2:
+        return []
+    try:
+        return km.search_terms(terms, limit=limit) or []
+    except Exception:
+        return []
+
+
 def _near_dup(km, content: str, threshold: float = 0.5) -> bool:
     """True si el grafo ya tiene un nodo muy parecido (Jaccard de palabras >= umbral)."""
     ws = _wordset(content)
@@ -1699,8 +1727,8 @@ async def graph_search(q: str, limit: int = 20):
     from src.core.knowledge_memory import get_knowledge_memory
     try:
         results = await asyncio.to_thread(
-            lambda: get_knowledge_memory().fts_search(
-                q.strip(), max(1, min(100, limit))
+            lambda: _fts_search_tolerant(
+                get_knowledge_memory(), q.strip(), max(1, min(100, limit))
             )
         )
         return {"query": q, "results": results, "count": len(results)}
@@ -4849,8 +4877,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         import json as _j
         from src.core.knowledge_memory import get_knowledge_memory
         hits = await asyncio.to_thread(
-            lambda: get_knowledge_memory().fts_search(
-                query, limit=max(1, min(10, int(limit)))
+            lambda: _fts_search_tolerant(
+                get_knowledge_memory(), query, max(1, min(10, int(limit)))
             )
         )
         budgets = {"low": 800, "small": 800, "medium": 2000, "high": 5000}
