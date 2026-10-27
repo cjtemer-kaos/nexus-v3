@@ -1,5 +1,10 @@
 # Hermes Agent vs Nexus v3 — cómo funciona cada uno, medido
 
+> **Revisión 1 (histórica).** La versión vigente y profunda es
+> **`INFORME_RUNTIME_HERMES_vs_NEXUS-V3.md`** (revisión 2): lee el código de ejecución y cita
+> `archivo:línea`. Este documento queda como inventario de métricas; contiene tres datos que la
+> revisión 2 corrige (fases de hooks, plugins, tareas auxiliares).
+
 - **Fecha**: 2026-10-27
 - **Alcance**: comparación técnica de **runtime**, no de marketing. Cómo piensa, ejecuta, recuerda,
   compacta y se opera cada harness.
