@@ -613,6 +613,72 @@ def test_status_reporta_aprobaciones_pendientes():
     body = r.json()
     assert "approvals_pending" in body
     assert isinstance(body["approvals_pending"], int) and body["approvals_pending"] >= 0
+    # Y las preguntas: el turno puede estar esperando una decisión del usuario.
+    assert "questions_pending" in body
+    assert isinstance(body["questions_pending"], int) and body["questions_pending"] >= 0
+
+
+def test_questions_endpoints_responden_y_validan():
+    """Ciclo completo por HTTP: la pregunta queda pendiente, la UI la ve, la
+    responde y el turno que esperaba recibe ese texto."""
+    import asyncio
+    import threading
+    import time
+
+    from src.core.questions import get_questions
+
+    client.post("/api/questions/clear")
+    reg = get_questions()
+    sid = "questions-pytest"
+    salida: dict = {}
+
+    def runner():
+        salida["res"] = asyncio.run(reg.ask(sid, "¿Blanco o negro?", header="Color",
+                                            options=["blanco", "negro"], timeout_s=15))
+
+    hilo = threading.Thread(target=runner)
+    hilo.start()
+    qid = ""
+    for _ in range(500):
+        r = client.get(f"/api/questions?session_id={sid}")
+        assert r.status_code == 200
+        qs = r.json()["questions"]
+        if qs:
+            qid = qs[0]["id"]
+            assert qs[0]["question"] == "¿Blanco o negro?"
+            assert qs[0]["options"] == ["blanco", "negro"]
+            assert qs[0]["status"] == "pending"
+            break
+        time.sleep(0.02)
+    assert qid, "la pregunta nunca apareció en GET /api/questions"
+
+    assert client.post(f"/api/questions/{qid}/answer", json={"text": "gris"}).status_code == 400
+    r = client.post(f"/api/questions/{qid}/answer", json={"answer": "negro"})
+    assert r.status_code == 200, r.text
+    assert r.json()["answer"] == ["negro"]
+
+    hilo.join(10)
+    assert not hilo.is_alive(), "el turno que esperaba no se despertó"
+    assert salida["res"]["answered"] is True
+    assert salida["res"]["answer"] == ["negro"]
+
+    # Sin body válido, y sobre una pregunta ya resuelta.
+    assert client.post("/api/questions/q-inexistente/answer", json={"answer": "x"}).status_code == 404
+    assert client.post("/api/questions/q-inexistente/cancel").status_code == 404
+    assert client.post(f"/api/questions/{qid}/answer", json={"answer": "blanco"}).status_code == 409
+    assert client.post(f"/api/questions/{qid}/cancel").status_code == 409
+
+    r = client.get(f"/api/questions?session_id={sid}&all=1")
+    assert r.status_code == 200
+    assert any(q["status"] == "answered" for q in r.json()["questions"])
+    assert client.post("/api/questions/clear").status_code == 200
+
+
+def test_questions_answer_sin_campo_es_400():
+    # El body se valida ANTES de buscar la pregunta: sin 'answer' es 400 (no 404).
+    r = client.post("/api/questions/q-inexistente/answer", json={})
+    assert r.status_code == 400
+    assert "answer" in r.json()["detail"]
 
 
 def _grafo_minimo(brain: Path, ids: tuple[int, ...]) -> None:

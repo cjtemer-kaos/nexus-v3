@@ -632,7 +632,7 @@ export async function toolsApi(): Promise<{ tools: ToolInfo[] }> {
   return res.json()
 }
 
-export type NexusStatus = { running: { session_id: string; steer_pending: number }[]; sub_agents: Record<string, unknown[]>; modes: Record<string, string>; approvals_pending?: number; counts: { running: number; sessions_with_subagents: number } }
+export type NexusStatus = { running: { session_id: string; steer_pending: number }[]; sub_agents: Record<string, unknown[]>; modes: Record<string, string>; approvals_pending?: number; questions_pending?: number; counts: { running: number; sessions_with_subagents: number } }
 export async function statusApi(): Promise<NexusStatus> {
   const res = await apiFetch("/api/status")
   if (!res.ok) throw new Error(`status ${res.status}`)
@@ -672,6 +672,41 @@ export async function approvalRejectApi(id: string): Promise<{ ok: boolean; stat
 
 export async function approvalClearApi(): Promise<{ ok: boolean; cleared: number }> {
   const res = await apiFetch(`/api/approvals/clear`, { method: "POST" })
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+  return res.json()
+}
+
+// Preguntas al usuario: el turno del agente queda esperando la respuesta.
+export type Question = {
+  id: string; session_id: string; question: string; header: string
+  options: string[]; multiple: boolean; created_at: number; answered_at: number
+  answer: string[]; cancelled: boolean; timed_out: boolean; status: string
+}
+
+export async function questionsApi(sessionId = "", all = false): Promise<{ questions: Question[]; pending: number }> {
+  const res = await apiFetch(`/api/questions?session_id=${encodeURIComponent(sessionId)}${all ? "&all=1" : ""}`)
+  if (!res.ok) throw new Error(`questions ${res.status}`)
+  return res.json()
+}
+
+export async function questionAnswerApi(id: string, answer: string | string[]): Promise<{ ok: boolean; id: string; answer: string[] }> {
+  const res = await apiFetch(`/api/questions/${encodeURIComponent(id)}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo responder"))
+  return res.json()
+}
+
+export async function questionCancelApi(id: string): Promise<{ ok: boolean; id: string; status?: string }> {
+  const res = await apiFetch(`/api/questions/${encodeURIComponent(id)}/cancel`, { method: "POST" })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo cancelar"))
+  return res.json()
+}
+
+export async function questionClearApi(): Promise<{ ok: boolean; cleared: number }> {
+  const res = await apiFetch(`/api/questions/clear`, { method: "POST" })
   if (!res.ok) throw new Error((await res.text()).slice(0, 300))
   return res.json()
 }

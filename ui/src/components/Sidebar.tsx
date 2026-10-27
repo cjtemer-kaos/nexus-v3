@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, MessageCircleQuestion, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -16,6 +16,7 @@ const primary = [
 const more = [
   { id: 'review', label: 'Cambios', icon: GitCompare, desc: 'Checkpoints y diff' },
   { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck, desc: 'Gate de permisos' },
+  { id: 'questions', label: 'Preguntas', icon: MessageCircleQuestion, desc: 'El agente espera' },
   { id: 'plan', label: 'Plan', icon: ListChecks, desc: 'Plan editable' },
   { id: 'worktrees', label: 'Worktrees', icon: GitBranch, desc: 'Aislamiento git' },
   { id: 'usage', label: 'Uso', icon: Coins, desc: 'Tokens y costo' },

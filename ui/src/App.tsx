@@ -12,6 +12,7 @@ import { BoardPanel } from '@/components/board/BoardPanel'
 import { SkillsPanel } from '@/components/skills/SkillsPanel'
 import { SubAgentsPanel } from '@/components/subagents/SubAgentsPanel'
 import { ApprovalsPanel } from '@/components/approvals/ApprovalsPanel'
+import { QuestionsPanel } from '@/components/questions/QuestionsPanel'
 import { PlanPanel } from '@/components/plan/PlanPanel'
 import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
@@ -30,6 +31,7 @@ const viewLabels: Record<string, string> = {
   agents: 'Ayudantes',
   review: 'Cambios',
   approvals: 'Aprobaciones',
+  questions: 'Preguntas',
   plan: 'Plan',
   worktrees: 'Worktrees',
   usage: 'Uso',
@@ -165,9 +167,9 @@ export default function App() {
             <div className="relative hidden sm:flex">
               <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}>
                 <Bell className="h-4 w-4" />
-                {(liveStatus?.approvals_pending ?? 0) > 0 && (
+                {((liveStatus?.approvals_pending ?? 0) + (liveStatus?.questions_pending ?? 0)) > 0 && (
                   <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#FF6259] px-1 text-[9px] font-semibold text-white">
-                    {liveStatus!.approvals_pending}
+                    {(liveStatus!.approvals_pending ?? 0) + (liveStatus!.questions_pending ?? 0)}
                   </span>
                 )}
               </Button>
@@ -179,11 +181,12 @@ export default function App() {
                     <div className="mt-1 text-xs text-[#9BA1AA]">
                       {!liveStatus
                         ? 'Sin conexión con el backend: no se pudo leer /api/status.'
-                        : (liveStatus.counts.running > 0 || liveStatus.counts.sessions_with_subagents > 0 || (liveStatus.approvals_pending ?? 0) > 0)
+                        : (liveStatus.counts.running > 0 || liveStatus.counts.sessions_with_subagents > 0 || (liveStatus.approvals_pending ?? 0) > 0 || (liveStatus.questions_pending ?? 0) > 0)
                           ? [
                               liveStatus.counts.running > 0 ? `${liveStatus.counts.running} turno(s) en curso` : '',
                               liveStatus.counts.sessions_with_subagents > 0 ? `${liveStatus.counts.sessions_with_subagents} sesión(es) con sub-agentes` : '',
                               (liveStatus.approvals_pending ?? 0) > 0 ? `${liveStatus.approvals_pending} aprobación(es) pendiente(s)` : '',
+                              (liveStatus.questions_pending ?? 0) > 0 ? `${liveStatus.questions_pending} pregunta(s) esperando tu respuesta` : '',
                             ].filter(Boolean).join(' · ')
                           : 'Sin notificaciones nuevas. El arnés está listo.'}
                     </div>
@@ -208,6 +211,7 @@ export default function App() {
           {view==='agents' && <AgentsPanel />}
           {view==='review' && <ReviewPanel />}
           {view==='approvals' && <ApprovalsPanel />}
+          {view==='questions' && <QuestionsPanel />}
           {view==='plan' && <PlanPanel />}
           {view==='worktrees' && <WorktreesPanel />}
           {view==='usage' && <UsagePanel />}

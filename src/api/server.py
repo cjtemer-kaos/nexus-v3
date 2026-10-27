@@ -2962,9 +2962,15 @@ async def status_endpoint():
         approvals_pending = sum(1 for a in get_approvals().list("") if a.get("status") == "pending")
     except Exception:
         approvals_pending = 0
+    try:
+        from src.core.questions import get_questions
+        questions_pending = get_questions().pending_count()
+    except Exception:
+        questions_pending = 0
     return {"running": running, "sub_agents": subs, "modes": modes,
             "permission_levels": levels,
             "approvals_pending": approvals_pending,
+            "questions_pending": questions_pending,
             "counts": {"running": len(running), "sessions_with_subagents": len(subs)}}
 
 
@@ -3159,6 +3165,52 @@ async def approvals_reject(approval_id: str, request: Request):
 async def approvals_clear():
     from src.core.approvals import get_approvals
     return {"ok": True, "cleared": get_approvals().clear_resolved()}
+
+
+# --- preguntas al usuario (`question`) --------------------------------------
+@app.get("/api/questions")
+async def questions_list(session_id: str = "", all: int = 0):
+    from src.core.questions import get_questions
+    reg = get_questions()
+    return {"questions": (reg.all(session_id) if all else reg.pending(session_id)),
+            "pending": reg.pending_count()}
+
+
+@app.post("/api/questions/{question_id}/answer")
+async def questions_answer(question_id: str, request: Request):
+    from src.core.questions import get_questions
+    body = await _json_body(request)
+    valor = body.get("answer")
+    if valor is None:
+        valor = body.get("values")
+    if valor is None:
+        valor = body.get("text")
+    if valor is None:
+        raise HTTPException(status_code=400, detail="falta 'answer' (texto o lista)")
+    res = get_questions().answer(question_id, valor)
+    if not res.get("ok"):
+        err = str(res.get("error") or "")
+        code = 404 if err.startswith("pregunta desconocida") else (
+            409 if "ya " in err or "ya no" in err else 400)
+        raise HTTPException(status_code=code, detail=err)
+    return res
+
+
+@app.post("/api/questions/{question_id}/cancel")
+async def questions_cancel(question_id: str):
+    from src.core.questions import get_questions
+    res = get_questions().cancel(question_id)
+    if not res.get("ok"):
+        err = str(res.get("error") or "")
+        code = 404 if err.startswith("pregunta desconocida") else 409
+        raise HTTPException(status_code=code, detail=err)
+    return res
+
+
+@app.post("/api/questions/clear")
+async def questions_clear():
+    from src.core.questions import get_questions
+    return {"ok": True, "cleared": get_questions().clear()}
 
 
 def _parse_json_list(text: str) -> list[str]:
@@ -4183,7 +4235,8 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
             # el executor se usa suelto, se deriva del hash de la tarea.
             child_sid = child_session_id or (
                 f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}")
-            reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False)
+            reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False,
+                                  interactive=False)
             # Set curado por gema (o el pedido explícito): menos tools = menos
             # superficie de error y menos tokens de esquema en el prompt.
             names = tuple(allowed_tools or ()) or _SUB_TOOLSETS.get(gem, ())
@@ -4290,7 +4343,8 @@ def _parse_apply_patch(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
     return [(p, h) for p, h in blocks if p and h]
 
 
-def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True, include_subagents: bool = True):
+def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None, helpers: bool = True,
+                    include_subagents: bool = True, interactive: bool = True):
     """Toolset estandar del harness, jail-ado por scope (closures que usan scope/session_id)."""
     from src.core.tool_registry import ToolRegistry
     registry = ToolRegistry()
@@ -5642,6 +5696,41 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if isinstance(tools, (list, tuple)):
             return tuple(str(t).strip() for t in tools if str(t).strip())
         return tuple(t.strip() for t in (tools or "").split(",") if t.strip())
+
+    async def question_tool(question: str, options: "list[str] | str" = (), multiple: bool = False,
+                            header: str = "", timeout: int = 300) -> str:
+        """Pregunta algo al usuario y ESPERA su respuesta (equivalente a `question` de opencode).
+
+        Bloquea el turno hasta que conteste en la UI (vista Preguntas) o por API. Si
+        no hay respuesta en `timeout` segundos, devuelve answered=false para que el
+        turno siga con lo más razonable en vez de quedarse colgado.
+        """
+        import json as _json
+        from src.core.questions import get_questions
+        res = await get_questions().ask(
+            session_id, question, options=_tools_csv(options), multiple=multiple,
+            header=header, timeout_s=max(5, min(900, int(timeout or 300))))
+        return _json.dumps(res, ensure_ascii=False)
+
+    if interactive:
+        # Un hijo (interactive=False) no tiene usuario: la tool lo dejaría
+        # esperando 300 s una respuesta que nadie puede dar.
+        registry.register_function(
+            question_tool, name="question",
+            description=("Pregunta al usuario y espera su respuesta (bloquea el turno). Usala cuando "
+                         "haya que ELEGIR entre caminos o falte un dato que solo el usuario tiene; "
+                         "con `options` la respuesta se valida contra esa lista. Si nadie contesta en "
+                         "`timeout` segundos, devuelve answered=false: seguí asumiendo y decilo."),
+            category="local",
+            parameters={"type": "object", "properties": {
+                "question": {"type": "string", "description": "La pregunta, concreta y en una sola frase"},
+                "header": {"type": "string", "description": "Título corto (<=12 palabras)"},
+                "options": {"type": "array", "items": {"type": "string"},
+                            "description": "Opciones para elegir (vacío = respuesta libre)"},
+                "multiple": {"type": "boolean", "description": "Permitir elegir más de una opción"},
+                "timeout": {"type": "integer", "description": "Segundos de espera (5-900, default 300)"}},
+                "required": ["question"], "additionalProperties": False},
+        )
 
     async def sub_agent_tool(task: str, mode: str = "one-shot", gema: str = "auto", context: str = "",
                              tools: str | list[str] = "") -> str:
