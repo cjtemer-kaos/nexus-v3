@@ -1,6 +1,5 @@
 import { Sidebar } from '@/components/Sidebar'
-import { ModelSelector } from '@/components/ModelSelector'
-import { AgentSelector } from '@/components/AgentSelector'
+import { SessionTabs } from '@/components/chat/SessionTabs'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { GraphView } from '@/components/graph/GraphView'
 import { MemoryPanel } from '@/components/memory/MemoryPanel'
@@ -16,7 +15,7 @@ import { PlanPanel } from '@/components/plan/PlanPanel'
 import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
 import { useAppStore } from '@/store/app-store'
-import { Search, Command, Bell, User, FileText, Loader2 } from 'lucide-react'
+import { Search, Bell, User, FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState, useEffect } from 'react'
 import { searchApi } from '@/lib/api'
@@ -97,18 +96,24 @@ export default function App() {
       <Sidebar />
 
       <div className="flex flex-1 flex-col min-w-0 min-h-0">
-        {/* topbar — z-30 ensures dropdowns inside header paint above main content (backdrop-blur creates stacking context) */}
-        <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-[#2C3037] bg-[#15171B]/80 backdrop-blur px-3 sm:px-4">
-          <div className="hidden md:flex items-center gap-2 text-sm shrink-0">
-            <span className="text-[#9BA1AA]">Arnés</span>
-            <span className="text-zinc-700">/</span>
-            <span className="font-medium">{viewLabels[view]}</span>
-            <span className="ml-2 hidden lg:inline rounded-full bg-[#3DDC84]/15 border border-[#3DDC84]/20 px-2 py-0.5 text-xs text-[#3DDC84]">WAL activado · FTS5 · sesión {activeSession}</span>
-          </div>
+        {/* topbar — pestañas de sesión (como opencode) + búsqueda y cuenta */}
+        <header className="relative z-30 flex h-12 shrink-0 items-stretch gap-2 border-b border-[#22262D] bg-[#15171B] px-2">
+          {view === 'chat' ? (
+            <div className="min-w-0 flex-1">
+              <SessionTabs />
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm">
+              <span className="text-[#9BA1AA]">Arnés</span>
+              <span className="text-[#3A3F47]">/</span>
+              <span className="font-medium">{viewLabels[view]}</span>
+              <span className="ml-2 hidden rounded-full border border-[#3DDC84]/20 bg-[#3DDC84]/15 px-2 py-0.5 text-xs text-[#3DDC84] lg:inline">WAL+FTS · {activeSession}</span>
+            </div>
+          )}
 
-          <div className="flex flex-1 min-w-0 justify-center px-1">
-            <div className="relative w-full max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#9BA1AA]" />
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9BA1AA]" />
               <input
                 id="global-search"
                 value={search}
@@ -117,16 +122,15 @@ export default function App() {
                   if (e.key === 'Enter') { e.preventDefault(); void runSearch() }
                   if (e.key === 'Escape') { e.preventDefault(); closeSearch() }
                 }}
-                placeholder="Buscar mensajes, archivos, grafo…  (⌘K)"
+                placeholder="Buscar…"
                 aria-label="Buscar en Nexus"
-                className="w-full rounded-xl border border-[#2C3037] bg-[#1E2127] pl-9 pr-16 py-2 text-sm placeholder:text-[#9BA1AA] focus:outline-none focus:border-[#4C9DFF]/50"
+                className="w-32 rounded-lg border border-[#2C3037] bg-[#1E2127] py-1.5 pl-8 pr-2 text-xs placeholder:text-[#9BA1AA] focus:border-[#4C9DFF]/50 focus:outline-none sm:w-52"
               />
-              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 hidden sm:flex items-center gap-1 rounded-md border border-[#2C3037] bg-[#22262D] px-1.5 py-0.5 text-xs text-[#9BA1AA]"><Command className="h-3 w-3" />K</span>
 
               {(searching || searchResults || searchError) && (
                 <>
                   <div className="fixed inset-0 z-[60]" onClick={closeSearch} />
-                  <div className="absolute left-0 right-0 top-full z-[70] mt-2 rounded-xl border border-[#2C3037] bg-[#1E2127] shadow-2xl">
+                  <div className="absolute right-0 top-full z-[70] mt-2 w-96 rounded-xl border border-[#2C3037] bg-[#1E2127] shadow-2xl">
                     <div className="flex items-center gap-2 border-b border-[#2C3037] px-3 py-2 text-xs text-[#9BA1AA]">
                       {searching ? <><Loader2 className="h-3 w-3 animate-spin" /> Buscando “{search.trim()}”…</> : <><FileText className="h-3 w-3" /> {searchError ? searchError : `${searchResults!.length} resultado${searchResults!.length===1?'':'s'} FTS5 global`}</>}
                     </div>
@@ -157,11 +161,7 @@ export default function App() {
                 </>
               )}
             </div>
-          </div>
 
-          <div className="ml-auto flex items-center gap-2">
-            <AgentSelector />
-            <ModelSelector />
             <div className="relative hidden sm:flex">
               <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}>
                 <Bell className="h-4 w-4" />
@@ -203,8 +203,9 @@ export default function App() {
                 </>
               )}
             </div>
-            <div className="h-8 w-8 rounded-full bg-[#0B62D6] flex items-center justify-center text-white font-semibold text-xs" title="Usuario Nexus">NX</div>
+            <div className="mr-1 flex h-7 w-7 items-center justify-center rounded-full bg-[#0B62D6] text-[11px] font-semibold text-white" title="Usuario Nexus">NX</div>
           </div>
+
         </header>
 
         {/* content */}

@@ -7,7 +7,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 const providerIcon: Record<string, any> = { llamacpp: Cpu, ollama: Zap, cloud: Cloud }
 const providerLabel: Record<string, string> = { llamacpp: 'llama.cpp', ollama: 'ollama', cloud: 'cloud' }
 
-export function ModelSelector() {
+export function ModelSelector({ compact = false }: { compact?: boolean }) {
   const { models, selectedModel, setModel, providerHealth, isProvidersLoading, providersError, refreshProviders } = useAppStore()
   const [open, setOpen] = useState(false)
 
@@ -40,6 +40,17 @@ export function ModelSelector() {
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
+      {compact ? (
+        <button
+          aria-label="Seleccionar modelo LLM"
+          title={selectedModel === 'auto' ? 'Auto: el router elige por gema y tarea' : `${current?.label ?? selectedModel} · ${current ? `${providerLabel[current.provider] ?? current.provider} · ${current.ctx.toLocaleString()} ctx` : 'modelo fijo'}`}
+          className="flex max-w-[210px] items-center gap-1.5 rounded-md px-2 py-1 text-xs text-[#9BA1AA] transition-colors hover:bg-[#262A31] hover:text-[#EDEEF0]"
+        >
+          {isProvidersLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className={cn('h-3.5 w-3.5', selectedModel === 'auto' ? 'text-[#4C9DFF]' : '')} />}
+          <span className="truncate">{isProvidersLoading ? 'Detectando…' : selectedModel === 'auto' ? 'Auto' : (current?.label ?? 'Sin modelos')}</span>
+          <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-180')} />
+        </button>
+      ) : (
       <button
         aria-label="Seleccionar modelo LLM"
         className="flex items-center gap-2.5 rounded-xl border border-[#2C3037] bg-[#22262D] px-3 py-2 text-sm hover:bg-[#22262D] transition-colors min-w-[160px]"
@@ -91,6 +102,7 @@ export function ModelSelector() {
         )}
         <ChevronDown className={cn('h-4 w-4 text-[#9BA1AA] transition-transform', open && 'rotate-180')} />
       </button>
+      )}
       </DropdownMenu.Trigger>
 
       <DropdownMenu.Portal>

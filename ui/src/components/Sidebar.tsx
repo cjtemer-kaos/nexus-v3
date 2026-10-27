@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -50,17 +50,74 @@ export function Sidebar() {
   const [moreOpen, setMoreOpen] = useState(false)
   useEffect(() => { if (inMore) setMoreOpen(true) }, [inMore])
 
+  // Panel colapsable a rail de íconos (como la barra lateral de opencode).
+  const [rail, setRail] = useState(false)
+  useEffect(() => {
+    try { setRail(localStorage.getItem('nexus.sidebarRail') === '1') } catch { /* modo privado */ }
+  }, [])
+  const toggleRail = () => setRail((v) => {
+    const n = !v
+    try { localStorage.setItem('nexus.sidebarRail', n ? '1' : '0') } catch { /* modo privado */ }
+    return n
+  })
+
+  if (rail) {
+    return (
+      <aside className="flex w-14 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-[#2C3037] bg-[#15171B] py-3">
+        <button
+          onClick={toggleRail}
+          title="Expandir panel"
+          aria-label="Expandir panel"
+          className="mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#0B62D6] text-sm font-bold text-white shadow-lg"
+        >
+          N³
+        </button>
+        {[...primary, ...more].map((item) => {
+          const Icon = item.icon
+          return (
+            <button
+              key={item.id}
+              onClick={() => setView(item.id as any)}
+              title={`${item.label} · ${item.desc}`}
+              aria-label={item.label}
+              className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors',
+                view === item.id ? 'bg-[#0B62D6] text-white' : 'text-[#9BA1AA] hover:bg-[#22262D] hover:text-[#EDEEF0]')}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          )
+        })}
+        <button
+          onClick={() => setAjustesOpen(true)}
+          title="Ajustes · config.yaml"
+          aria-label="Abrir ajustes"
+          className="mt-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#9BA1AA] hover:bg-[#22262D] hover:text-[#EDEEF0]"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+        <SettingsDialog open={ajustesOpen} onOpenChange={setAjustesOpen} />
+      </aside>
+    )
+  }
+
   return (
     <aside className="flex w-[240px] shrink-0 min-h-0 flex-col overflow-hidden border-r border-[#2C3037] bg-[#15171B]">
       {/* brand */}
-      <div className="shrink-0 px-4 py-4 border-b border-[#2C3037]">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0B62D6] text-white font-bold text-sm shadow-lg">N³</div>
+      <div className="shrink-0 px-3 py-3 border-b border-[#2C3037]">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#0B62D6] text-white font-bold text-xs shadow-lg">N³</div>
           <div className="min-w-0">
             <div className="text-sm font-semibold tracking-tight truncate">Nexus v3</div>
-            <div className="text-xs text-[#9BA1AA] truncate">Arnés · 2026</div>
+            <div className="text-[11px] text-[#9BA1AA] truncate">Arnés · 2026</div>
           </div>
-          <span className="ml-auto rounded-full bg-[#3DDC84]/15 border border-[#3DDC84]/20 px-2 py-0.5 text-[10px] font-medium text-[#3DDC84]">ALFA</span>
+          <button
+            onClick={toggleRail}
+            title="Colapsar panel"
+            aria-label="Colapsar panel"
+            className="ml-auto rounded-md p-1 text-[#9BA1AA] hover:bg-[#22262D] hover:text-[#EDEEF0]"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
@@ -105,7 +162,7 @@ export function Sidebar() {
             {sessions.map(s => (
               <div key={s.id} className="group relative">
                 <button
-                  onClick={() => setActiveSession(s.id)}
+                  onClick={() => { setActiveSession(s.id); setView('chat') }}
                   className={cn('w-full text-left rounded-lg px-3 py-2 border text-sm cursor-pointer transition-colors',
                     s.id === activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}
                 >
@@ -123,7 +180,7 @@ export function Sidebar() {
               </div>
             ))}
           </div>
-          <button onClick={() => createSession()} className="mt-3 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">+ Nueva sesión</button>
+          <button onClick={() => { createSession(); setView('chat') }} className="mt-3 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">+ Nueva sesión</button>
           {activeSession && (
             <button onClick={() => forkSession(activeSession)} className="mt-1.5 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">Bifurcar la sesión activa (copia el historial)</button>
           )}

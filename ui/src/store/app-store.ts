@@ -39,6 +39,10 @@ type AppState = {
   sessionsError: string | null
   activeSession: string
   setActiveSession: (id: string) => void
+  // sesiones abiertas como pestañas (estilo opencode: no una lista eterna al costado)
+  openTabs: string[]
+  openTab: (id: string) => void
+  closeSessionTab: (id: string) => void
   activeAgent: string
   setActiveAgent: (id: string) => void
   liveStatus: NexusStatus | null
@@ -71,6 +75,20 @@ type AppState = {
 
 let _ensurePromise: Promise<string> | null = null
 let _creatingSession = false
+
+const TABS_KEY = 'nexus.openTabs'
+const leerTabs = (): string[] => {
+  try {
+    const raw = localStorage.getItem(TABS_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string').slice(0, 12) : []
+  } catch {
+    return []
+  }
+}
+const guardarTabs = (ids: string[]) => {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify(ids.slice(0, 12))) } catch { /* modo privado */ }
+}
 
 export const useAppStore = create<AppState>((set, get) => ({
   view: 'chat',
@@ -113,10 +131,31 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionsError: null as string | null,
   activeSession: '',
   activeAgent: 'default',
+  openTabs: leerTabs() as string[],
+  openTab: (id) => {
+    if (!id) return
+    set((s) => {
+      const openTabs = s.openTabs.includes(id) ? s.openTabs : [...s.openTabs, id].slice(-12)
+      guardarTabs(openTabs)
+      return { openTabs }
+    })
+  },
+  closeSessionTab: (id) => {
+    const st = get()
+    const idx = st.openTabs.indexOf(id)
+    const openTabs = st.openTabs.filter((x) => x !== id)
+    guardarTabs(openTabs)
+    if (st.activeSession !== id) { set({ openTabs }); return }
+    const vecina = openTabs[Math.max(0, idx - 1)] ?? openTabs[0] ?? ''
+    set({ openTabs, activeSession: vecina, messages: [] })
+    if (vecina) void get().loadMessages(vecina)
+  },
   // Cambiar de sesión limpia el buffer local (evita ver mensajes de otra sesión
   // mientras carga el historial desde el server).
-  setActiveSession: (activeSession) =>
-    set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] })),
+  setActiveSession: (activeSession) => {
+    set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] }))
+    get().openTab(activeSession)
+  },
   setActiveAgent: (activeAgent) => set({ activeAgent }),
   liveStatus: null,
   statusError: null,
@@ -134,7 +173,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         summary: s.summary,
         source: 'server',
       }))
-      set({ sessions, sessionsError: null, activeSession: get().activeSession || sessions[0]?.id || '' })
+      const activa = get().activeSession || sessions[0]?.id || ''
+      // Los ids guardados pueden haber sido borrados: descartarlos.
+      const vivos = new Set(sessions.map((s) => s.id))
+      const tabsGuardadas = get().openTabs.filter((id) => vivos.has(id))
+      const openTabs = tabsGuardadas.length ? tabsGuardadas : (activa ? [activa] : [])
+      guardarTabs(openTabs)
+      set({ sessions, sessionsError: null, activeSession: activa, openTabs })
     } catch (e) {
       // server caído — conservar sesiones locales cargadas, pero decirlo
       set({ sessionsError: (e as Error).message ?? String(e) })
@@ -151,11 +196,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     _ensurePromise = (async () => {
     try {
       const s = await createSessionApi()
-      set((x) => ({
-        sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
-        activeSession: s.id,
-      }))
-      return s.id
+        set((x) => ({
+          sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
+          activeSession: s.id,
+        }))
+        get().openTab(s.id)
+        return s.id
     } catch {
       return ''
     } finally {
@@ -170,11 +216,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     void (async () => {
       try {
         const s = await createSessionApi()
+        const nuevoId = s.id
         set((st) => ({
           sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
           activeSession: s.id,
           messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
         }))
+        get().openTab(nuevoId)
       } catch (e) {
         // fallback local sin server (queda marcado como 'local' y con aviso de error)
         set((st) => {
@@ -198,6 +246,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const r = await forkSessionApi(id, true)
         await get().loadSessions()
         set({ activeSession: r.id, messages: [], sessionsError: null })
+        get().openTab(r.id)
         await get().loadMessages(r.id)
       } catch (e) {
         set({ sessionsError: `no se pudo bifurcar ${id}: ${(e as Error).message}` })
@@ -220,7 +269,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         const sessions = st.sessions.filter((x) => x.id !== id)
         const wasActive = st.activeSession === id
         const activeSession = wasActive ? (sessions[0]?.id ?? '') : st.activeSession
-        return { sessions, activeSession, messages: wasActive ? [] : st.messages }
+        const openTabs = st.openTabs.filter((x) => x !== id)
+        guardarTabs(openTabs)
+        return { sessions, activeSession, openTabs, messages: wasActive ? [] : st.messages }
       })
       // Si borramos la activa, cargar el historial de la nueva activa.
       const next = get().activeSession

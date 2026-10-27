@@ -1,15 +1,49 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera, FileText, Database, ChevronRight, Volume2 } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import {
+  Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera,
+  FileText, Database, ChevronRight, Volume2, MoreHorizontal, ArrowUp, GitBranch, CheckCircle2,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, type ChatMessage } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, type UploadResult } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, type UploadResult, type Usage } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 import { Markdown } from '@/components/chat/Markdown'
 import { InlineAsks } from '@/components/chat/InlineAsks'
+import { AgentSelector } from '@/components/AgentSelector'
+import { ModelSelector } from '@/components/ModelSelector'
 
 type Pending = { key: string; file: File; preview?: string }
+type Grupo =
+  | { tipo: 'msg'; m: ChatMessage }
+  | { tipo: 'tools'; nombre: string; items: ChatMessage[] }
+
+// opencode agrupa las tools consecutivas en una linea ("Se usaron 9 Shell").
+const ETIQUETA_TOOL: Record<string, string> = {
+  plan_mode: 'cambio de modo',
+  steer: 'indicación',
+  question: 'pregunta',
+  permission: 'permiso',
+}
+const etiquetaTool = (n: string) => ETIQUETA_TOOL[n] || n
+
+const agrupar = (msgs: ChatMessage[]): Grupo[] => {
+  const out: Grupo[] = []
+  for (const m of msgs) {
+    const ultimo = out[out.length - 1]
+    if (m.role === 'tool') {
+      if (ultimo && ultimo.tipo === 'tools' && ultimo.nombre === (m.toolName || 'tool')) {
+        ultimo.items.push(m)
+      } else {
+        out.push({ tipo: 'tools', nombre: m.toolName || 'tool', items: [m] })
+      }
+    } else {
+      out.push({ tipo: 'msg', m })
+    }
+  }
+  return out
+}
 
 const now = () => new Date().toLocaleTimeString().slice(0, 5)
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
@@ -68,7 +102,9 @@ const SLASH_FALLBACK: SlashCommand[] = [
 ]
 
 export function ChatPanel() {
-  const { messages, messagesError, addMessage, activeSession, loadMessages, liveStatus, loadStatus } = useAppStore()
+  const { messages, messagesError, addMessage, activeSession, loadMessages, liveStatus, loadStatus, sessions, forkSession } = useAppStore()
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [input, setInput] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -88,7 +124,7 @@ export function ChatPanel() {
   const [slashQuery, setSlashQuery] = useState('')
   const [lastSteps, setLastSteps] = useState<any[]|null>(null)
   const [lastTodos, setLastTodos] = useState<any|null>(null)
-  const [showTraj, setShowTraj] = useState(true)
+  const [showTraj, setShowTraj] = useState(false)
   const [distillMsg, setDistillMsg] = useState<string | null>(null)
   const [distilling, setDistilling] = useState(false)
   const [speaking, setSpeaking] = useState(false)
@@ -109,6 +145,16 @@ export function ChatPanel() {
     busyRef.current = false
     void loadMessages(activeSession)
   }, [activeSession, loadMessages])
+
+  // Tokens/costo de la sesión, como el contador del header de opencode.
+  useEffect(() => {
+    if (!activeSession) { setUsage(null); return }
+    let vivo = true
+    usageApi(activeSession)
+      .then((u) => { if (vivo) setUsage(u) })
+      .catch(() => { if (vivo) setUsage(null) })
+    return () => { vivo = false }
+  }, [activeSession, messages.length, isStreaming])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isStreaming, lastSteps, lastTodos])
 
@@ -366,6 +412,11 @@ export function ChatPanel() {
           else addMessage({ id: msgId, role: 'assistant', content: head + body, timestamp: now() })
         }
       }
+      if (streamed && stillActive() && activeSession) {
+        // El server ya persistió el turno: releer trae las tools como mensajes
+        // (agrupadas en una línea), igual que al abrir la sesión de nuevo.
+        void useAppStore.getState().loadMessages(activeSession)
+      }
       void useAppStore.getState().loadSessions()
     } catch (e) {
       const msg = (e as Error).message || String(e)
@@ -445,10 +496,81 @@ export function ChatPanel() {
     }
   }, [speaking])
 
+  const grupos = useMemo(() => agrupar(messages), [messages])
+  const sesion = sessions.find((s) => s.id === activeSession)
+  const titulo = sesion?.title || 'Sesión nueva'
+  const proyecto = sesion?.project || ''
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col bg-[#15171B]">
+      {/* header de sesión (estilo opencode: titulo + consumo + acciones) */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[#22262D] px-5">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold leading-tight text-[#EDEEF0]" title={titulo}>{titulo}</div>
+          <div className="truncate text-[11px] leading-tight text-[#9BA1AA]">
+            {proyecto ? `${proyecto} · ` : ''}{activeSession ? activeSession : 'sin sesión'}
+          </div>
+        </div>
+        <div className="ml-auto flex items-center gap-2 text-[11px] text-[#9BA1AA]">
+          {usage && usage.tokens > 0 && (
+            <span title={`${usage.messages} mensajes · ${usage.tokens} tokens`} className="hidden tabular-nums sm:inline">
+              {usage.tokens >= 1000 ? `${(usage.tokens / 1000).toFixed(1)} mil` : usage.tokens} tokens
+              {usage.cost.total_usd > 0 && ` · ${usage.cost.total_usd.toFixed(2)} US$`}
+            </span>
+          )}
+          <button
+            onClick={toggleSessionMode}
+            disabled={modeBusy || !activeSession}
+            title={sessionMode === 'plan' ? 'Modo plan activo: solo lectura. Clic para volver a act' : 'Activar modo plan (solo lectura)'}
+            aria-pressed={sessionMode === 'plan'}
+            className={cn(
+              'rounded-md border px-2 py-1 text-[11px] disabled:opacity-50',
+              sessionMode === 'plan'
+                ? 'border-[#FFB86B]/50 bg-[#FFB86B]/10 text-[#FFB86B]'
+                : 'border-[#2C3037] bg-[#1E2127] text-[#9BA1AA] hover:text-[#EDEEF0]',
+            )}
+          >
+            {modeBusy ? '…' : sessionMode === 'plan' ? 'Plan' : 'Act'}
+          </button>
+          <div className="relative">
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label="Más acciones de la sesión"
+              aria-expanded={menuOpen}
+              className="rounded-md p-1 text-[#9BA1AA] hover:bg-[#262A31] hover:text-[#EDEEF0]"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-full z-[70] mt-1 w-52 rounded-xl border border-[#2C3037] bg-[#1E2127] p-1 shadow-2xl">
+                  <button onClick={() => { setMenuOpen(false); void speakLast() }} disabled={speaking}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    <Volume2 className="h-3.5 w-3.5" /> {speaking ? 'Leyendo…' : 'Escuchar respuesta'}
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); void distillNow() }} disabled={distilling || !activeSession}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    <Database className="h-3.5 w-3.5" /> {distilling ? 'Destilando…' : 'Destilar al grafo'}
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); if (activeSession) forkSession(activeSession) }} disabled={!activeSession}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    <GitBranch className="h-3.5 w-3.5" /> Bifurcar sesión
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); toggleSessionMode() }} disabled={!activeSession}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    <Eye className="h-3.5 w-3.5" /> {sessionMode === 'plan' ? 'Volver a Act' : 'Modo Plan (solo lectura)'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* messages */}
-      <div className="flex-1 overflow-auto px-6 py-6 space-y-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
         {messagesError && (
           <div className="flex items-center gap-2 rounded-lg border border-[#5A2A2A] bg-[#3A1F1F]/60 px-3 py-2 text-xs text-[#FFA8A8]">
             <span className="flex-1">{messagesError}</span>
@@ -478,77 +600,119 @@ export function ChatPanel() {
             </div>
           </div>
         )}
-        {messages.map((m) => (
-          (m.role === 'system' || m.kind === 'compaction_summary') ? (
-            <div key={m.id} className="mx-auto w-full max-w-[92%] overflow-hidden rounded-xl border border-[#4C9DFF]/25 bg-[#182233]">
-              <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-[#1C2840]">
-                <Database className="h-3.5 w-3.5 shrink-0 text-[#8CC1FF]" />
-                <span className="shrink-0 font-semibold text-[#8CC1FF]">Resumen de contexto</span>
-                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(summaryBody(m.content))}</span>
-                <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
-                <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
-              </button>
-              {expanded.has(m.id) && (
-                <div className="max-h-80 overflow-auto border-t border-[#4C9DFF]/20 px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">
-                  {summaryBody(m.content)}
-                </div>
-              )}
-            </div>
-          ) : m.role === 'tool' ? (
-            <div key={m.id} className="max-w-[85%] overflow-hidden rounded-xl border border-[#2C3037] bg-[#1E2127]">
-              <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#22262D]">
-                <Wrench className="h-3.5 w-3.5 shrink-0 text-[#FFB86B]" />
-                <span className="shrink-0 font-mono text-[#FFB86B]">{m.toolName || 'tool'}</span>
-                <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarizeTool(m.toolName, m.content)}</span>
-                <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
-                <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
-              </button>
-              {expanded.has(m.id) && (
-                <div className="max-h-80 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">
-                  {m.toolName === 'apply_patch' ? <ApplyPatchResult content={m.content} /> : m.content}
-                  <div className="mt-1.5">
-                    <button onClick={() => { void navigator.clipboard.writeText(m.content).catch(()=>{}); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
-                      className="text-[10px] text-[#8CC1FF] hover:underline">
-                      {copied===m.id ? 'copiado' : 'copiar salida'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-          <div key={m.id} className={cn('flex gap-3', m.role === 'user' ? 'justify-end' : 'justify-start')}>
-            {m.role !== 'user' && (
-              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#0B62D6] text-white">
-                <Bot className="h-3.5 w-3.5" />
-              </div>
-            )}
-            <div className={cn('group relative max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed', m.role === 'user' ? 'bg-[#0B62D6] text-white rounded-br-sm' : 'bg-[#1E2127] border border-[#2C3037] text-[#EDEEF0]')}>
-              {m.toolName && <div className="mb-1 text-xs font-mono text-[#FFB86B]/80">{m.toolName}</div>}
-              {m.images && m.images.length > 0 && (
-                <div className="mb-2 flex flex-wrap gap-2">
-                  {m.images.map((src, i) => (
-                    <img key={i} src={src} alt={`adjunto ${i + 1}`} className="h-24 w-24 rounded-lg border border-[#2C3037] object-cover" />
-                  ))}
-                </div>
-              )}
-              <div className="break-words">{m.role === 'assistant' ? <Markdown text={sanitizeAssistantText(m.content)} /> : <span className="whitespace-pre-wrap">{m.content}</span>}</div>
-              <div className={cn('mt-1.5 flex items-center gap-2 text-[11px]', m.role === 'user' ? 'text-[#B9DBFF] justify-end' : 'text-[#9BA1AA]')}>
-                <span>{m.timestamp}</span>
+        {grupos.map((g) => {
+          if (g.tipo === 'tools') {
+            const items = g.items
+            const abierto = items.some((x) => expanded.has(x.id))
+            return (
+              <div key={`tools-${items[0].id}`} className="self-start">
                 <button
-                  onClick={() => { void navigator.clipboard.writeText(m.content).catch(()=>{}); setCopied(m.id); setTimeout(()=>setCopied(null), 1200) }}
-                  aria-label={copied===m.id ? 'Copiado' : 'Copiar mensaje'}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-[#EDEEF0]"
+                  onClick={() => { items.forEach((x) => toggleExpanded(x.id)) }}
+                  aria-expanded={abierto}
+                  className="flex items-center gap-2 rounded-lg px-1 py-1 text-left text-xs text-[#9BA1AA] hover:text-[#EDEEF0]"
                 >
-                  {copied===m.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  <Wrench className="h-3.5 w-3.5 shrink-0 text-[#FFB86B]/80" />
+                  <span>Se {items.length === 1 ? 'usó' : 'usaron'} {items.length} <span className="font-mono text-[#C9CDD3]">{etiquetaTool(g.nombre)}</span></span>
+                  <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 transition-transform', abierto && 'rotate-90')} />
                 </button>
+                {abierto && (
+                  <div className="mt-1 space-y-1 border-l border-[#2C3037] pl-3">
+                    {items.map((t) => (
+                      <div key={t.id} className="rounded-lg border border-[#22262D] bg-[#1A1D23] px-2.5 py-1.5">
+                        <div className="flex items-center gap-2 text-[11px] text-[#9BA1AA]">
+                          <span className="font-mono text-[#FFB86B]/80">{etiquetaTool(t.toolName || 'tool')}</span>
+                          <span className="min-w-0 flex-1 truncate">{summarizeTool(t.toolName, t.content)}</span>
+                          <span className="shrink-0 text-[#59616D]">{t.timestamp}</span>
+                        </div>
+                        <div className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-[#C9D2E0]">
+                          {t.toolName === 'apply_patch' ? <ApplyPatchResult content={t.content} /> : t.content}
+                        </div>
+                        <button
+                          onClick={() => { void navigator.clipboard.writeText(t.content).catch(() => {}); setCopied(t.id); setTimeout(() => setCopied(null), 1200) }}
+                          className="mt-1 text-[10px] text-[#8CC1FF] hover:underline"
+                        >
+                          {copied === t.id ? 'copiado' : 'copiar salida'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
+
+          const m = g.m
+          if (m.role === 'system' || m.kind === 'compaction_summary') {
+            return (
+              <div key={m.id} className="overflow-hidden rounded-xl border border-[#4C9DFF]/25 bg-[#182233]">
+                <button onClick={() => toggleExpanded(m.id)} aria-expanded={expanded.has(m.id)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-[#1C2840]">
+                  <Database className="h-3.5 w-3.5 shrink-0 text-[#8CC1FF]" />
+                  <span className="shrink-0 font-semibold text-[#8CC1FF]">Resumen de contexto</span>
+                  <span className="min-w-0 flex-1 truncate text-[#9BA1AA]">{summarize(summaryBody(m.content))}</span>
+                  <span className="shrink-0 text-[#59616D]">{m.timestamp}</span>
+                  <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#9BA1AA] transition-transform', expanded.has(m.id) && 'rotate-90')} />
+                </button>
+                {expanded.has(m.id) && (
+                  <div className="max-h-80 overflow-auto border-t border-[#4C9DFF]/20 px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words text-[#C9D2E0]">
+                    {summaryBody(m.content)}
+                  </div>
+                )}
+              </div>
+            )
+          }
+
+          if (m.role === 'assistant') {
+            return (
+              <div key={m.id} className="group relative text-sm leading-relaxed text-[#EDEEF0]">
+                {m.images && m.images.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {m.images.map((src, i) => (
+                      <img key={i} src={src} alt={`adjunto ${i + 1}`} className="h-24 w-24 rounded-lg border border-[#2C3037] object-cover" />
+                    ))}
+                  </div>
+                )}
+                <div className="break-words"><Markdown text={sanitizeAssistantText(m.content)} /></div>
+                <div className="mt-1 flex items-center gap-2 text-[11px] text-[#59616D]">
+                  <span>{m.timestamp}</span>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(m.content).catch(() => {}); setCopied(m.id); setTimeout(() => setCopied(null), 1200) }}
+                    aria-label={copied === m.id ? 'Copiado' : 'Copiar mensaje'}
+                    className="opacity-0 transition-opacity hover:text-[#EDEEF0] group-hover:opacity-100"
+                  >
+                    {copied === m.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div key={m.id} className="flex justify-end">
+              <div className="group relative max-w-[85%] rounded-2xl rounded-br-md bg-[#262A31] px-3.5 py-2.5 text-sm leading-relaxed text-[#EDEEF0]">
+                {m.images && m.images.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {m.images.map((src, i) => (
+                      <img key={i} src={src} alt={`adjunto ${i + 1}`} className="h-24 w-24 rounded-lg border border-[#2C3037] object-cover" />
+                    ))}
+                  </div>
+                )}
+                <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-[#9BA1AA]">
+                  <span>{m.timestamp}</span>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(m.content).catch(() => {}); setCopied(m.id); setTimeout(() => setCopied(null), 1200) }}
+                    aria-label={copied === m.id ? 'Copiado' : 'Copiar mensaje'}
+                    className="opacity-0 transition-opacity hover:text-[#EDEEF0] group-hover:opacity-100"
+                  >
+                    {copied === m.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
               </div>
             </div>
-            {m.role === 'user' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#22262D] text-[#9BA1AA]"><User className="h-3.5 w-3.5" /></div>}
-          </div>
           )
-        ))}
+        })}
+
         {(lastTodos && lastTodos.todos?.length > 0) && (
           <div className="rounded-xl border border-[#4C9DFF]/20 bg-[#4C9DFF]/10 p-3 text-xs">
             <div className="flex items-center gap-2 font-semibold text-[#8CC1FF]"><ListTodo className="h-3.5 w-3.5" /> Todos: {lastTodos.counts?.completed ?? 0}/{lastTodos.todos.length} completados</div>
@@ -576,17 +740,14 @@ export function ChatPanel() {
           </div>
         )}
         {isStreaming && (
-          <div className="flex gap-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#0B62D6] text-white"><Bot className="h-3.5 w-3.5" /></div>
-            <div className="bg-[#1E2127] border border-[#2C3037] rounded-2xl px-4 py-3 flex items-center gap-2">
-              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:0ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:150ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-[#9BA1AA] [animation-delay:300ms]" />
-            </div>
+          <div className="flex items-center gap-2 self-start pl-1 text-xs text-[#9BA1AA]">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#4C9DFF]" />
+            <span>Trabajando…</span>
           </div>
         )}
         <InlineAsks />
         <div ref={bottomRef} />
+        </div>
       </div>
 
       {slashOpen && (
@@ -599,7 +760,8 @@ export function ChatPanel() {
       )}
 
       {/* composer DECK */}
-      <div className="relative border-t border-[#2C3037] bg-[#15171B] p-4">
+      <div className="relative border-t border-[#2C3037] bg-[#15171B] px-4 py-3">
+        <div className="mx-auto w-full max-w-3xl">
         {/* previews de adjuntos */}
         {pending.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -622,38 +784,70 @@ export function ChatPanel() {
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-2xl border border-[#2C3037] bg-[#1E2127] p-2 focus-within:border-[#4C9DFF]/50 transition-colors">
+        <div className="rounded-2xl border border-[#2C3037] bg-[#1E2127] p-2 transition-colors focus-within:border-[#4C9DFF]/50">
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilePicked} accept="*/*" />
-          <Button variant="ghost" size="icon" className="shrink-0 rounded-xl text-[#9BA1AA] hover:text-[#EDEEF0]" aria-label="Adjuntar archivo" onClick={() => fileInputRef.current?.click()}><Paperclip className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" className="shrink-0 rounded-xl text-[#9BA1AA] hover:text-[#EDEEF0]" aria-label="Capturar pantalla" onClick={captureScreen}><Camera className="h-4 w-4" /></Button>
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e)=>{ const v=e.target.value; setInput(v); if(v.startsWith('/')){ setSlashOpen(true); setSlashQuery(v.slice(1).split(' ')[0]) } else setSlashOpen(false) }}
             onKeyDown={(e)=>{ if(e.key==='Escape' && slashOpen){ e.preventDefault(); setSlashOpen(false); return } if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing){ e.preventDefault(); send() }}}
-            placeholder={isStreaming ? "Dirigir el run en curso… (Enter encola la instrucción)" : "Mensaje a Nexus…  / comandos · Ctrl+V adjunta · Shift+Enter salto"}
+            placeholder={isStreaming ? 'Dirigir el run en curso… (Enter encola la instrucción)' : 'Preguntá, pedí un cambio o escribí / para comandos'}
             rows={1}
             aria-label="Mensaje a Nexus"
-            className="max-h-32 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2.5 text-sm placeholder:text-[#9BA1AA] focus:outline-none text-[#EDEEF0]"
+            className="max-h-40 min-h-[52px] w-full resize-none bg-transparent px-2 py-1.5 text-sm text-[#EDEEF0] placeholder:text-[#9BA1AA] focus:outline-none"
           />
-          <div className="relative flex shrink-0 items-center">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Adjuntar archivo"
+              title="Adjuntar archivo (Ctrl+V también pega)"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#9BA1AA] hover:bg-[#262A31] hover:text-[#EDEEF0]"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              onClick={captureScreen}
+              aria-label="Capturar pantalla"
+              title="Capturar pantalla"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#9BA1AA] hover:bg-[#262A31] hover:text-[#EDEEF0]"
+            >
+              <Camera className="h-4 w-4" />
+            </button>
             <VoiceMic onTranscript={onTranscript} />
+            <span className="mx-1 h-4 w-px bg-[#2C3037]" />
+            <AgentSelector compact />
+            <ModelSelector compact />
+            <button
+              onClick={toggleSessionMode}
+              disabled={modeBusy || !activeSession}
+              title={sessionMode === 'plan' ? 'Modo plan activo: solo lectura. Clic para volver a act' : 'Activar modo plan (solo lectura)'}
+              aria-pressed={sessionMode === 'plan'}
+              className={cn('rounded-md px-2 py-1 text-xs disabled:opacity-50',
+                sessionMode === 'plan' ? 'bg-[#FFB86B]/10 text-[#FFB86B]' : 'text-[#9BA1AA] hover:bg-[#262A31] hover:text-[#EDEEF0]')}
+            >
+              {modeBusy ? '…' : sessionMode === 'plan' ? 'Plan' : 'Act'}
+            </button>
+            <span className="ml-auto hidden pr-1 text-[10px] text-[#59616D] sm:inline">
+              {isStreaming ? 'Enter encola · corriendo' : 'Enter envía · Shift+Enter salto'}
+            </span>
+            <button
+              onClick={send}
+              disabled={!input.trim() && pending.length === 0}
+              aria-label={isStreaming ? 'Dirigir el run en curso' : 'Enviar mensaje'}
+              title={isStreaming ? 'Dirigir el run en curso' : 'Enviar mensaje'}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#4C9DFF] text-[#0B1220] transition-colors hover:bg-[#6FB0FF] disabled:bg-[#2C3037] disabled:text-[#59616D]"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </button>
           </div>
-          <Button onClick={send} disabled={!input.trim() && pending.length===0} aria-label={isStreaming ? "Dirigir el run en curso" : "Enviar mensaje"} className="shrink-0 rounded-xl bg-[#0B62D6] hover:bg-[#4C9DFF] text-white">
-            <Send className="h-4 w-4" /> <span className="hidden sm:inline">{isStreaming ? 'Dirigir' : 'Enviar'}</span>
-          </Button>
         </div>
-        <div className="mt-2 flex items-center justify-between text-xs text-[#9BA1AA]">
-          <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3 text-[#4C9DFF]" /> Bucle Agente TDAO · Guardia de Alcance · Compactación 4 capas</span>
-          <span className="flex items-center gap-2">
-            <span className="hidden sm:inline">⌘K cambio rápido · /herramientas · Ctrl+V adjuntos</span>
-            <button onClick={toggleSessionMode} disabled={modeBusy || !activeSession} title={sessionMode === 'plan' ? 'Modo plan activo: solo lectura. Clic para volver a act' : 'Activar modo plan (solo lectura)'} aria-pressed={sessionMode === 'plan'} className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs disabled:opacity-50 ${sessionMode === 'plan' ? 'border-[#FFB86B]/50 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#2C3037] bg-[#22262D] text-[#9BA1AA] hover:text-[#EDEEF0]'}`}><Eye className="h-3 w-3" /> {modeBusy ? '…' : sessionMode === 'plan' ? 'Plan' : 'Act'}</button>
-            <button onClick={speakLast} disabled={speaking} title="Leer la última respuesta en voz alta" aria-label="Leer última respuesta" className="flex items-center gap-1.5 rounded-lg border border-[#2C3037] bg-[#22262D] px-2 py-1 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] disabled:opacity-50"><Volume2 className="h-3 w-3" /> {speaking ? 'Leyendo…' : 'Escuchar'}</button>
-            <button onClick={distillNow} disabled={distilling} title="Destilar esta sesión al grafo de conocimiento" aria-label="Destilar sesión al grafo" className="flex items-center gap-1.5 rounded-lg border border-[#2C3037] bg-[#22262D] px-2 py-1 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] disabled:opacity-50"><Database className="h-3 w-3" /> {distilling ? 'Destilando…' : 'Destilar'}</button>
-          </span>
+        <div className="mt-2 flex items-center gap-2 text-[10px] text-[#59616D]">
+          <Sparkles className="h-3 w-3 text-[#4C9DFF]" />
+          <span className="truncate">Bucle TDAO · Guardia de Alcance · Compactación 4 capas</span>
+          {distillMsg && <span className="truncate text-[#4C9DFF]">· {distillMsg}</span>}
+          {attachToast && <span className="truncate text-[#FFB86B]">· {attachToast}</span>}
         </div>
-        {distillMsg && <div className="mt-2 text-xs text-[#4C9DFF]">{distillMsg}</div>}
-        {attachToast && <div className="mt-2 text-xs text-[#FFB86B]">{attachToast}</div>}
+        </div>
       </div>
     </div>
   )
