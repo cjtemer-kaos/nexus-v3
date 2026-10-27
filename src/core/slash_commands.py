@@ -312,6 +312,57 @@ async def _h_scope(args, ctx):
     )
 
 
+async def _h_init(args, ctx):
+    """`/init`: escribe un AGENTS.md con lo que se puede comprobar en disco.
+
+    Es de los pocos slash que escriben un archivo, así que respeta el peldaño de
+    permisos: con #0/#1 (sin tools / solo lectura) se niega en vez de escribir.
+    """
+    import os
+    from pathlib import Path
+
+    force = any(a in ("force", "--force", "-f") for a in args)
+    destino = next((a for a in args if not a.startswith("-") and a != "force"), "")
+    root = Path(destino).expanduser() if destino else Path(str(ctx.get("root") or ctx.get("cwd") or os.getcwd()))
+
+    try:
+        from src.core.config import load_raw_config
+        from src.core.scope import level_name, permission_level
+
+        cfg = load_raw_config() or {}
+        nivel = permission_level((cfg.get("scope") or {}).get("permission"))
+        nombre = f"#{nivel} {level_name(nivel)}"
+    except Exception:
+        nivel, nombre = 2, ""
+    if nivel < 2:
+        return SlashResult(
+            ok=False,
+            message=f"/init escribe AGENTS.md y el permiso actual es {nombre or f'#{nivel}'}. Subí con /permiso 2.",
+            data={"action": "init_denied", "level": nivel},
+        )
+
+    try:
+        from src.core.project_init import write_agents_md
+
+        res = write_agents_md(root, force=force)
+    except Exception as e:
+        return SlashResult(ok=False, message=f"/init falló: {type(e).__name__}: {e}")
+
+    stacks = ", ".join(res.get("stacks") or []) or "sin detectar"
+    if res.get("created"):
+        extra = " (reemplazado)" if res.get("replaced") else ""
+        return SlashResult(
+            ok=True,
+            message=f"AGENTS.md escrito en {res.get('path')}{extra} · {res.get('bytes')} bytes · stack: {stacks}",
+            data={"action": "init_created", **res},
+        )
+    return SlashResult(
+        ok=False,
+        message=f"no se escribió nada: {res.get('reason')}",
+        data={"action": "init_skipped", **res},
+    )
+
+
 # --- register defaults -------------------------------------------------
 
 for spec in (
@@ -332,6 +383,7 @@ for spec in (
     SlashCommand("todo",      ["todos"],             "ver lista todo actual",          "",            _h_todo),
     SlashCommand("herramientas", ["tools", "herramienta"], "lista las herramientas disponibles", "", _h_tools),
     SlashCommand("alcance",   ["scope"],             "info de alcance/permisos",       "",            _h_scope),
+    SlashCommand("init",      ["agentsmd"],          "genera AGENTS.md mirando el repo", "[ruta] [force]", _h_init),
 ):
     registry.register(spec)
 

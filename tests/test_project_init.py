@@ -48,6 +48,18 @@ def test_package_json_roto_no_rompe(tmp_path):
     assert info.test_command == ""
 
 
+def test_bom_utf8_no_deja_el_repo_sin_comandos(tmp_path):
+    """Un package.json guardado en Windows puede traer BOM: json.loads falla y el
+    borrador decía "no se detectó un runner" con los scripts a la vista."""
+    (tmp_path / "package.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"scripts": {"test": "vitest run", "build": "vite build"}}).encode("utf-8")
+    )
+    info = pi.analyze(tmp_path)
+    assert "Node.js" in info.stacks
+    assert info.test_command == "npm run test"
+    assert info.build_command == "npm run build"
+
+
 def test_detecta_rust_y_go(tmp_path):
     (tmp_path / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
     info = pi.analyze(tmp_path)

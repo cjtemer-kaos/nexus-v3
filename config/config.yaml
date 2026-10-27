@@ -298,6 +298,19 @@ repl:
   timeout_s: 30
   # Kernel ocioso: se apaga solo despues de estos segundos sin uso.
   idle_s: 1800
+formatters:
+  # Formatear el archivo despues de escribir/editarlo (`src/core/formatters.py`):
+  # el diff queda sin ruido y la proxima edicion encuentra el texto exacto.
+  # Corre por argv (nunca shell), nunca lanza y no bloquea el turno.
+  enabled: true
+  # Techo por archivo; si se pasa, se avisa y el archivo queda como estaba.
+  timeout_s: 20
+  # Comando explicito por extension. Si declara una extension y el ejecutable no
+  # existe, el resultado es `error` (no se cae a otro formateador). Ejemplo:
+  #   ".py": [".venv-ft314/Scripts/ruff.exe", "format", "{file}"]
+  #   ".ts": ["node_modules/.bin/prettier", "--write", "{file}"]
+  # Sin `{file}` el archivo se agrega al final, como un CLI normal.
+  commands: {}
 skills:
   roots:
   - ./data/skills

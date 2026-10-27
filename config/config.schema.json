@@ -693,6 +693,23 @@
       },
       "additionalProperties": false
     },
+    "formatters": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeout_s": { "type": "number", "minimum": 1, "maximum": 600 },
+        "commands": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "skills": {
       "type": "object",
       "properties": {

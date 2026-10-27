@@ -1448,6 +1448,23 @@ class AgentLoop:
                         tool_result_str = str(raw_result)
                     tool_success = True
                     self.budget.add_tool_calls(1)
+                    # Formateo-in-the-loop: dejar el archivo prolijo ANTES de
+                    # diagnosticar, para que el linter opine sobre el texto final
+                    # y el checkpoint guarde un diff sin ruido.
+                    try:
+                        if tool_name in ("write_file", "edit", "apply_patch") and isinstance(tool_args, dict):
+                            _fmt_path = tool_args.get("path")
+                            if _fmt_path:
+                                from .formatters import format_file
+                                _fmt = format_file(_fmt_path, cfg=getattr(self, "_cfg", None) or None)
+                                _st = _fmt.get("status")
+                                if _st == "formatted":
+                                    tool_result_str = (tool_result_str or "") + f"\n[formateado con {_fmt.get('formatter') or 'formateador'}]"
+                                elif _st == "error":
+                                    _d = str(_fmt.get("detail") or "")[:200]
+                                    tool_result_str = (tool_result_str or "") + f"\n[formateo falló ({_fmt.get('formatter') or _fmt_path}): {_d}]"
+                    except Exception:
+                        pass
                     # Diagnostics-in-the-loop: tras editar/escribir, correr un chequeo
                     # rapido y anexarlo al resultado (el modelo se autocorrige).
                     try:

@@ -48,7 +48,9 @@ def _read_text(path: Path, limit: int = MAX_BYTES) -> str:
     try:
         if not path.is_file() or path.stat().st_size > limit:
             return ""
-        return path.read_text(encoding="utf-8", errors="replace")
+        # utf-8-sig: un package.json guardado en Windows puede traer BOM, y
+        # json.loads falla con él (el repo quedaría "sin comandos" sin motivo).
+        return path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ""
 
