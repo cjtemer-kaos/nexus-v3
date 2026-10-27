@@ -49,17 +49,24 @@ def cap_json_list(payload: dict, key: str, max_chars: int = 48_000,
     return _dump(out)
 
 
-def truncate_head_tail(text: str, max_chars: int = DEFAULT_MAX_CHARS, *, label: str = "salida") -> str:
-    """Recorta el medio y conserva inicio+final, con aviso accionable."""
+def truncate_head_tail(text: str, max_chars: int = DEFAULT_MAX_CHARS, *, label: str = "salida",
+                       hint: str = "") -> str:
+    """Recorta el medio y conserva inicio+final, con aviso accionable.
+
+    `hint` reemplaza el consejo por defecto ("refina el comando"): cuando el
+    texto viene de leer un ARCHIVO, el modelo no puede correr grep/head/tail
+    sobre lo que ya tiene en la mano, tiene que paginar con offset/limit.
+    """
     text = text or ""
     max_chars = max(2, int(max_chars))
     if len(text) <= max_chars:
         return text
     head = max_chars // 2
     tail = max_chars - head
+    consejo = hint or "Refina el comando (grep/head/tail) para ver el medio elidido"
     return (
         f"{text[:head]}\n"
         f"[... {label} truncada: {len(text)} chars en total; se conservan {head} del inicio "
-        f"y {tail} del final. Refina el comando (grep/head/tail) para ver el medio elidido ...]\n"
+        f"y {tail} del final. {consejo} ...]\n"
         f"{text[-tail:]}"
     )

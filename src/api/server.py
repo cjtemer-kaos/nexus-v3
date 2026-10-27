@@ -4378,11 +4378,29 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         n = max(0, int(limit or 0))
         if start == 0 and n == 0:
             from src.core.text_limits import truncate_head_tail
-            return truncate_head_tail(text, 48000, label=f"contenido de {path}")
+            total_lineas = len(text.splitlines())
+            if not text:
+                return f"[{path}: archivo vacio (0 bytes)]"
+            # El aviso por defecto manda a "refinar el comando (grep/head/tail)",
+            # que no aplica: aca ya se leyo el archivo, lo unico que puede hacer
+            # el modelo es paginar con offset/limit.
+            return truncate_head_tail(
+                text, 48000, label=f"contenido de {path}",
+                hint=(f"Para ver el medio volve a leerlo con offset/limit "
+                      f"(el archivo tiene {total_lineas} lineas, 2000 por pagina)"))
         lines = text.splitlines(keepends=True)
+        total = len(lines)
+        if total == 0:
+            return f"[{path}: archivo vacio (0 bytes)]\n"
+        # Un offset mas alla del final devolvia "[...: lineas 10000-9999 de 5000]":
+        # un rango invertido, sin contenido y sin decir que hacer. Un modelo
+        # confundido repite el mismo offset (y el anti-loop lo corta).
+        if start >= total:
+            return (f"[{path}: offset {start} esta mas alla del final del archivo "
+                    f"({total} lineas). Usa offset entre 0 y {total - 1}.]\n")
         chunk = lines[start:start + n] if n > 0 else lines[start:]
         end = start + len(chunk)
-        header = f"[{path}: líneas {start + 1}-{end} de {len(lines)}"
+        header = f"[{path}: líneas {start + 1}-{end} de {total}"
         if start + len(chunk) < len(lines):
             header += f"; seguí con offset={end}"
         header += "]\n"
