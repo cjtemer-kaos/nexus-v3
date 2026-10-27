@@ -342,6 +342,13 @@ export async function uploadApi(file: File): Promise<UploadResult> {
   return res.json()
 }
 
+/** Log crudo de la sesión (ZIP con el JSON adentro), para archivar o compartir. */
+export async function sessionExportApi(sessionId: string): Promise<Blob> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/export`, { timeoutMs: 120000 })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo exportar la sesión"))
+  return res.blob()
+}
+
 export type VoiceStatus = { tts_available: boolean; stt_available: boolean; stt_model?: string; tts_model?: string; tts_backend?: string; tts_voice?: string }
 
 export async function voiceStatusApi(): Promise<VoiceStatus> {

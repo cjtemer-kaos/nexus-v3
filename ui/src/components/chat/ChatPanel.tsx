@@ -2,12 +2,12 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera,
   FileText, Database, ChevronRight, Volume2, MoreHorizontal, ArrowUp, GitBranch, CheckCircle2,
-  Undo2, Square,
+  Undo2, Square, Download, ClipboardCopy,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore, type ChatMessage } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, rewindSessionApi, type UploadResult, type Usage } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, rewindSessionApi, sessionExportApi, type UploadResult, type Usage } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 import { Markdown } from '@/components/chat/Markdown'
@@ -131,6 +131,10 @@ export function ChatPanel() {
   const [distillMsg, setDistillMsg] = useState<string | null>(null)
   const [distilling, setDistilling] = useState(false)
   const [speaking, setSpeaking] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [copiadoTodo, setCopiadoTodo] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const dragDepth = useRef(0)
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_FALLBACK)
 
   // Los comandos los define el server (/api/slash); la lista local es solo fallback.
@@ -546,13 +550,96 @@ export function ChatPanel() {
     }
   }, [speaking])
 
+  /* ── exportar / compartir ─────────────────────────────────── */
+
+  const nombreArchivo = useCallback(() => {
+    const s = useAppStore.getState().sessions.find((x) => x.id === useAppStore.getState().activeSession)
+    const base = (s?.title || s?.id || 'sesion').replace(/[^\p{L}\p{N}\s._-]+/gu, '').trim().slice(0, 60)
+    return base || 'sesion'
+  }, [])
+
+  const descargarSesion = useCallback(async () => {
+    if (!activeSession) return
+    setExporting(true)
+    try {
+      const blob = await sessionExportApi(activeSession)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${nombreArchivo()}.zip`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      toast('Sesión exportada (.zip)')
+    } catch (e) {
+      toast('exportar: ' + (e as Error).message.slice(0, 120))
+    } finally {
+      setExporting(false)
+    }
+  }, [activeSession, nombreArchivo, toast])
+
+  const copiarTranscripcion = useCallback(async () => {
+    const msgs = useAppStore.getState().messages
+    const utiles = msgs.filter((m) => m.role !== 'tool' && (m.content || '').trim())
+    if (!utiles.length) { toast('la sesión no tiene texto para copiar'); return }
+    const cuerpo = utiles
+      .map((m) => `**${m.role === 'user' ? 'Usuario' : 'Nexus'}**\n\n${m.content.trim()}`)
+      .join('\n\n---\n\n')
+    try {
+      await navigator.clipboard.writeText(`# ${nombreArchivo()}\n\n${cuerpo}\n`)
+      setCopiadoTodo(true)
+      setTimeout(() => setCopiadoTodo(false), 2000)
+    } catch (e) {
+      toast('no se pudo copiar: ' + (e as Error).message.slice(0, 100))
+    }
+  }, [nombreArchivo, toast])
+
+  /* ── arrastrar archivos al chat ───────────────────────────── */
+
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    e.preventDefault()
+    dragDepth.current += 1
+    setDragOver(true)
+  }, [])
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragOver(false)
+  }, [])
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer?.files?.length) return
+    e.preventDefault()
+    dragDepth.current = 0
+    setDragOver(false)
+    addFiles(e.dataTransfer.files)
+  }, [addFiles])
+
   const grupos = useMemo(() => agrupar(messages), [messages])
   const sesion = sessions.find((s) => s.id === activeSession)
   const titulo = sesion?.title || 'Sesión nueva'
   const proyecto = sesion?.project || ''
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#15171B]">
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-[#15171B]"
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => { if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault() }}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-[80] flex items-center justify-center bg-[#0B0D10]/70 backdrop-blur-[1px]">
+          <div className="rounded-2xl border-2 border-dashed border-[#4C9DFF]/70 bg-[#1E2127]/95 px-8 py-6 text-center shadow-2xl">
+            <Paperclip className="mx-auto mb-2 h-6 w-6 text-[#4C9DFF]" />
+            <div className="text-sm font-semibold text-[#EDEEF0]">Soltá los archivos para adjuntarlos</div>
+            <div className="mt-1 text-[11px] text-[#9BA1AA]">Imágenes, PDF, texto o código · hasta 8 por mensaje</div>
+          </div>
+        </div>
+      )}
       {/* header de sesión (estilo opencode: titulo + consumo + acciones) */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[#22262D] px-5">
         <div className="min-w-0">
@@ -594,7 +681,17 @@ export function ChatPanel() {
             {menuOpen && (
               <>
                 <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-full z-[70] mt-1 w-52 rounded-xl border border-[#2C3037] bg-[#1E2127] p-1 shadow-2xl">
+                <div className="absolute right-0 top-full z-[70] mt-1 w-56 rounded-xl border border-[#2C3037] bg-[#1E2127] p-1 shadow-2xl">
+                  <button onClick={() => { setMenuOpen(false); void copiarTranscripcion() }} disabled={!activeSession || messages.length === 0}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    {copiadoTodo ? <Check className="h-3.5 w-3.5 text-[#3DDC84]" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+                    {copiadoTodo ? 'Transcripción copiada' : 'Copiar transcripción'}
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); void descargarSesion() }} disabled={!activeSession || exporting}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
+                    <Download className="h-3.5 w-3.5" /> {exporting ? 'Exportando…' : 'Exportar sesión (.zip)'}
+                  </button>
+                  <div className="my-1 h-px bg-[#2C3037]" />
                   <button onClick={() => { setMenuOpen(false); void speakLast() }} disabled={speaking}
                     className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[#C9CDD3] hover:bg-[#262A31] disabled:opacity-50">
                     <Volume2 className="h-3.5 w-3.5" /> {speaking ? 'Leyendo…' : 'Escuchar respuesta'}
