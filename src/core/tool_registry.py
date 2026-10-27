@@ -200,6 +200,46 @@ TOOL_ALIASES: dict[str, str] = {
 }
 
 
+def _enum_check(name: str, value: Any, spec: dict, ruta: str = "") -> Any:
+    """Valida el `enum` del schema (antes se ignoraba por completo).
+
+    Un valor fuera del enum llegaba al codigo, que o lo descartaba en silencio
+    (`sub_agent` con `mode="continuable "` volvia a one-shot y el hijo moria al
+    primer turno) o lo mandaba a un script externo (`image_generate` con
+    `mode="txt2img"` lanzaba un proceso de 20 min para morir en argparse).
+    Acepta diferencias de mayusculas/espacios y devuelve el valor canonico.
+    """
+    if value is None or not isinstance(spec, dict):
+        return value
+    opciones = spec.get("enum")
+    if isinstance(opciones, list) and opciones:
+        val = value.strip() if isinstance(value, str) else value
+        if val in opciones:
+            return val
+        if isinstance(val, str):
+            for o in opciones:
+                if isinstance(o, str) and o.strip().lower() == val.lower():
+                    return o
+        etiqueta = f"{name}.{ruta}" if ruta else name
+        validos = ", ".join(repr(o) for o in opciones)
+        raise ValueError(f"{etiqueta}: valor no permitido {value!r}. Válidos: {validos}")
+    if isinstance(value, list):
+        items = spec.get("items")
+        if isinstance(items, dict):
+            sub_ruta = f"{ruta}[]" if ruta else "[]"
+            return [_enum_check(name, v, items, sub_ruta) for v in value]
+        return value
+    if isinstance(value, dict):
+        props = spec.get("properties") or {}
+        out = {}
+        for k, v in value.items():
+            sub = props.get(k)
+            out[k] = (_enum_check(name, v, sub, f"{ruta}.{k}" if ruta else k)
+                      if isinstance(sub, dict) else v)
+        return out
+    return value
+
+
 def validate_args(name: str, args: dict, schema: dict) -> dict:
     """Valida args contra JSON Schema (ligero). Coerciona tipos y descarta claves extra
     (los modelos chicos mandan "3"/"true"/campos inventados). Lanza ValueError accionable."""
@@ -245,6 +285,10 @@ def validate_args(name: str, args: dict, schema: dict) -> dict:
             if want in ("number",) and isinstance(val, (int, float)) and not isinstance(val, bool):
                 continue
             raise ValueError(f"{name}: '{key}' debe ser {want} (recibido {type(val).__name__})")
+    for key in list(out):
+        spec = props.get(key)
+        if isinstance(spec, dict) and out[key] is not None:
+            out[key] = _enum_check(name, out[key], spec, key)
     return out
 
 
