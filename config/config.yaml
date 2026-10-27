@@ -374,14 +374,19 @@ updates:
 
   # ---- Auto-actualizacion por git (src/core/self_update.py) ----
   # La app se actualiza sola al abrirse: pull --ff-only ANTES de arrancar el
-  # backend, y recompila ui/dist o electron/dist solo si cambio algo de eso.
+  # backend, y recompila ui/dist o electron/dist si cambio algo de eso (los
+  # cambios de UI NO viajan en git: ui/dist es artefacto, se reconstruye aca).
   # Si el arbol tiene cambios locales o hay commits sin publicar, NO toca nada
   # (podria ser trabajo tuyo) y sigue con la version que ya esta.
+  # Si el pull entra pero el build de la UI no sale (falta npm o node_modules,
+  # error de TS), queda marcado como "stale": no se reporta como actualizado y
+  # la ventana sigue con el bundle viejo hasta que se compile. Estado en
+  # data/self_update.log y en Ajustes -> Actualizaciones.
   auto: true
   apply_on_start: true
   git_remote: origin
   git_branch: ""            # vacio = la rama actual (master)
-  check_interval_s: 21600   # mientras corre, avisa cada 6 h si hay algo nuevo
+  check_interval_s: 21600   # mientras corre, avisa (banner) cada 6 h si hay algo nuevo
   build_on_update: true
   fetch_timeout_s: 25
   pull_timeout_s: 180
