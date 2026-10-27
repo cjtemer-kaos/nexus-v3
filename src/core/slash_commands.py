@@ -1,18 +1,16 @@
-"""
-slash_commands — UI-agnostic slash-command registry.
+"""Registro de comandos de barra, independiente de la UI.
 
-Pattern (openakita /persona /model /skill ...): a single place that defines
-every "/foo bar" command, what it does, and what it returns. The same
-registry powers chat input parsing, the help palette, the CLI, and
-(future) voice command parsing.
+Un solo lugar define cada "/algo args": qué hace y qué devuelve. El mismo
+registro alimenta el parseo del chat, la paleta de ayuda, la CLI y (a futuro)
+los comandos por voz.
 
-Why server-side instead of per-UI: avoids 3 implementations of the same
-8 commands drifting. UI just renders what `commands()` returns and
-forwards execution to `execute()`.
+Del lado del servidor para que no existan tres implementaciones de los mismos
+comandos desincronizándose: la UI solo dibuja lo que devuelve `list()` y le
+delega la ejecución a `execute()`.
 
-Commands ship as namespaced dotted strings ("model", "persona", "skill",
-"clear", "help", "plan", "agent", "session", "doctor"). Each command has:
-  name, alias[], description, args (schema text), execute(args, ctx) -> dict
+Cada comando tiene: name, aliases[], description, args (texto de ayuda) y
+handler(args, ctx) -> SlashResult. Además de los builtins, se suman los
+comandos en markdown que encuentra `custom_commands` en disco.
 """
 from __future__ import annotations
 
@@ -43,6 +41,7 @@ class SlashCommand:
     description: str
     args: str            # human-readable hint, e.g. "<model>" or "[gema]"
     handler: SlashHandler
+    origin: str = "builtin"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -50,6 +49,7 @@ class SlashCommand:
             "aliases": list(self.aliases),
             "description": self.description,
             "args": self.args,
+            "origin": self.origin,
         }
 
 
@@ -76,14 +76,20 @@ class SlashRegistry:
             out.append(cmd)
         return sorted(out, key=lambda c: c.name)
 
+    def refresh_custom(self, dirs=None) -> Dict[str, Any]:
+        """Suma los comandos en markdown que haya en disco. Nunca lanza."""
+        return refresh_custom(dirs)
+
     async def execute(
         self, raw: str, ctx: Optional[Dict[str, Any]] = None
     ) -> SlashResult:
-        """Parse `raw` ("/persona jarvis") and dispatch.
-        Returns SlashResult — never raises (caller decides what to render)."""
+        """Parsea `raw` ("/permiso #3") y despacha.
+
+        Devuelve un SlashResult: nunca lanza, el caller decide qué mostrar.
+        """
         ctx = ctx or {}
         if not raw or not raw.strip():
-            return SlashResult(ok=False, message="empty command")
+            return SlashResult(ok=False, message="comando vacío")
         parts = raw.strip().split()
         head = parts[0].lstrip("/").lower()
         args = parts[1:]
@@ -328,3 +334,14 @@ for spec in (
     SlashCommand("alcance",   ["scope"],             "info de alcance/permisos",       "",            _h_scope),
 ):
     registry.register(spec)
+
+
+def refresh_custom(dirs=None) -> Dict[str, Any]:
+    """Suma los comandos que haya en disco al registro. Nunca lanza."""
+    try:
+        from src.core import custom_commands
+
+        return custom_commands.refresh(registry, dirs)
+    except Exception as e:  # un comando roto no debe tumbar el listado
+        logger.error(f"comandos personalizados: {e}")
+        return {"registered": [], "skipped": [], "errors": [f"{type(e).__name__}: {e}"]}

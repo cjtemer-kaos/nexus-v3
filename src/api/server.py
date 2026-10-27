@@ -2799,12 +2799,15 @@ async def exec_cmd(request: Request):
 @app.get("/api/slash")
 async def slash_list():
     from src.core.slash_commands import registry as slash_reg
+
+    slash_reg.refresh_custom()
     return {"commands": [c.to_dict() for c in slash_reg.list()]}
 
 @app.post("/api/slash")
 async def slash_exec(request: Request):
     from src.core.slash_commands import registry as slash_reg
     body = await _json_body(request)
+    slash_reg.refresh_custom()
     raw = body.get("command") or body.get("raw") or ""
     ctx = body.get("ctx") or {}
     res = await slash_reg.execute(raw, ctx)

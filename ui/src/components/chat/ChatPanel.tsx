@@ -256,11 +256,12 @@ export function ChatPanel() {
 
   /* ── envío ────────────────────────────────────────────────── */
 
-  const send = async () => {
+  const send = async (override?: string) => {
+    const draft = override ?? input
     // Si hay un run en curso, el mensaje se inyecta como STEER (el loop lo lee
     // entre iteraciones). Antes el input quedaba bloqueado y /steer era inalcanzable.
-    if (isStreaming && !busyRef.current && input.trim()) {
-      const text = input.trim()
+    if (isStreaming && !busyRef.current && draft.trim()) {
+      const text = draft.trim()
       const sidNow = useAppStore.getState().activeSession
       if (!sidNow) { toast('No hay sesión activa para dirigir el run'); return }
       setInput(''); setSlashOpen(false)
@@ -281,9 +282,9 @@ export function ChatPanel() {
       }
       return
     }
-    if ((!input.trim() && pending.length === 0) || isStreaming || busyRef.current) return
+    if ((!draft.trim() && pending.length === 0) || isStreaming || busyRef.current) return
     busyRef.current = true
-    const text = input.trim()
+    const text = draft.trim()
 
     // subir adjuntos pendientes
     let uploads: UploadResult[] = []
@@ -318,7 +319,8 @@ export function ChatPanel() {
         const r = await apiFetch('/api/slash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: text, ctx: { session_id: activeSession } }) })
         const j = await r.json()
         const reply = j.ok ? j.message : (text.slice(1).split(' ')[0] + ': ' + j.message)
-        if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: reply, timestamp: now() })
+        const sendsPrompt = j.data?.action === 'send_prompt'
+        if (stillActive() && !sendsPrompt) addMessage({ id: uid(), role: 'assistant', content: reply, timestamp: now() })
         if (j.data?.action === 'clear_local_only') useAppStore.setState({ messages: [] } as any)
         if (j.data?.action === 'set_model') useAppStore.getState().setModel(j.data.model)
         if (j.data?.action === 'set_agent' && j.data.agent) useAppStore.getState().setActiveAgent(j.data.agent)
@@ -366,6 +368,19 @@ export function ChatPanel() {
           } catch (e) {
             if (stillActive()) addMessage({ id: uid(), role: 'tool', content: `permiso: no se pudo releer (/api/permission): ${(e as Error).message.slice(0, 140)}`, toolName: 'permission', timestamp: now() })
           }
+        }
+        // Comando personalizado: el servidor devuelve el prompt ya expandido y
+        // acá se envía como turno normal (mismo jail, mismos permisos).
+        if (sendsPrompt && typeof j.data?.prompt === 'string') {
+          const warns: string[] = Array.isArray(j.data.warnings) ? j.data.warnings : []
+          if (warns.length && stillActive()) {
+            addMessage({ id: uid(), role: 'tool', content: `/${j.data.command ?? ''}: ${warns.join(' · ')}`, toolName: 'comando', timestamp: now() })
+          }
+          if (j.data.model) useAppStore.getState().setModel(String(j.data.model))
+          if (j.data.agent) useAppStore.getState().setActiveAgent(String(j.data.agent))
+          busyRef.current = false
+          await send(String(j.data.prompt))
+          return
         }
       } catch (e) { if (stillActive()) addMessage({ id: uid(), role: 'assistant', content: 'slash error: ' + (e as Error).message, timestamp: now() }) }
       busyRef.current = false
@@ -1016,7 +1031,7 @@ export function ChatPanel() {
               {isStreaming ? 'Enter encola · corriendo' : 'Enter envía · Shift+Enter salto'}
             </span>
             <button
-              onClick={isStreaming ? detener : send}
+              onClick={isStreaming ? detener : () => send()}
               disabled={!isStreaming && !input.trim() && pending.length === 0}
               aria-label={isStreaming ? 'Detener la respuesta' : 'Enviar mensaje'}
               title={isStreaming ? 'Detener (Esc)' : 'Enviar mensaje'}
