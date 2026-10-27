@@ -1,5 +1,5 @@
 """
-Notes + Calendar - SuperNEXUS v2
+Notes + Calendar
 Notas con recordatorios, checklist, repeat, calendar con CalDAV sync.
 """
 

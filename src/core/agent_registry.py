@@ -25,7 +25,7 @@ _FIELD_LIMITS: dict[str, int] = {
 
 AGENT_MODES = ("build", "read_only")
 
-# Plantillas de rol inspiradas en los equipos de OpenCode Ensemble:
+# Plantillas de rol disponibles:
 # explorador read-only, constructor, revisor read-only, QA e investigador.
 # La plantilla solo aporta defaults; cualquier campo explicito gana.
 AGENT_TEMPLATES: dict[str, dict[str, Any]] = {

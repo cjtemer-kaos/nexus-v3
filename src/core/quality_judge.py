@@ -1,5 +1,5 @@
 """
-Quality Judge - heuristic response and code quality scoring for SuperNEXUS v2.
+Quality Judge - heuristic response and code quality scoring.
 
 Scores responses on relevance/completeness/accuracy/clarity and code on
 readability/efficiency/correctness/coverage. No LLM calls required.

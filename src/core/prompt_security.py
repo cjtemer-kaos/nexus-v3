@@ -1,7 +1,7 @@
 """
-Prompt Security - Proteccion contra prompt injection para SuperNEXUS v2.0
+Prompt Security - Proteccion contra prompt injection
 
-Inspirado en Odysseus:
+Reglas:
 - Untrusted context policy para contenido externo
 - Guard markers para sandbox de contenido no confiable
 - Sanitizacion de labels y contenido

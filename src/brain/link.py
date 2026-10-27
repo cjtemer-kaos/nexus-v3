@@ -77,7 +77,7 @@ def _config_brain_raw() -> str:
 def brain_path() -> Path:
     # Precedencia: NEXUS_V3_BRAIN > config.yaml brain.path > ./brain.
     # Un ``NEXUS_BRAIN`` ambiental puede pertenecer a OTRO proyecto de la misma
-    # PC (p.ej. supernexus-v2) y enlazar cerebros por accidente: no se honra.
+    # PC (instalación previa) y enlazar cerebros por accidente: no se honra.
     raw = os.environ.get("NEXUS_V3_BRAIN") or _config_brain_raw() or str(DEFAULT_BRAIN)
     p = _expand_brain_path(raw)
     # If relative, resolve against project root (parents[2])

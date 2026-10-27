@@ -4,7 +4,7 @@ Capa fina sobre el SessionLog existente (backend read/append). NO cambia su
 schema: el versionado vive en una tabla lateral `session_format`
 (CREATE TABLE IF NOT EXISTS) y el single-writer es un registro en memoria.
 
-Semantica portada de upstream deepseek-harness session-persistence:
+Semantica:
 - SESSION_FORMAT_VERSION = 0, rechazo direccional si mismatch, SIN migraciones.
 - open/create/stat/list + SessionHandle read/append/flush/close.
 - Single-writer: doble open con write RECHAZA (SessionAlreadyOwnedError);

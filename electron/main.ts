@@ -1,5 +1,5 @@
 /**
- * Nexus v3 — Electron main process (like Hermes/Goose pattern).
+ * Nexus v3 — Electron main process.
  *
  * - Single-instance lock
  * - Spawns Python harness backend (src/api/server.py) on free port, kills on window-all-closed / before-quit
@@ -446,7 +446,7 @@ function createWindow() {
   });
 
   mainWindow.on("close", (e) => {
-    // Minimize to tray instead of quit when closing window (optional — like Goose/Hermes)
+    // Minimize to tray instead of quit when closing window (tray keeps it alive)
     // For "proper program" we keep tray: hide to tray on close, quit via tray or app quit
     if (!isQuitting) {
       e.preventDefault();
@@ -566,11 +566,11 @@ app.on("activate", () => {
   else mainWindow?.show();
 });
 
-// Window-all-closed: kill backend and quit (like Hermes/Goose — proper program, not daemon)
+// Window-all-closed: kill backend and quit (a real program, not a daemon)
 app.on("window-all-closed", async () => {
   blog("[main]", "window-all-closed — killing backend and quitting");
   await killBackend();
-  // On macOS, keep app alive only if tray wants it; here we follow Hermes: quit when last window closed unless tray keeps alive
+  // On macOS, keep app alive only if tray wants it; otherwise quit when the last window closes
   // Requirement: "kills it on window-all-closed" — so quit unconditionally
   app.quit();
 });

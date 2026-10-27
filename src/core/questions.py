@@ -1,4 +1,4 @@
-"""Preguntas al usuario en medio del turno (equivalente a `question` de opencode).
+"""Preguntas al usuario en medio del turno.
 
 Un agente no puede inventar la decisión del usuario: cuando necesita elegir
 entre caminos, deja la pregunta PENDIENTE y espera. La UI (vista Preguntas) o

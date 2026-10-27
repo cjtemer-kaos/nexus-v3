@@ -1,5 +1,5 @@
 """
-nexus_config.py — Configuración centralizada de red para SuperNEXUS.
+nexus_config.py — Configuración centralizada de red.
 
 Single source of truth para el puerto y URL del servidor NEXUS.
 Todos los módulos deben importar desde aquí en lugar de hardcodear.

@@ -34,7 +34,7 @@ class HookResult:
 
 
 
-# --- compat shim for SuperNEXUS director/conductor imports (verbatim-port) ---
+# --- compat shim para imports legacy de director/conductor ---
 class HookPhase(str, Enum):
     PRE_TOOL_USE = "pre_tool_use"
     POST_TOOL_USE = "post_tool_use"

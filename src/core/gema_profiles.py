@@ -1,11 +1,6 @@
 """
 GemaProfiles — Perfiles de agente con herramientas filtradas, prompts y temperatura.
 
-Inspirado en:
-- openhuman/src/openhuman/agent/profiles.rs (AgentProfile con system_prompt_suffix)
-- openharness/src/openharness/coordinator/agent_definitions.py (tools whitelist)
-- nanobot/nanobot/skills/long-goal/SKILL.md (state-oriented goals, no over-planning)
-
 Cada gema tiene un perfil que define:
 - tools: whitelist de herramientas relevantes (None=chat puro)
 - system_prompt_suffix: instrucciones específicas para la gema
@@ -21,7 +16,7 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class GemaProfile:
-    """Perfil declarativo de una gema. Inspirado en openhuman AgentProfile + openharness AgentDefinition."""
+    """Perfil declarativo de una gema."""
     name: str
     description: str
     tools: Optional[tuple[str, ...]] = None  # None = chat puro (no tools); tuple = whitelist

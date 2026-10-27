@@ -1,8 +1,8 @@
 """
-Onboarding for SuperNEXUS v2.
+Onboarding de Nexus v3.
 
-Consent-gated state machine: welcome → consent → profile → connect → done.
-Each step requires explicit user confirmation before proceeding.
+Máquina de estados con consentimiento: welcome → consent → profile → connect → done.
+Cada paso exige confirmación explícita del usuario antes de avanzar.
 """
 from __future__ import annotations
 
@@ -197,7 +197,7 @@ class OnboardingManager:
         step_info = {
             OnboardingStep.WELCOME: {
                 "step": "welcome",
-                "title": "Welcome to SuperNEXUS",
+                "title": "Bienvenido a Nexus v3",
                 "description": "Your AI ecosystem. Let's get you set up.",
                 "action": "Press 'Next' to continue",
             },
@@ -235,7 +235,7 @@ class OnboardingManager:
             OnboardingStep.DONE: {
                 "step": "done",
                 "title": "You're All Set!",
-                "description": "Onboarding complete. SuperNEXUS is ready to use.",
+                "description": "Onboarding completo. Nexus v3 está listo para usar.",
                 "profile": asdict(self.state.profile) if self.state.profile else None,
             },
         }

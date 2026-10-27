@@ -1,7 +1,6 @@
 """Ejecucion de shell con kill del arbol de procesos.
 
-Port del comportamiento de Cline `executors/bash.ts` (killProcessTree): matar
-solo el shell deja vivos a los hijos (`node`, `pytest`, `npm`), que siguen
+Matar solo el shell deja vivos a los hijos (`node`, `pytest`, `npm`), que siguen
 consumiendo CPU y reteniendo pipes. En Windows se usa `taskkill /T /F`; en
 POSIX, el grupo de procesos (`start_new_session` + `killpg`).
 """

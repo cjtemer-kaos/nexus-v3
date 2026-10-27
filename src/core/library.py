@@ -1,5 +1,5 @@
 """
-Library - SuperNEXUS v2
+Library
 Vista unificada de todos los recursos: chats, documentos, gallery, research, notas.
 """
 

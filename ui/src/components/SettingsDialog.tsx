@@ -485,7 +485,7 @@ scope:
                   <div className="text-[11px] text-[#9BA1AA]">La pestaña <span className="text-[#8CC1FF]">Proveedores LLM</span> escribe aquí automáticamente. También puedes editar <span className="font-mono text-[#EDEEF0]">config/config.yaml</span> en el Editor (pasa por Guardia Alcance).</div>
                 </div>
                 <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs text-[#9BA1AA] leading-relaxed">
-                  <span className="font-semibold text-[#EDEEF0]">Compatibilidad:</span> Hermes usa <code className="font-mono text-[#EDEEF0]">provider: custom + base_url</code> y OpenCode usa <code className="font-mono text-[#EDEEF0]">@ai-sdk/openai-compatible + baseURL</code>. Nexus v3 unifica ambos: cualquier endpoint OpenAI-compat funciona con solo <code className="font-mono">base_url</code> + <code className="font-mono">api_key</code> + <code className="font-mono">model</code>.
+                  <span className="font-semibold text-[#EDEEF0]">Compatibilidad:</span> cualquier servicio con API compatible con OpenAI se conecta con solo <code className="font-mono text-[#EDEEF0]">base_url</code> + <code className="font-mono text-[#EDEEF0]">api_key</code> + <code className="font-mono text-[#EDEEF0]">model</code>. El campo <code className="font-mono text-[#EDEEF0]">base_url</code> apunta a la raíz del endpoint (por ejemplo <code className="font-mono text-[#EDEEF0]">https://host/v1</code>); Nexus v3 le agrega <code className="font-mono text-[#EDEEF0]">/chat/completions</code>.
                 </div>
               </TabsContent>
             </div>

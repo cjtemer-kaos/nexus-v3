@@ -1,6 +1,6 @@
 """Compaction — 4-layer pipeline + emergency reactive.
 
-Origen: SuperNEXUS context_compactor (4 layers + metrics) + Hermes context_compressor/trajectory_compressor + Cordis compaction.
+Alcance: pipeline de 4 capas con métricas, más compactación de emergencia.
 Ver BLUEPRINT.md §9.
 
 Pipeline:
@@ -214,7 +214,7 @@ class CompactionPipeline:
 
         # L4 Summary — requires LLM; if still over limit, mark and attempt via cheap model if router available
         if include_summary_fallback and _estimate_messages_tokens(out) > limit:
-            # Proyeccion determinista (port de Cline budget-projection): protege
+            # Proyeccion determinista del presupuesto: protege
             # prompts tipados, el live tail y los pares tool_use/tool_result.
             # Reemplaza el snip ciego, que podia orphanar un tool o borrar el
             # pedido actual. Si no alcanza con las protecciones, cae al fallback.

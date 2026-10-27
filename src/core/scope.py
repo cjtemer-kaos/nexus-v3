@@ -1,6 +1,6 @@
 """Scope — ACL + FS jail (default deny).
 
-Origen: Hermes file_safety + SuperNEXUS tool_guardrails + path_normalize + Cordis guard/fs.
+Alcance: ACL + jail de FS, normalización de paths de entrada y gates de red/mutación.
 Ver BLUEPRINT.md §8. Principio: default deny, allowed_roots + deny_patterns.
 
 Features:
@@ -28,7 +28,7 @@ class ScopeDenied(PermissionError):
 
 
 # ---------------------------------------------------------------------------
-# Helpers: path normalize (cross-platform) — from supernexus-v2/path_normalize.py
+# Helpers: normalización de paths (cross-platform)
 # ---------------------------------------------------------------------------
 
 def _normalize_path_str(path_str: str) -> str:
@@ -82,7 +82,7 @@ def _glob_match(path_str: str, pattern: str) -> bool:
     return fnmatch.fnmatch(Path(path_str).name, pattern)
 
 
-# Tool categories for permission gating (from supernexus-v2/tool_guardrails.py)
+# Tool categories for permission gating
 IDEMPOTENT_TOOLS = frozenset({
     "read", "read_file", "todo_write", "todo_read", "web_fetch", "search_files", "web_search", "web_fetch",
     "browser_snapshot", "browser_console", "mcp_filesystem_read_file",
@@ -112,7 +112,7 @@ NETWORK_TOOLS = frozenset({
 })
 
 # En read_only permitimos estas tools SOLO si el guard determina que el comando
-# no modifica archivos (port de command-guard de Cline). No incluye pty_exec:
+# no modifica archivos. No incluye pty_exec:
 # una shell interactiva puede mutar por caminos que el guard no ve.
 SHELL_TOOLS = frozenset({"exec", "terminal", "bash", "sh", "run_command"})
 

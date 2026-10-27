@@ -24,7 +24,7 @@ def _env(name: str, default: str = "") -> str:
 
 def _default_local_brain() -> str:
     # Cerebro PROPIO de nexus-v3 (NEXUS_V3_BRAIN); NO usar NEXUS_BRAIN, que
-    # pertenece a supernexus-v2 (proyectos separados, no deben cruzarse).
+    # pertenece a la instalación previa (proyectos separados, no deben cruzarse).
     nb = _env("NEXUS_V3_BRAIN")
     if nb:
         return str(Path(nb).expanduser() / "cerebro.db")

@@ -1,4 +1,4 @@
-"""Hooks por archivo (port del modelo de hooks de Cline).
+"""Hooks por archivo.
 
 Un hook es un ejecutable dentro de `.nexus/hooks/<fase>/` (o un archivo
 `<fase>.py` en la raiz del directorio). Recibe el payload de la fase como JSON
@@ -8,8 +8,7 @@ por stdin y puede responder por stdout:
      "inject_content": "...", "metadata": {...}}
 
 Convenciones:
-- exit code 2 => STOP (bloquea la tool / corta la fase), como los hooks de
-  Claude Code/Cline;
+- exit code 2 => STOP (bloquea la tool / corta la fase);
 - exit code 0 sin JSON => CONTINUE;
 - timeout o error de ejecucion => CONTINUE por defecto (`fail_closed=false`).
 

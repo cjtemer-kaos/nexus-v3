@@ -1,5 +1,5 @@
 """
-Redis PubSub Bridge para Hermes ↔ SuperNEXUS ↔ OpenCode
+Redis PubSub Bridge entre agentes
 
 Proporciona comunicación real-time entre agentes via Redis.
 Canales:

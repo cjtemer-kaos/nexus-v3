@@ -21,7 +21,7 @@ type Grupo =
   | { tipo: 'msg'; m: ChatMessage }
   | { tipo: 'tools'; nombre: string; items: ChatMessage[] }
 
-// opencode agrupa las tools consecutivas en una linea ("Se usaron 9 Shell").
+// Las tools consecutivas se agrupan en una línea ("Se usaron 9 Shell").
 const ETIQUETA_TOOL: Record<string, string> = {
   plan_mode: 'cambio de modo',
   steer: 'indicación',
@@ -58,7 +58,7 @@ const sanitizeAssistantText = (s: string) => {
   return out.replace(/\n{3,}/g, '\n\n').trim()
 }
 
-// Resumen de una línea para el bloque colapsable de una tool (estilo opencode).
+// Resumen de una línea para el bloque colapsable de una tool.
 const summarize = (s: string) => {
   const first = (s || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '(sin salida)'
   return first.length > 90 ? first.slice(0, 88) + '…' : first
@@ -172,7 +172,7 @@ export function ChatPanel() {
     void loadMessages(activeSession)
   }, [activeSession, loadMessages])
 
-  // Tokens/costo de la sesión, como el contador del header de opencode.
+  // Tokens/costo de la sesión en el header.
   useEffect(() => {
     if (!activeSession) { setUsage(null); return }
     let vivo = true
@@ -524,7 +524,7 @@ export function ChatPanel() {
     return () => window.removeEventListener('keydown', onKey)
   }, [isStreaming, detener])
 
-  // Volver acá (como el revert de opencode): borra en el server todo lo posterior  // al mensaje ANTERIOR al elegido y devuelve el texto del usuario al composer.
+  // Volver acá: borra en el server todo lo posterior  // al mensaje ANTERIOR al elegido y devuelve el texto del usuario al composer.
   const volverAca = useCallback(async (m: ChatMessage) => {
     if (!activeSession || isStreaming) return
     const ok = confirm('¿Volver a este mensaje?\n\nSe descarta la respuesta y todo lo que vino después en esta sesión, y el texto vuelve al cuadro de escritura para editarlo.')
@@ -674,7 +674,7 @@ export function ChatPanel() {
           </div>
         </div>
       )}
-      {/* header de sesión (estilo opencode: titulo + consumo + acciones) */}
+      {/* header de sesión (titulo + consumo + acciones) */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[#22262D] px-5">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold leading-tight text-[#EDEEF0]" title={titulo}>{titulo}</div>

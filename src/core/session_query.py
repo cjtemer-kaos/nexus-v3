@@ -1,6 +1,6 @@
 """Session query API — filtros / trazas / search con snippet + cursor (S1-paso3).
 
-Semantica portada de upstream deepseek-harness:
+Semantica:
 - Filtros AND entre dimensiones (id/project/cwd/parent), OR dentro de
   listas (``ids=[...]``).
 - Trazas: lineage (ancestros via parent + hijos) y event trace paginado.

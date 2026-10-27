@@ -1,6 +1,6 @@
 """Provider Router — tier / VRAM / Thompson routing + auto-detect + fallback chat.
 
-Origen: SuperNEXUS provider_router (HINT_MAPPING + RoutedProvider) + vram_router + adaptive_router (Thompson).
+Alcance: ruteo por tier / VRAM / Thompson, autodetección y fallback entre providers.
 Ver BLUEPRINT.md §10.
 
 Features:

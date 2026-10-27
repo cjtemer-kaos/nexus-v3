@@ -26,7 +26,7 @@ const more = [
 
 type NavItem = { id: string; label: string; icon: typeof MessageSquare; desc: string }
 
-// Agrupado por fecha como la lista de opencode: con cientos de sesiones una
+// Agrupado por fecha: con cientos de sesiones una
 // lista plana no se lee. Ordena por última actividad y corta en bloques.
 const agruparPorFecha = <T extends { last_active?: string; created_at?: string }>(items: T[]) => {
   const orden = [...items].sort((a, b) =>
@@ -77,7 +77,7 @@ export function Sidebar() {
   const [moreOpen, setMoreOpen] = useState(false)
   useEffect(() => { if (inMore) setMoreOpen(true) }, [inMore])
 
-  // Panel colapsable a rail de íconos (como la barra lateral de opencode).
+  // Panel colapsable a rail de íconos.
   const [rail, setRail] = useState(false)
   useEffect(() => {
     try { setRail(localStorage.getItem('nexus.sidebarRail') === '1') } catch { /* modo privado */ }
@@ -95,7 +95,7 @@ export function Sidebar() {
 
   const [filtro, setFiltro] = useState('')
   const [visibles, setVisibles] = useState(12)
-  // Renombrar en línea (opencode permite corregir el título autogenerado).
+  // Renombrar en línea (permite corregir el título autogenerado).
   const [editando, setEditando] = useState<string | null>(null)
   const [borrador, setBorrador] = useState('')
   const empezarRenombre = (id: string, titulo: string) => { setEditando(id); setBorrador(titulo) }

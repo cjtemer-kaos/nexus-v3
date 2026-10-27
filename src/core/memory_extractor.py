@@ -1,7 +1,7 @@
 """
 memory_extractor — Extracción automática de hechos duraderos de conversaciones.
 
-Patrón (inspirado en Odysseus): después de cada respuesta del LLM, extraemos
+Patrón: después de cada respuesta del LLM, extraemos
 hechos personales relevantes del usuario y los almacenamos en memoria.
 
 Flujo:

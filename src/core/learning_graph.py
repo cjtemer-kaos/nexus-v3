@@ -1,5 +1,5 @@
 """
-Learning Graph Visualization for SuperNEXUS v2.
+Learning Graph Visualization.
 
 Tracks skills, concepts, tasks, and achievements as nodes in a graph.
 Edges capture prerequisite, builds-on, and related-to relationships.

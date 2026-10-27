@@ -1,7 +1,6 @@
 """
-Tools - Herramientas builtin para SuperNEXUS v2.0
+Tools - Herramientas builtin
 
-Adaptado de Rowboat builtin-tools.
 Workspace CRUD, executeCommand, parseFile, etc.
 """
 

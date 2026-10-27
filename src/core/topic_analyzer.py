@@ -1,7 +1,7 @@
 """
-Topic Analyzer - Analisis de topics en conversaciones para SuperNEXUS v2.0
+Topic Analyzer - Analisis de topics en conversaciones
 
-Inspirado en Odysseus:
+Alcance:
 - Deteccion de topics por keywords
 - Frecuencia de topics
 - Ejemplos de conversaciones por topic

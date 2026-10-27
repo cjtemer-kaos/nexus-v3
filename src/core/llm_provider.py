@@ -416,8 +416,8 @@ class LLMProvider:
         }
 
         if provider == "openrouter":
-            headers["HTTP-Referer"] = "https://supernexus.local"
-            headers["X-Title"] = "SuperNEXUS v2"
+            headers["HTTP-Referer"] = "https://nexus-v3.local"
+            headers["X-Title"] = "Nexus v3"
 
         payload = {
             "model": model,

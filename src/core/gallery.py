@@ -1,7 +1,6 @@
 """
-Gallery + Image Editor para SuperNEXUS v2.0
+Gallery + Image Editor
 
-Inspirado en Odysseus:
 - Galeria de imagenes con SQLite
 - Upload con dedup SHA-256
 - Transformaciones PIL: resize, rotate, crop, filters

@@ -1,5 +1,5 @@
 """
-RAG Engine - Retrieval-Augmented Generation para SuperNEXUS v2.
+RAG Engine - Retrieval-Augmented Generation.
 
 Indexa documentos (repomix dumps, PLAN.md, autopsias) y permite
 busqueda semantica via embeddings de nomic-embed-text (Ollama local).

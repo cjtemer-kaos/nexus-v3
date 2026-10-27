@@ -5,7 +5,7 @@ Comprime el historial de conversacion usando Ollama local para generar
 resumenes inteligentes del medio de la conversacion, protegiendo el inicio
 (system, primer user) y el final (ultimos N mensajes).
 
-Simplificado para SuperNEXUS v2: usa Ollama local + estimacion de tokens.
+Alcance: usa Ollama local + estimacion de tokens.
 """
 
 import logging

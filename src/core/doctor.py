@@ -57,7 +57,7 @@ class CheckResult:
 
 
 class Doctor:
-    """Self-diagnostic for the entire SuperNEXUS system"""
+    """Autodiagnóstico del sistema completo"""
 
     def __init__(self):
         self.results: List[CheckResult] = []
@@ -160,7 +160,7 @@ class Doctor:
                 name="Node.js",
                 status="warning",
                 message="Node.js not found",
-                suggestion="Install Node.js for OpenClaw and UI features",
+                suggestion="Instala Node.js para compilar y servir la interfaz",
             )
         try:
             # en hilo: `node --version` puede colgarse y esto es un check async
@@ -222,9 +222,9 @@ class Doctor:
         results = []
         ports = {
             int(os.getenv("NEXUS_MASTER_PORT", 9000)): "NEXUS Master API",
-            int(os.getenv("NEXUS_API_PORT", 9001)): "SuperNEXUS API",
+            int(os.getenv("NEXUS_API_PORT", 9001)): "Nexus v3 API",
             int(os.getenv("OLLAMA_PORT", 11434)): "Ollama",
-            int(os.getenv("OPENCLAW_PORT", 18789)): "OpenClaw",
+            int(os.getenv("OPENCLAW_PORT", 18789)): "Nodo peer HTTP",
         }
         for port, service in ports.items():
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

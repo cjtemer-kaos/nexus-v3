@@ -1,5 +1,5 @@
 """
-Sub-Agent Spawner - Delegacion de tareas a sub-agentes para SuperNEXUS v2
+Sub-Agent Spawner - Delegacion de tareas a sub-agentes
 
 Crea sub-agentes dinamicos para tareas complejas que pueden descomponerse.
 

@@ -1,5 +1,5 @@
 """
-Personas - SuperNEXUS v2
+Personas
 Custom agents con system prompt, modelo, herramientas y memoria propias.
 """
 
@@ -60,7 +60,7 @@ class Persona:
             parts.append(self.personality)
         if self.user_name:
             parts.append(f"El usuario se llama {self.user_name}.")
-        return "\n\n".join(parts) if parts else f"Eres {self.name}, un asistente de SuperNEXUS."
+        return "\n\n".join(parts) if parts else f"Eres {self.name}, un asistente de Nexus v3."
 
 
 class PersonaManager:

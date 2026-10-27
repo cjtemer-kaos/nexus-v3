@@ -39,7 +39,7 @@ type AppState = {
   sessionsError: string | null
   activeSession: string
   setActiveSession: (id: string) => void
-  // sesiones abiertas como pestañas (estilo opencode: no una lista eterna al costado)
+  // sesiones abiertas como pestañas (no una lista eterna al costado)
   openTabs: string[]
   openTab: (id: string) => void
   closeSessionTab: (id: string) => void

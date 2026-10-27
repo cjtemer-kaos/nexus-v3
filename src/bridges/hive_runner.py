@@ -47,9 +47,8 @@ class HiveResult:
 
 
 # Legacy project paths that must NEVER appear in cwd/binary/args of the registry.
-# SuperNEXUS v2 is the canonical project. The old `nexus-ia` (and other pre-v2 dirs)
-# are read-only references in /legacy, /deploy, AGENTS.md notes — they MUST NOT be
-# used as runtime paths.
+# Las instalaciones previas (y otros directorios pre-v2) son referencias de solo
+# lectura en /legacy, /deploy, AGENTS.md — NO deben usarse como rutas de runtime.
 _LEGACY_PROJECT_PATHS = (
     # Legacy paths - replaced with env var
 )

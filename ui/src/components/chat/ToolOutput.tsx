@@ -21,7 +21,7 @@ function Lineas({ texto }: { texto: string }) {
   )
 }
 
-// Salida de tool: los bloques ```diff se pintan por línea (como opencode) en vez
+// Salida de tool: los bloques ```diff se pintan por línea en vez
 // de quedar como texto plano con los +/- mezclados.
 export function ToolOutput({ content }: { content: string }) {
   const texto = content || ''

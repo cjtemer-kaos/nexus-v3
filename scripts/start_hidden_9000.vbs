@@ -1,6 +1,6 @@
 ' Lanza nexus-v3 oculto en un puerto fijo (:9000 por defecto).
-' Ese es el puerto que consumen OpenCode (provider "nexus") y el plugin brain-context,
-' heredado de SuperNEXUS v2. La raiz se deduce del script: es portable.
+' Ese es el puerto que consumen el provider "nexus" y el plugin brain-context.
+' La raiz se deduce del script: es portable.
 ' Uso: wscript scripts\start_hidden_9000.vbs [puerto]
 Option Explicit
 Dim sh, fso, root, port, py
@@ -15,7 +15,7 @@ root = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 sh.CurrentDirectory = root
 
 ' Auto-actualizacion antes de levantar el servicio: el puerto :9000 lo usan
-' OpenCode y el plugin brain-context, asi que tiene que correr la version nueva
+' los clientes externos, asi que tiene que correr la version nueva
 ' sin que nadie haga git pull a mano. Oculto y esperando (0, True); si falla,
 ' arranca igual con lo que ya esta.
 py = root & "\.venv-ft314\Scripts\python.exe"

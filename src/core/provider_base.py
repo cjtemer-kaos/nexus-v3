@@ -1,6 +1,6 @@
 """Provider Base — interfaz unificada (frozen dataclasses + ABC).
 
-Patron: Pincer (frozen+slots) + SuperNEXUS v2 provider_base.py + Hermes model_metadata.
+Patrón: dataclasses frozen con slots + ABC.
 Todos los providers (Ollama, llama.cpp, Cloud) implementan BaseProvider.
 
 Ver BLUEPRINT.md §10.4

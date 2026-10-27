@@ -1,6 +1,6 @@
 """Event Store — append-only event sourcing for replay/audit.
 
-Inspired by SuperNEXUS v2 src/core/event_store.py + Hermes trajectory.
+Registro append-only con WAL e índices para replay y auditoría.
 Ver BLUEPRINT.md §5.2 (Event sourcing opcional).
 
 WAL + indexes. Thread-safe. Single SQLite file: data/event_store.db

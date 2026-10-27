@@ -59,7 +59,7 @@ export default function App() {
     void (async () => { await loadSessions(); await ensureSession() })()
   }, [refreshProviders, loadSessions, ensureSession])
 
-  // Atajos globales, los mismos de opencode desktop: Ctrl+N sesión nueva,
+  // Atajos globales: Ctrl+N sesión nueva,
   // Ctrl+W cierra la pestaña activa (la sesión queda guardada), Ctrl+B pliega
   // el sidebar a rail. Ctrl+K lo maneja la paleta.
   useEffect(() => {
@@ -79,7 +79,7 @@ export default function App() {
       <Sidebar />
 
       <div className="flex flex-1 flex-col min-w-0 min-h-0">
-        {/* topbar — pestañas de sesión (como opencode) + búsqueda y cuenta */}
+        {/* topbar — pestañas de sesión + búsqueda y cuenta */}
         <header className="relative z-30 flex h-12 shrink-0 items-stretch gap-2 border-b border-[#22262D] bg-[#15171B] px-2">
           {view === 'chat' ? (
             <div className="min-w-0 flex-1">

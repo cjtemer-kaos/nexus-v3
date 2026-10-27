@@ -1,5 +1,5 @@
 """
-Animated Themes - SuperNEXUS v2
+Animated Themes
 Particle system canvas: rain, constellations, synapse, perlin-flow, sparkles, embers.
 """
 
@@ -94,7 +94,7 @@ BUILTIN_THEMES = {
 PATTERNS = ["none", "dots", "synapse", "rain", "constellations", "perlin-flow", "sparkles", "embers"]
 
 PATTERN_JS = """
-// === SuperNEXUS Particle System ===
+// === Particle System ===
 (function() {
   const canvas = document.getElementById('bg-canvas');
   if (!canvas) return;

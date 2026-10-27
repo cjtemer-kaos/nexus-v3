@@ -25,7 +25,7 @@ NODES = [
      "Python (FastAPI). Corre un loop TDAO (Think-Decide-Act-Observe) con tools, scope jail, "
      "aprobaciones, checkpoints, compactacion de contexto, sesiones con FTS5, grafo de "
      "conocimiento (learn/recall), RAG, sub-agentes y MCP en los dos sentidos: cliente de "
-     "servidores MCP externos y servidor MCP para otros clientes (opencode, Claude, Cursor).",
+     "servidores MCP externos y servidor MCP para otros clientes.",
      ["arquitectura", "overview"], 9),
     ("instalacion-rapida", "instalacion-rapida", "Instalacion en un clic",
      "En Windows: doble clic en INSTALAR.bat (raiz del repo). El bootstrap verifica git/node/"
@@ -60,7 +60,7 @@ NODES = [
      "El cerebro vive en ./brain y se puede mover con NEXUS_V3_BRAIN (variable de entorno) o "
      "brain.path en config/config.yaml. Archivos: knowledge_graph.db (grafo OPCODE con FTS5), "
      "rag_index.db (indice RAG, se genera en runtime), session.db, event_store.db. "
-     "NO usar NEXUS_BRAIN: esa variable pertenece a supernexus-v2 y enlazaria cerebros de "
+     "NO usar NEXUS_BRAIN: esa variable pertenece a la instalación previa y enlazaria cerebros de "
      "proyectos distintos. Los .db no se versionan: viajan como bundle .nexuskg.json.",
      ["brain", "config"], 9),
     ("grafo-bundles", "grafo-bundles", "Exportar e importar conocimiento",

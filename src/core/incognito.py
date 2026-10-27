@@ -1,5 +1,5 @@
 """
-Incognito Mode - SuperNEXUS v2
+Incognito Mode
 Sesiones sin persistencia: mensajes no se guardan en DB, memoria deshabilitada.
 """
 

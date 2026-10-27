@@ -14,7 +14,7 @@ def unified(a: str, b: str, name_a: str = "a", name_b: str = "b", context: int =
 def line_diff(old: str, new: str, max_lines: int = 80) -> str:
     """Diff compacto y numerado para devolverle al modelo tras un edit.
 
-    Port de `createLineDiff` (Cline, editor.ts): recorta prefijo/sufijo comun
+    Recorta prefijo/sufijo comun
     para emitir solo la region cambiada (un compare posicional ingenuo desalinea
     todo despues de un cambio de cantidad de lineas) y reparte el presupuesto
     entre borrados y agregados. Devuelve "" si no hay cambios.

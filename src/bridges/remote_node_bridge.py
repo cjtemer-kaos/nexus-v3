@@ -1,5 +1,5 @@
 """
-Remote Node Bridge - Puente genérico para nodo remoto en SuperNEXUS v2.0
+Remote Node Bridge - Puente genérico para nodo remoto
 
 Este módulo proporciona una interfaz genérica para conectar con un nodo remoto.
 El usuario debe configurar las variables de entorno en su .env:
@@ -7,7 +7,7 @@ El usuario debe configurar las variables de entorno en su .env:
   SUPER_NEXUS_REMOTE_NODE_USER=tu_usuario
   SUPER_NEXUS_REMOTE_NODE_PASSWORD=tu_contraseña
 
-Adaptado para SuperNEXUS v2.0 - Versión distro limpia
+Versión distro limpia
 """
 
 import logging

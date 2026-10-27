@@ -1,8 +1,8 @@
 """
-REST Adapter - Bridge entre SuperNEXUS y OpenClaw Gateway
+REST Adapter - Bridge hacia un gateway remoto
 Puerto: 18790
-Traduce peticiones de Nexus (/api/chat) al formato OpenClaw (chat completions)
-y las envía al gateway de OpenClaw en 18789 con autenticación.
+Traduce peticiones de Nexus (/api/chat) al formato chat completions
+y las envía al gateway remoto en 18789 con autenticación.
 """
 
 import logging

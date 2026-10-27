@@ -1,5 +1,5 @@
 """
-ErrorEnvelope - Clasificacion tipada de errores para SuperNEXUS
+ErrorEnvelope - Clasificación tipada de errores
 
 - Retryable vs non-retryable exception classification
 - Error categorization con severidad y recoverability

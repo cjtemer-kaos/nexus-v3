@@ -292,7 +292,7 @@ export function ProvidersPanel() {
         <Sparkles className="h-4 w-4 text-[#4C9DFF] shrink-0 mt-0.5" />
         <div>
           <span className="text-[#EDEEF0]">Cómo funciona:</span> Ollama no necesita API key — solo base_url. llama.cpp usa OpenAI-compat (<code className="font-mono text-[#9BA1AA]">/v1/chat/completions</code>). Nube soporta OpenRouter/Opencode/OpenAI: elige preset, pega tu <code className="font-mono text-[#9BA1AA]">api_key</code> y modelo. <br />
-          Como Hermes (<code className="font-mono">provider: custom / base_url</code>) y OpenCode (<code className="font-mono">provider.npm=@ai-sdk/openai-compatible</code>), un solo campo <code className="font-mono text-[#EDEEF0]">base_url</code> alcanza para cualquier endpoint compatible.
+          Con un solo campo <code className="font-mono text-[#EDEEF0]">base_url</code> alcanza para cualquier endpoint compatible: apuntalo a la raíz del servicio (por ejemplo <code className="font-mono text-[#9BA1AA]">https://host/v1</code>) y Nexus v3 arma el resto de la ruta. <code className="font-mono text-[#9BA1AA]">api_key</code> va en el header <code className="font-mono text-[#9BA1AA]">Authorization</code> y <code className="font-mono text-[#9BA1AA]">model</code> es el nombre exacto que expone el servicio.
         </div>
       </div>
     </div>

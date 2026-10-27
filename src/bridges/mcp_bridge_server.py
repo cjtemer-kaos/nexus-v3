@@ -1,8 +1,8 @@
 """
-SuperNEXUS - Cerebro Unificado MCP
+Cerebro Unificado MCP
 
 Hub central de comunicacion en tiempo real entre aplicaciones:
-Claude Desktop, Claude Code, Gemini, agentes, remote_node, etc.
+clientes MCP, agentes y nodos remotos.
 
 Capacidades:
 - Mensajeria en tiempo real entre apps (tablero compartido)
@@ -10,7 +10,7 @@ Capacidades:
 - Control de nodos remotos (remote_node, etc.)
 
 Fixes aplicados (2026-05-17):
-- WAL mode + busy_timeout para concurrencia (Claude + Antigravity)
+- WAL mode + busy_timeout para concurrencia entre clientes
 - Indices para performance (174K+ mensajes)
 - SQL injection fix (whitelist en lugar de f-strings)
 - httpx moved to top-level import
@@ -623,7 +623,7 @@ async def send_task_to_antigravity(task_description: str, priority: str = "mediu
 
 @mcp.tool()
 async def nexus_status() -> str:
-    """Get full SuperNEXUS system status - API server, nodes, brain, everything."""
+    """Get full system status - API server, nodes, brain, everything."""
     if not HTTPX_AVAILABLE:
         return json.dumps({"error": "httpx not installed"}, indent=2)
     status = {"timestamp": datetime.now().isoformat(), "nexus_home": NEXUS_HOME}
@@ -2718,7 +2718,7 @@ async def get_relevant_skills(task: str, top_k: int = 3) -> str:
 async def agency_search(query: str, top_k: int = 5, division: str = "") -> str:
     """Search the agency-agents catalog (266 specialized AI agents) by query.
     Returns matching agents with name, emoji, description, division, and relevance score.
-    Use this when the user needs a specialized expert that goes beyond SuperNEXUS gemas."""
+    Use this when the user needs a specialized expert that goes beyond the gemas."""
     try:
         from src.core.agency_catalog import get_catalog
         catalog = get_catalog()
@@ -3111,7 +3111,7 @@ async def skill_marketplace_stats() -> str:
 
 
 # ============================================================
-# Hermes-style Autonomous Tools
+# Autonomous Tools
 # ============================================================
 
 @mcp.tool()

@@ -1,6 +1,6 @@
 """Checkpoints: snapshot del archivo ANTES de write/edit, con restore.
 
-Da "undo" a las mutaciones del agente (inspirado en opencode/cline/Claude Code).
+Da "undo" a las mutaciones del agente.
 Snapshots en ./data/checkpoints/<session>/<ts>__<name>__<hash> + index.jsonl.
 """
 from __future__ import annotations

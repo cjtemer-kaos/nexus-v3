@@ -1,6 +1,6 @@
 """Bucle Agente — TDAO (Think-Decide-Act-Observe) + budget + error classifier + heartbeat.
 
-Origen: SuperNEXUS agent_loop.py (TDAO + ErrorAction) + Hermes conversation_loop (3900 LOC) + iteration_budget + error_classifier + cordis hooks.
+Alcance: presupuesto de iteraciones, clasificación de errores y heartbeat entre tool calls.
 Ver BLUEPRINT.md §6.
 
 Flow per iteration:
@@ -47,7 +47,7 @@ def _parallel_tools_on() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Calibracion del estimador de tokens (port de Cline `MAX_INPUT_UNDERESTIMATE_FACTOR`).
+# Calibracion del estimador de tokens frente al `prompt_tokens` real.
 # El estimador `len/4` subcuenta en CJK, minificado y JSON denso. Cuando el
 # provider reporta `prompt_tokens` para el request que acabamos de mandar,
 # guardamos el factor real `actual/estimado` por sesion. El proximo turno usa

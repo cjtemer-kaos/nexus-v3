@@ -1,6 +1,6 @@
 """Limites de texto para salidas de tools.
 
-Port de `truncateCommandOutput` (Cline, output-limits.ts): cada caracter que
+Cada caracter que
 devuelve una tool se reenvia al modelo en CADA request posterior, asi que una
 salida gigante cuesta cuadraticamente. Cuando hay que recortar, conservamos
 cabeza Y cola: los errores y el exit code suelen estar al final, y un

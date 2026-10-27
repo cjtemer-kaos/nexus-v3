@@ -1,7 +1,7 @@
 """
-Hermes-style Autonomous Tools for SuperNEXUS v2
+Autonomous Tools
 
-Inspired by Hermes Agent (Nous Research), these tools enable:
+Habilitan:
 1. execute_code — Programmatic tool calling (collapses multi-step pipelines)
 2. Cron with delivery — Scheduled automations with platform delivery
 3. Memory nudges — Auto-compress memory every N prompts

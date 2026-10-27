@@ -1,5 +1,5 @@
 """
-NetworkArchitecture v2 - Mejoras de arquitectura de red para SuperNEXUS v2.0
+NetworkArchitecture v2 - Mejoras de arquitectura de red
 
 Características:
 - Balanceo de carga inteligente entre nodos
@@ -61,7 +61,7 @@ class LoadBalanceResult:
 
 class NetworkArchitecture:
     """
-    Arquitectura de red mejorada para SuperNEXUS v2.0
+    Arquitectura de red mejorada
     
     Uso:
         network = NetworkArchitecture()

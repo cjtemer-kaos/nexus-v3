@@ -867,7 +867,7 @@ def _build_router_from_config(cfg: dict):
             logger.info(f"BYOK catalogo activo: {pid} ({len(known)} modelos)")
     except Exception as e:
         logger.warning(f"catalogo BYOK no registrado: {e}")
-    # CLIs de agentes (claude, codex, opencode) como consultores: no dan tools,
+    # CLIs de agentes externos como consultores: no dan tools,
     # asi que el router los saltea cuando el turno necesita herramientas. Vienen
     # apagados: se prenden por config y la credencial la pone el usuario.
     try:
@@ -983,7 +983,7 @@ async def mcp_setup_endpoint(request: Request):
 
 @app.get("/api/mcp/client-config")
 async def mcp_client_config():
-    """Snippet listo para pegar en un cliente MCP (opencode/Claude/Cursor)."""
+    """Snippet listo para pegar en la configuración de un cliente MCP."""
     import os as _os
     import sys as _sys
     py = str(_PROJECT_ROOT / ".venv-ft314" / "Scripts" / "python.exe")
@@ -1809,7 +1809,7 @@ async def graph_status():
 
 @app.get("/api/brain/stats")
 async def brain_stats_compat():
-    """Alias v2 -> v3. Era el endpoint que leia el plugin brain-context de OpenCode.
+    """Alias v2 -> v3. Endpoint de compatibilidad para consumidores externos.
 
     Mantiene los nombres de campo de v2 (`conocimientos`) para no romper consumidores;
     los valores salen del grafo de v3.
@@ -2240,8 +2240,8 @@ async def sessions_catalog(limit: int = 200):
 async def patch_session(session_id: str, request: Request):
     """Renombra la sesión (lo único editable desde la UI por ahora).
 
-    El título se autogenera con el primer mensaje; en opencode se puede corregir
-    a mano y acá no había forma. Se recorta a 200 caracteres porque es lo que
+    El título se autogenera con el primer mensaje y hasta ahora no había forma
+    de corregirlo a mano. Se recorta a 200 caracteres porque es lo que
     entra en las pestañas y el sidebar.
     """
     body = await _json_body(request)
@@ -4533,7 +4533,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     "required": ["text"], "additionalProperties": False})
 
     async def skill_tool(query: str = "", name: str = "", limit: int = 10) -> str:
-        """Descubre y carga skills instaladas (mismo patron que opencode).
+        """Descubre y carga skills instaladas en las carpetas convencionales.
 
         Sin argumentos: cuantas hay y donde. Con `query`: busca por relevancia y
         devuelve nombre+descripcion. Con `name`: devuelve el SKILL.md completo
@@ -4891,8 +4891,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if not base.exists() or not base.is_dir():
             raise FileNotFoundError(f"directorio no existe: {path}")
         pat = (pattern or "*").strip() or "*"
-        # `*.py` con pathlib matchea SOLO el nivel superior; ripgrep (y por lo
-        # tanto opencode) lo matchea a cualquier profundidad. Un patron sin
+        # `*.py` con pathlib matchea SOLO el nivel superior; ripgrep lo matchea
+        # a cualquier profundidad. Un patron sin
         # separadores se vuelve recursivo para que `glob '*.py'` encuentre lo
         # mismo que `glob '**/*.py'` en vez de devolver 0 sin explicacion.
         if "/" not in pat and "\\" not in pat and not pat.startswith("**"):
@@ -5021,7 +5021,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "required": ["path", "old", "new"], "additionalProperties": False})
 
     def apply_patch_tool(patch: str, dry_run: bool = False, confirm: bool = False) -> str:
-        """Aplica un parche multi-archivo de forma ATÓMICA (port de Cline).
+        """Aplica un parche multi-archivo de forma ATÓMICA.
 
         Formato: `*** Begin Patch` + `*** Update File:`, `*** Add File:`,
         `*** Delete File:` y `*** Move to:`. Los hunks empiezan en `@@`. El
@@ -5286,7 +5286,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     async def grep_tool(pattern: str, path: str = ".", include: str = "", limit: int = 50) -> str:
         """Busca un patrón (regex) en el contenido de los archivos.
 
-        Nombre y forma que usan Claude Code/opencode: `pattern`, `path`,
+        Nombre y forma que ya conocen los clientes MCP: `pattern`, `path`,
         `include`, `limit`. Devuelve una línea `ruta:línea: texto` por
         coincidencia (texto plano, no JSON anidado). `code_search` sigue
         existiendo: es el mismo motor con salida JSON.
@@ -6036,7 +6036,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
     async def question_tool(question: str, options: "list[str] | str" = (), multiple: bool = False,
                             header: str = "", timeout: int = 300) -> str:
-        """Pregunta algo al usuario y ESPERA su respuesta (equivalente a `question` de opencode).
+        """Pregunta algo al usuario y ESPERA su respuesta.
 
         Bloquea el turno hasta que conteste en la UI (vista Preguntas) o por API. Si
         no hay respuesta en `timeout` segundos, devuelve answered=false para que el
@@ -7260,7 +7260,7 @@ async def _openai_tools_completion(body: dict, target: dict, tools: list[dict],
     """Passthrough de tools: NO ejecutamos, devolvemos tool_calls (estandar OpenAI).
 
     Antes `/v1/chat/completions` descartaba `tools` en silencio y respondia texto
-    con `finish_reason="stop"`: un cliente OpenAI (opencode, Cline, Continue)
+    con `finish_reason="stop"`: un cliente OpenAI externo
     concluia que el modelo no quiso usar herramientas y el turno se degradaba a
     charla. El contrato correcto es devolver `tool_calls` y que el cliente las
     ejecute (el harness interno tiene su propio loop y no debe correr dos veces).

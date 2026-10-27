@@ -1,6 +1,6 @@
 """Error Classifier — RETRY / SKIP / REPLAN / ABORT.
 
-Origen: SuperNEXUS error_classifier + agent_loop._classify_error + Hermes FailoverReason.
+Clasifica el fallo de una llamada LLM o tool en RETRY / SKIP / REPLAN / ABORT.
 """
 from __future__ import annotations
 

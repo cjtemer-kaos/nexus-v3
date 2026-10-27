@@ -1,5 +1,5 @@
 """
-ResilienceLayer - Sistema de resiliencia y fallback automático para SuperNEXUS v2.0
+ResilienceLayer - Sistema de resiliencia y fallback automático
 
 Características:
 - Health check continuo de todos los nodos

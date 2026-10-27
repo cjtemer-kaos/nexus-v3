@@ -1,5 +1,5 @@
 """
-Task Scheduler - SuperNEXUS v2
+Task Scheduler
 Cron, event triggers, task chaining, notificaciones multi-canal.
 """
 

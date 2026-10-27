@@ -1,6 +1,6 @@
 """Tool Registry — catalogo unificado (local + MCP + skill + gema).
 
-Origen: SuperNEXUS DirectorToolRegistry + Hermes tool_executor/toolsets + Cordis skill/mcp + ECC layers.
+Alcance: catálogo de tools locales, MCP, skills y gemas, con métricas y schema OpenAI.
 Ver BLUEPRINT.md §7.
 
 Features:

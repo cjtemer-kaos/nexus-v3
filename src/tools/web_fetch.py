@@ -36,7 +36,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "SuperNEXUS/2.0 (AI Assistant)"
+USER_AGENT = "Nexus-v3/3.0"
 MAX_CONTENT_LENGTH = 50000
 DEFAULT_TIMEOUT = 120
 MAX_REDIRECTS = 5

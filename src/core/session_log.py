@@ -1,4 +1,4 @@
-"""Session Log — WAL + FTS5 (DeepSeek session + SuperNEXUS session_manager + Hermes trajectory).
+"""Session Log — WAL + FTS5 + branching.
 
 Ver BLUEPRINT.md §5.
 Single SQLite file: data/session.db with WAL + FTS5 + branching.

@@ -4,7 +4,7 @@ Uso:
     python scripts/setup_mcp.py               # verifica (no instala nada)
     python scripts/setup_mcp.py --fix         # instala lo instalable + handshake
     python scripts/setup_mcp.py --fix --json  # reporte JSON
-    python scripts/setup_mcp.py --emit-client # snippet para opencode/Claude
+    python scripts/setup_mcp.py --emit-client # snippet para el cliente MCP
 
 Deja el resultado en data/mcp_bundle/status.json para que la UI y el doctor
 lo muestren sin reinstalar.

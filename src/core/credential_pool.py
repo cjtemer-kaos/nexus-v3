@@ -1,10 +1,10 @@
 """
-CredentialPool - Multi-credential failover para SuperNEXUS v2
+CredentialPool - Multi-credential failover
 
 Soporta multiples API keys por proveedor con failover automatico
 cuando una key esta rate-limited o agotada.
 
-Simplificado para SuperNEXUS v2: env vars + .env + cooldown tracking.
+Alcance: env vars + .env + cooldown tracking.
 """
 
 import logging

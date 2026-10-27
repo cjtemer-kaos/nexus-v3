@@ -1,5 +1,5 @@
 """
-Ollama Integration - LLM local para SuperNEXUS v2.0
+Ollama Integration - LLM local.
 
 Conexion a Ollama para generación de texto, embeddings, y routing semantico.
 Sin secrets - usa Ollama local por defecto.
@@ -371,7 +371,7 @@ class OllamaClient:
 
 class LLMRouter:
     """
-    Router de LLMs para SuperNEXUS.
+    Router de LLMs.
     Selecciona modelo segun tipo de tarea.
     """
 

@@ -328,7 +328,7 @@ class NexusHive:
         """Envía comando via HTTP directo al nodo"""
         import httpx
         
-        # Intentar 1: Nexus API con "message" (SuperNEXUS v2)
+        # Intentar 1: Nexus API con "message" (formato legacy)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(

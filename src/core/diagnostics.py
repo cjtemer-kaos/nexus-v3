@@ -2,7 +2,7 @@
 
 Tras editar/escribir un archivo, corre un chequeo rapido por tipo (sintaxis/lint)
 y devuelve un bloque `<file_diagnostics>` para inyectar en el resultado de la tool
-(el modelo se autocorrige sin un round-trip extra). Inspirado en opencode.
+(el modelo se autocorrige sin un round-trip extra).
 
 Best-effort y sin dependencias nuevas: usa el interprete actual / stdlib.
 """
