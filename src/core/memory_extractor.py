@@ -322,7 +322,10 @@ class MemoryExtractor:
                 llm_messages = [LLMMessage(role="system", content=EXTRACT_SYSTEM_PROMPT)] + [
                     LLMMessage(role="user", content=str(m["content"])) for m in user_only
                 ]
-                resp = await router.chat(llm_messages, hint="simple")
+                # Mismo modelo que el chat (router.aux_model): pedir "simple" hacia otro
+                # modelo lo desaloja de la VRAM y el turno siguiente arranca en frio.
+                _aux = getattr(router, "aux_model", "") or None
+                resp = await router.chat(llm_messages, hint="simple", model=_aux)
                 return self._parse_json_list((resp.content or "").strip())
             except Exception as e:
                 logger.debug(f"[memory-extract] router extraction failed: {e}")

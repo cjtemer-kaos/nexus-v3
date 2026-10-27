@@ -92,6 +92,9 @@ class MemoryAudit:
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA busy_timeout=5000")
+        # WAL + NORMAL: con FULL cada escritura paga fsync (~28 ms en D:\ias) y el cierre
+        # de cada turno escribe varias filas (884 ms medidos en un turno de 8 s).
+        con.execute("PRAGMA synchronous=NORMAL")
         key = str(self.db_path)
         if key not in _ready_paths:
             with _lock:

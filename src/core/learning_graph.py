@@ -211,6 +211,9 @@ class LearningGraph:
         conn = sqlite3.connect(str(self.db_path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL: cada turno escribe aprendizaje; con FULL cada commit paga
+        # fsync (~28 ms en D:\ias, medido 2026-10-26).
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 

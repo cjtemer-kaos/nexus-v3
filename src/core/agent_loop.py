@@ -217,6 +217,38 @@ class AgentLoop:
         # las iteraciones (y cada compactación disparaba destilado + LLM de resumen).
         self._no_recompact_below: dict[str, int] = {}
 
+    async def _resolve_model_context_window(self, hint: str | None) -> None:
+        """Anota la ventana de contexto real del modelo que va a atender el turno.
+
+        Se pregunta al proveedor (Ollama `/api/show`, llama.cpp `/props`) porque
+        cada modelo tiene la suya y el Modelfile puede haber cambiado. Nunca rompe
+        el turno: si no hay dato queda 0 y se usa el presupuesto de config.
+        """
+        try:
+            router = getattr(self, "router", None)
+            if router is None or not hasattr(router, "context_length"):
+                return
+            model = getattr(self, "_req_model", None)
+            if not model:
+                routed = router.resolve(task_hint=hint)
+                model = getattr(routed, "model", "") if routed is not None else ""
+            if not model:
+                return
+            from src.core import context_limits
+
+            native = await router.context_length(model)
+            window = context_limits.usable_window(
+                model, provider="ollama", cfg=getattr(self, "_cfg", None) or {}, native=native,
+            )
+            if window and window > 0:
+                self._model_ctx_tokens = int(window)
+                logger.info(
+                    "context: modelo=%s nativo=%s ventana=%d (presupuesto del loop=%d)",
+                    model, native or "?", self._model_ctx_tokens, self.context_max_tokens,
+                )
+        except Exception as e:
+            logger.debug("context: no se pudo resolver la ventana del modelo (%s)", e)
+
     def _effective_context_max_tokens(self, session_id: str) -> int:
         """Presupuesto de contexto corregido por subestimacion del tokenizer.
 
@@ -225,10 +257,15 @@ class AgentLoop:
         retendria demasiado y volveria a overflowear. Piso 1024 para que un
         factor grande no deje el contexto inutilizable.
         """
+        base = self.context_max_tokens
+        model_window = int(getattr(self, "_model_ctx_tokens", 0) or 0)
+        if model_window > 0:
+            # El modelo manda: pedirle mas ventana de la que tiene es un 400 de Ollama.
+            base = min(base, model_window)
         factor = get_underestimate_factor(session_id)
         if factor <= 1.0:
-            return self.context_max_tokens
-        return max(1024, int(self.context_max_tokens / factor))
+            return base
+        return max(1024, int(base / factor))
 
     def _should_compact(self, session_id: str, dict_msgs: list[dict], max_tokens: int,
                         est_tokens: int | None = None) -> bool:
@@ -525,9 +562,11 @@ class AgentLoop:
         self._emit_cycle(trajectory, kind, iteration, content, duration_ms, end_reason, tokens, model)
         if self.hooks is not None:
             try:
+                _t_h = time.monotonic()
                 res = self.hooks.emit(kind, {"iteration": iteration, "turn": iteration, "session_id": trajectory.session_id})
                 if asyncio.iscoroutine(res):
                     await res
+                self._perf_hooks_ms = getattr(self, "_perf_hooks_ms", 0.0) + (time.monotonic() - _t_h) * 1000.0
             except Exception:
                 pass
 
@@ -642,6 +681,12 @@ class AgentLoop:
             images: optional vision attachments (data URIs) on the user message
         """
         t0 = time.monotonic()
+        # Perfilado del turno: cuánto se va en el LLM, en las tools y en el resto del
+        # harness. Sin esto no se puede saber si un turno lento es culpa del modelo o nuestro.
+        _perf_llm_ms = 0.0
+        _perf_tool_ms = 0.0
+        _perf_prep_ms = 0.0
+        self._perf_hooks_ms = 0.0
         steps: list[LoopStep] = []
         _emitted = 0
 
@@ -702,6 +747,11 @@ class AgentLoop:
             except Exception:
                 pass
         self._tool_fp_window: list[tuple[str, str]] = []  # type: ignore[attr-defined]
+        # Ventana REAL del modelo de este turno. Sin esto la compactacion asume un
+        # numero fijo (session.max_tokens): compacta tarde si el modelo tiene menos
+        # ventana (Ollama responde 400 y el turno se cae) o de gusto si tiene mas.
+        self._model_ctx_tokens: int = 0  # type: ignore[attr-defined]
+        await self._resolve_model_context_window(hint)
 
         # Init trajectory + session
         trajectory.append_user(task, iteration=0)
@@ -940,6 +990,7 @@ class AgentLoop:
             error_retry_limit = self._error_policy.get("retry", 3)
             error_replan_limit = self._error_policy.get("replan", 2)
 
+        _perf_setup_ms = (time.monotonic() - t0) * 1000.0
         while iteration < max_iters:
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado: {self.budget.reason}"))
@@ -980,6 +1031,7 @@ class AgentLoop:
                 if self.router is None:
                     raise RuntimeError("sin enrutador de proveedores configurado")
                 # Hooks pre_llm_call
+                _t_prep = time.monotonic()
                 if self.hooks is not None and self.hooks.has_handlers("pre_llm_call"):
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
                 # Poda SOLO el payload: cabeza+cola de tool results viejos.
@@ -991,7 +1043,9 @@ class AgentLoop:
                             self._to_dicts(_payload))
                     except Exception:
                         _request_estimate = 0
+                _perf_prep_ms += (time.monotonic() - _t_prep) * 1000.0
                 # Router.chat con fallback (o streaming token-a-token si hay on_delta)
+                _t_llm = time.monotonic()
                 if getattr(self, "_on_delta", None) is not None and hasattr(self.router, "stream"):
                     llm_resp = await self._stream_turn(_payload, openai_tools, hint, force_tools, require_vision=bool(images))
                 elif hasattr(self.router, "chat"):
@@ -1002,6 +1056,7 @@ class AgentLoop:
                     if routed is None:
                         raise RuntimeError(f"sin proveedor para pista={hint}")
                     llm_resp = await routed.provider.chat(_payload, tools=openai_tools, model=routed.model)
+                _perf_llm_ms += (time.monotonic() - _t_llm) * 1000.0
                 # Hooks post_llm_call
                 if self.hooks is not None and self.hooks.has_handlers("post_llm_call"):
                     await self.hooks.emit("post_llm_call", {"iteration": iteration, "finish_reason": llm_resp.finish_reason, "has_tool_calls": llm_resp.has_tool_calls})
@@ -1017,13 +1072,32 @@ class AgentLoop:
                 if _ctx_overflow:
                     if self.compaction is not None:
                         try:
+                            from src.core import context_limits as _ctxl
+
+                            # Aprender el limite REAL del error: sin esto el turno
+                            # reintenta con el mismo tamano y vuelve a fallar. Si el
+                            # error no trae numero (Ollama), se baja la ventana a la
+                            # mitad para que la proxima compactacion llegue antes.
+                            _model = getattr(self, "_req_model", "") or ""
+                            _real = _ctxl.limit_from_error(err_str)
+                            if _real and _model:
+                                _ctxl.register(_model, _real)
+                            _prev_win = int(getattr(self, "_model_ctx_tokens", 0) or 0) or int(self.context_max_tokens)
+                            self._model_ctx_tokens = int(min(_prev_win, _real or max(1024, _prev_win // 2)))
+                            logger.warning(
+                                "context: overflow en %s; ventana asumida %d -> %d (limite del error: %s)",
+                                _model or "modelo", _prev_win, self._model_ctx_tokens, _real or "sin dato",
+                            )
                             dict_msgs = self._to_dicts(messages)
-                            dict_msgs = await self.compaction.reactive_compact(dict_msgs, err_str)
+                            # El resumen de emergencia tiene que entrar en la ventana nueva.
+                            dict_msgs = await self.compaction.reactive_compact(
+                                dict_msgs, err_str, limit=self._model_ctx_tokens,
+                            )
                             messages = self._rebuild_messages(dict_msgs)
                             await _close_turn("compact-retry")
                             continue  # retry LLM call with compacted context
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"reactive compact falló: {e}")
                 final_output = f"[Error LLM: {err_str}]"
                 await _close_turn("error")
                 break
@@ -1285,8 +1359,15 @@ class AgentLoop:
                             raise _pr
                         raw_result = _pr
                     else:
+                        _t_tool = time.monotonic()
                         raw_result = await self.tools.dispatch(tool_name, tool_args, scope=self.scope, hooks=self.hooks,
                                                                approval=self.approval, session_id=session_id)
+                        _tool_ms = (time.monotonic() - _t_tool) * 1000.0
+                        _perf_tool_ms += _tool_ms
+                        try:
+                            logger.info("tool perf: %s %dms", tool_name, int(_tool_ms))
+                        except Exception:
+                            pass
                     # Normalize result to string
                     if isinstance(raw_result, str):
                         tool_result_str = raw_result
@@ -1428,8 +1509,20 @@ class AgentLoop:
             await _close_turn("tool_calls")
 
         # Finalize
+        _perf_final_start = time.monotonic()
         await _flush_steps()
         duration_ms = (time.monotonic() - t0) * 1000
+        try:
+            _final_ms = (time.monotonic() - _perf_final_start) * 1000.0
+            logger.info(
+                "loop perf: iter=%d llm=%dms tools=%dms prep=%dms setup=%dms final=%dms hooks=%dms resto=%dms total=%dms",
+                iteration, int(_perf_llm_ms), int(_perf_tool_ms), int(_perf_prep_ms),
+                int(_perf_setup_ms), int(_final_ms), int(getattr(self, "_perf_hooks_ms", 0.0)),
+                int(max(0.0, duration_ms - _perf_llm_ms - _perf_tool_ms - _perf_prep_ms - _perf_setup_ms - _final_ms - getattr(self, "_perf_hooks_ms", 0.0))),
+                int(duration_ms),
+            )
+        except Exception:
+            pass
         if not final_output and trajectory.steps:
             # Fallback: last assistant content
             last = trajectory.last_assistant

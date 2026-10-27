@@ -177,6 +177,11 @@ class SessionLog:
         if wal and str(self.db_path) != ":memory:":
             try:
                 self._conn.execute("PRAGMA journal_mode=WAL;")
+                # WAL + synchronous=NORMAL: en D:\ias un commit con FULL cuesta ~28 ms
+                # (fsync) y el turno escribe varios mensajes -> ~1,3 s medidos por turno
+                # (2026-10-26). Con NORMAL baja a 0,1 ms y sigue siendo durable ante
+                # cierre/crash de la app.
+                self._conn.execute("PRAGMA synchronous=NORMAL;")
             except Exception:
                 pass
         self._init_schema()

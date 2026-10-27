@@ -188,6 +188,10 @@ class ProviderRouter:
         # modelo en Ollama cuesta ~45 s de recarga en frio (medido); un multimodal
         # cubre texto + vision y evita ese salto. Lista vacia = comportamiento por gema.
         self.prefer_models = [str(x) for x in (prefer_models or []) if str(x).strip()]
+        # Modelo para tareas auxiliares (destilar, resumir, extraer memoria, juez). Por
+        # defecto el primero de prefer_models: en Ollama cada modelo distinto desaloja al
+        # de chat y cuesta ~9-10 s de recarga que paga el turno siguiente del usuario.
+        self.aux_model = self.prefer_models[0] if self.prefer_models else ""
         # Thompson persistido (fuente de verdad del aprendizaje). Compartido.
         self._adaptive = adaptive_router if adaptive_router is not None else _get_adaptive()
         # Contadores por proveedor (observabilidad legacy; el aprendizaje vive en _adaptive)
@@ -651,6 +655,41 @@ class ProviderRouter:
             # No prunear antiguos: si Zen retiró un gratis, el entry queda pero health filtrará
             break
         return free
+
+    async def context_length(self, model: str, provider_name: str | None = None) -> int | None:
+        """Ventana de contexto real del modelo, preguntada al proveedor que lo sirve.
+
+        Cada modelo tiene su limite: Ollama lo expone en `/api/show`, llama.cpp en
+        `/props`, el catalogo cloud en `ModelRoute.context_window`. Cacheado por
+        modelo en `src/core/context_limits.py`.
+        """
+        from src.core import context_limits
+
+        if not model:
+            return None
+        pname = provider_name or ""
+        if not pname:
+            for m in self._models:
+                if m.id == model or context_limits.normalize(m.id) == context_limits.normalize(model):
+                    pname = m.provider_name
+                    break
+        prov = self._providers.get(pname) if pname else None
+        if prov is not None:
+            fn = getattr(prov, "context_length", None)
+            if callable(fn):
+                try:
+                    val = await fn(model)
+                    if val:
+                        return int(val)
+                except Exception as e:
+                    logger.debug("context: %s no reporto ventana para %s (%s)", pname, model, e)
+        route_ctx = 0
+        for m in self._models:
+            if m.id == model or context_limits.normalize(m.id) == context_limits.normalize(model):
+                route_ctx = max(route_ctx, int(m.context_window or 0))
+        if route_ctx:
+            return route_ctx
+        return context_limits.known(model)
 
     async def health_all(self) -> dict[str, dict]:
         out: dict[str, dict] = {}

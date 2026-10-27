@@ -320,7 +320,10 @@ memory:
     # Rerank semantico opcional: auto intenta embeddings locales y cae a lexico
     # sin romper el turno; force falla si no hay embeddings; off lo desactiva.
     rerank: auto
-    rerank_timeout_ms: 2000
+    # Los embeddings tardan 30-170 ms en caliente, pero si Ollama esta ocupado con el
+    # modelo de chat la llamada se encola y el turno paga el timeout entero (2 s
+    # medidos el 2026-10-26). 800 ms alcanza y acota el peor caso.
+    rerank_timeout_ms: 800
     rerank_candidates: 8
 assignment:
   overrides: {}

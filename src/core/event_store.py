@@ -102,27 +102,37 @@ class EventStore:
         self._callbacks: Dict[str, List[Callable]] = {}
         if self._db_str != ":memory:":
             Path(self._db_str).parent.mkdir(parents=True, exist_ok=True)
-        # For :memory: keep single shared connection (otherwise each connect is blank DB)
-        self._mem_conn: sqlite3.Connection | None = None
+        # Una sola conexion para todo el objeto (memoria o archivo): ver _get_conn.
+        self._conn: sqlite3.Connection | None = None
         self._in_memory = self._db_str == ":memory:"
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        if self._in_memory:
-            if self._mem_conn is None:
-                self._mem_conn = sqlite3.connect(self._db_str, check_same_thread=False, isolation_level=None, timeout=30.0)
-                self._mem_conn.execute("PRAGMA busy_timeout=5000;")
-            return self._mem_conn
-        conn = sqlite3.connect(self._db_str, check_same_thread=False, isolation_level=None, timeout=30.0)
-        conn.execute("PRAGMA busy_timeout=5000;")
-        return conn
+        # Conexion persistente: abrir+cerrar SQLite por evento costaba ~240 ms cada uno
+        # (Windows, WAL) y el loop escribe ~14 eventos por turno -> ~3 s de un turno de 8 s
+        # (perfilado 2026-10-26). Todo el acceso pasa por self._lock y el connect ya es
+        # check_same_thread=False, asi que reutilizar una sola conexion es seguro.
+        if self._conn is None:
+            conn = sqlite3.connect(self._db_str, check_same_thread=False, isolation_level=None, timeout=30.0)
+            conn.execute("PRAGMA busy_timeout=5000;")
+            if self._wal and not self._in_memory:
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL;")
+                    # WAL + synchronous=NORMAL. En D:\ias cada commit con FULL paga un
+                    # fsync de ~28 ms (medido 2026-10-26) y el loop escribe ~14 eventos
+                    # por turno -> ~2 s de un turno de 8 s. Con NORMAL es 0,1 ms y sigue
+                    # siendo durable ante cierre/crash de la app; solo se perderia la
+                    # ultima transaccion si se corta la luz, aceptable en un log.
+                    conn.execute("PRAGMA synchronous=NORMAL;")
+                except Exception:
+                    pass
+            conn.execute("PRAGMA foreign_keys=ON;")
+            self._conn = conn
+        return self._conn
 
     def _release_conn(self, conn: sqlite3.Connection) -> None:
-        if not self._in_memory:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        # La conexion se reutiliza: se cierra en close() (o al recolectar el objeto).
+        return None
 
     def _init_db(self) -> None:
         conn = self._get_conn()
@@ -369,12 +379,12 @@ class EventStore:
 
     def close(self) -> None:
         with self._lock:
-            if self._mem_conn is not None:
+            if self._conn is not None:
                 try:
-                    self._mem_conn.close()
+                    self._conn.close()
                 except Exception:
                     pass
-                self._mem_conn = None
+                self._conn = None
 
     def __enter__(self):
         return self

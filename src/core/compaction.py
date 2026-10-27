@@ -320,10 +320,20 @@ class CompactionPipeline:
 
             routed = None
             if router is not None:
-                try:
-                    routed = router.resolve(task_hint=hint)
-                except Exception:
-                    routed = None
+                # El resumen de compactacion debe usar el modelo ya cargado
+                # (router.aux_model); otro modelo desaloja el del chat en Ollama y el
+                # turno siguiente paga la recarga.
+                _aux = getattr(router, "aux_model", "") or ""
+                if _aux:
+                    try:
+                        routed = router.resolve(preferred_model=_aux)
+                    except TypeError:
+                        routed = None
+                if routed is None:
+                    try:
+                        routed = router.resolve(task_hint=hint)
+                    except Exception:
+                        routed = None
             if routed is None:
                 return await self.compact(original, limit)
 
@@ -656,31 +666,24 @@ class CompactionPipeline:
     # ------------------------------------------------------------------
     # Emergency reactive (BLUEPRINT §9.2)
     # ------------------------------------------------------------------
-    async def reactive_compact(self, messages: list[dict], error: str) -> list[dict]:
+    async def reactive_compact(self, messages: list[dict], error: str,
+                               limit: int | None = None) -> list[dict]:
         """Emergency: parse context_limit from error and compact aggressively.
 
         Handles patterns:
           - context_limit 32000, got 45000
           - prompt_too_long, max 8192
           - context window exceeded ... limit 4096
+
+        `limit` es la ventana REAL del modelo cuando ya la conocemos (viene del
+        error o de `/api/show`): compactar a un 60% de un numero inventado deja el
+        request todavia por encima y el reintento falla igual.
         """
         # Try to extract limit
-        limit: int | None = None
-        patterns = [
-            r"context[_\s]?limit\D*?(\d{3,6})",
-            r"max[_\s]?tokens\D*?(\d{3,6})",
-            r"context window\D*?(\d{3,6})",
-            r"too long\D*?(\d{3,6})",
-            r"maximum.*?(\d{3,6})",
-        ]
-        for pat in patterns:
-            m = re.search(pat, error, re.I)
-            if m:
-                try:
-                    limit = int(m.group(1))
-                    break
-                except Exception:
-                    continue
+        if not limit:
+            from src.core.context_limits import limit_from_error
+
+            limit = limit_from_error(error)
         target = int(limit * 0.60) if limit else 8000
         compacted, _ = await self.compact(messages, target)
         # Cline exige que el request de recovery sea ESTRICTAMENTE menor antes

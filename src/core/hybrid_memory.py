@@ -86,6 +86,9 @@ class HybridMemoryBackend:
         with closing(sqlite3.connect(str(self.db_path))) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
+            # WAL + NORMAL: cada memoria escrita paga un commit; con FULL es un fsync de
+            # ~28 ms en D:\ias (medido 2026-10-26).
+            conn.execute("PRAGMA synchronous=NORMAL")
             
             # Tabla principal
             conn.execute("""

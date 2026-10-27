@@ -31,6 +31,9 @@ class Board:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL: el board acepta claims/tareas en cada turno de agente; con FULL
+        # cada commit paga fsync (~28 ms en D:\ias, medido 2026-10-26).
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS tasks("
             "id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,"

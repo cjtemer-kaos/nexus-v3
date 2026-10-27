@@ -53,6 +53,9 @@ class GrantStore:
             )
             self._conn.execute("PRAGMA busy_timeout=5000;")
             self._conn.execute("PRAGMA journal_mode=WAL;")
+            # WAL + NORMAL: aprobaciones se escriben en cada tool gateada; con FULL cada
+            # commit paga fsync (~28 ms en D:\ias, medido 2026-10-26).
+            self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS approval_grants (

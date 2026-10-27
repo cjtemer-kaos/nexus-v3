@@ -45,6 +45,9 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(str(p), timeout=10)
     con.execute("PRAGMA journal_mode=WAL;")
     con.execute("PRAGMA busy_timeout=5000;")
+    # WAL + NORMAL: el indice RAG se reescribe por lotes; con FULL cada commit paga
+    # fsync (~28 ms en D:\ias, medido 2026-10-26).
+    con.execute("PRAGMA synchronous=NORMAL;")
     con.execute("""
         CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

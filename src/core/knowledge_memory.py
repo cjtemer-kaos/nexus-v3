@@ -122,6 +122,9 @@ class KnowledgeMemory:
         try:
             con.execute("PRAGMA busy_timeout=5000;")
             con.execute("PRAGMA journal_mode=WAL;")
+            # WAL + NORMAL: el grafo se escribe en cada learn/recall; con FULL cada
+            # commit paga fsync (~28 ms en D:\ias, medido 2026-10-26).
+            con.execute("PRAGMA synchronous=NORMAL;")
         except Exception:
             pass
         con.execute("PRAGMA foreign_keys=ON;")

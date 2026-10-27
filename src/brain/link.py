@@ -192,6 +192,10 @@ def connect_db(db_name: str, read_only: bool = False) -> sqlite3.Connection:
     try:
         conn.execute("PRAGMA busy_timeout=5000;")
         conn.execute("PRAGMA journal_mode=WAL;")
+        if not read_only:
+            # WAL + NORMAL: el grafo se escribe en cada learn; con FULL cada commit paga
+            # fsync (~28 ms en D:\ias, medido 2026-10-26).
+            conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     try:

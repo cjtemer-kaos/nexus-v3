@@ -215,7 +215,9 @@ def build_memory_context(
             from src.core.knowledge_memory import get_knowledge_memory
 
             memory = get_knowledge_memory()
+        _t_search = time.monotonic()
         hits = memory.search_terms(terms, limit=max(limit * 3, 8), per_term=24)
+        _search_ms = (time.monotonic() - _t_search) * 1000.0
     except Exception as e:
         logger.debug("memory_context: busqueda omitida: %s", e)
         return ""
@@ -240,6 +242,13 @@ def build_memory_context(
     picked, rerank_status, rerank_ms = _semantic_rerank(text, picked, mcfg)
     picked = _apply_standing(picked)
     picked = picked[:limit]
+    try:
+        logger.info(
+            "kb perf: search=%dms rerank=%dms (%s) hits=%d",
+            int(_search_ms), int(rerank_ms), rerank_status, len(hits or []),
+        )
+    except Exception:
+        pass
 
     lines = [
         "MEMORIA DEL GRAFO (recuperada automáticamente; usá estos datos exactos y "
@@ -283,6 +292,7 @@ def build_memory_context(
             "rerank_ms": rerank_ms, "terms": terms,
         })
 
+    _t_tail = time.monotonic()
     try:
         memory.touch_many(node_ids)
     except Exception as e:
@@ -316,6 +326,10 @@ def build_memory_context(
             )
         except Exception as e:
             logger.debug("memory_context: evento omitido: %s", e)
+    try:
+        logger.info("kb perf: cola=%dms (touch+audit+evento)", int((time.monotonic() - _t_tail) * 1000))
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

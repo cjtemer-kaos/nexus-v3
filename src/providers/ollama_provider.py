@@ -7,6 +7,22 @@ from src.core.provider_base import BaseProvider, LLMMessage, LLMResponse, ToolCa
 logger = logging.getLogger("nexus-ollama")
 
 
+def _fit_num_ctx(model: str, opts: dict) -> None:
+    """Baja `num_ctx` al limite nativo del modelo.
+
+    Pedir mas ventana de la que el modelo soporta es 400 "exceeds the available
+    context size"; el router lo lee como modelo roto y el turno se va en recargas.
+    """
+    try:
+        from src.core import context_limits
+
+        n = int(opts.get("num_ctx") or 0)
+        if n:
+            opts["num_ctx"] = context_limits.clamp_num_ctx(model, n)
+    except Exception:
+        pass
+
+
 class OllamaProvider(BaseProvider):
     def __init__(self, base_url: str = "http://localhost:11434", timeout_s: float = 300,
                  keep_alive: str = "30m", options: dict | None = None):
@@ -73,6 +89,28 @@ class OllamaProvider(BaseProvider):
         caps = await self._capabilities(model)
         return ("vision" in caps) if caps else False
 
+    async def context_length(self, model: str) -> int | None:
+        """Ventana nativa del modelo segun Ollama (`/api/show`), cacheada.
+
+        Es el dato que evita los 400 "exceeds the available context size": si el
+        modelo soporta menos que el `num_ctx` pedido, hay que pedir el suyo.
+        """
+        from src.core import context_limits
+
+        try:
+            m = await self._resolve_model(model or "")
+        except Exception:
+            m = model
+        prev = context_limits.cached(m)
+        if prev:
+            return prev
+        try:
+            return await context_limits.probe_ollama(
+                self.base_url, m, timeout_s=min(10.0, float(self._timeout_s or 10)),
+            )
+        except Exception:
+            return None
+
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         model = await self._resolve_model(model or "qwen2.5-coder:7b")
         # Ollama /api/chat expects messages with role/content; tools is OpenAI format but Ollama supports tools
@@ -106,6 +144,7 @@ class OllamaProvider(BaseProvider):
             _opts.update(kw["options"])
         if kw.get("temperature") is not None:
             _opts["temperature"] = kw["temperature"]
+        _fit_num_ctx(model, _opts)
         if _opts:
             payload["options"] = _opts
         if tools:
@@ -179,6 +218,7 @@ class OllamaProvider(BaseProvider):
             _opts.update(kw["options"])
         if kw.get("temperature") is not None:
             _opts["temperature"] = kw["temperature"]
+        _fit_num_ctx(model, _opts)
         if _opts:
             payload["options"] = _opts
         if tools:

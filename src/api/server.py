@@ -642,10 +642,14 @@ def _build_router_from_config(cfg: dict):
             _vram = auto_vram_budget()
         except Exception:
             _vram = 12
+    # Copia de la lista: el router le agrega los proveedores BYOK y, si se pasa la
+    # referencia del config, la mutacion cambia la firma de config en cada request ->
+    # el router se reconstruia 2 veces por turno (1-2 s cada vez, medido 2026-10-26).
+    _fb = cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]) if isinstance(cfg, dict) else ["ollama", "cloud"]
     router = ProviderRouter(
         vram_budget_gb=_vram,
-        fallback_order=cfg.get("router", {}).get("fallback_order", ["ollama", "cloud"]) if isinstance(cfg, dict) else ["ollama", "cloud"],
-        prefer_models=(cfg.get("router", {}).get("prefer_models") or []) if isinstance(cfg, dict) else [],
+        fallback_order=list(_fb) if isinstance(_fb, (list, tuple)) else ["ollama", "cloud"],
+        prefer_models=list((cfg.get("router", {}).get("prefer_models") or [])) if isinstance(cfg, dict) else [],
     )
     # Guarda de coherencia: si la ventana que asume el harness supera el num_ctx
     # real del modelo, Ollama responde 400 "exceeds the available context size",
@@ -916,6 +920,32 @@ async def providers_status(refresh: bool = False):
         return short, label
     from src.core import provider_models as _pm2
     _byok = _pm2.byok_ids()
+    # Ventana REAL por modelo: cada uno tiene la suya y el selector mostraba 32000
+    # fijo para todos. Se pregunta a Ollama (/api/show) y queda cacheado por proceso
+    # en src/core/context_limits.py, asi que solo cuesta en la primera llamada.
+    from src.core import context_limits as _ctxl
+    _live_ctx: dict[str, int] = {}
+    try:
+        _ollama_url = ((cfg.get("providers") or {}).get("ollama") or {}).get("base_url") or ""
+    except Exception:
+        _ollama_url = ""
+    if _ollama_url and (probe.get("ollama") or {}).get("ok"):
+        _ids = [m for m in ((probe.get("ollama") or {}).get("registered") or []) if "embed" not in m.lower()]
+
+        async def _ctx_one(mid: str):
+            got = _ctxl.cached(mid)
+            if got:
+                return mid, got
+            return mid, await _ctxl.probe_ollama(_ollama_url, mid, timeout_s=3.0)
+
+        try:
+            for _m, _v in await asyncio.wait_for(
+                asyncio.gather(*[_ctx_one(m) for m in _ids]), timeout=6.0
+            ):
+                if _v:
+                    _live_ctx[_m] = int(_v)
+        except Exception as e:
+            logger.debug("ctx por modelo: probe parcial (%s)", e)
     for pname, info in probe.items():
         if pname == "error":
             continue
@@ -930,7 +960,16 @@ async def providers_status(refresh: bool = False):
                     mids.append(m)
         seen_ids: set[str] = set()
         for mid in mids:
-            ctx = llamacpp_ctx if pname == "llamacpp" else 32000
+            if pname == "llamacpp":
+                ctx = llamacpp_ctx
+            else:
+                # Lo que el modelo va a tener REALMENTE en este setup: el minimo entre
+                # lo que soporta (Ollama /api/show) y el num_ctx que pedimos en config.
+                # Mostrar 262144 cuando mandamos 16384 seria mentirle al selector.
+                ctx = _ctxl.usable_window(
+                    mid, provider=pname, cfg=cfg,
+                    native=_live_ctx.get(mid) or _ctxl.known(mid),
+                )
             # embed model should not appear as chat model
             if "embed" in mid.lower() and "nomic" in mid.lower():
                 continue
@@ -3415,9 +3454,34 @@ def _get_router(cfg: dict):
     if cached is not None and _state.get("router_sig") == sig:
         return cached
     if cached is not None:
-        # RETIRAR sin cerrar en el acto: cerrarlo aca mataba requests en vuelo
+        # RETIRAR sin cerrar en el acto: cerrarlo acaba matando requests en vuelo
         # (flap de firma). _retire_router lo cierra a los 30 s y lo olvida.
+        _prev = _state.get("router_cfg") or {}
+        _now = {"p": (cfg or {}).get("providers", {}), "r": (cfg or {}).get("router", {})}
+        _dif: list[str] = []
+        try:
+            import difflib as _dl
+            _s1 = _j.dumps(_prev, sort_keys=True, indent=1, default=str).splitlines()
+            _s2 = _j.dumps(_now, sort_keys=True, indent=1, default=str).splitlines()
+            _dif = [ln for ln in _dl.unified_diff(_s1, _s2, lineterm="", n=0) if ln[:1] in "+-"][:14]
+        except Exception:
+            _dif = ["(no se pudo diferenciar)"]
+        logger.info("router: reconstruyo por cambio de firma (antes=%s ahora=%s)\n%s",
+                    str(_state.get("router_sig"))[:8], sig[:8], "\n".join(_dif))
+        try:
+            import traceback as _tb
+            _st = [f"{f.filename.rsplit(chr(92), 1)[-1]}:{f.lineno}" for f in _tb.extract_stack()[:-1][-6:]]
+            logger.info("router: llamada desde %s", " <- ".join(reversed(_st)))
+        except Exception:
+            pass
         _retire_router(cached)
+    else:
+        logger.info("router: construccion inicial (firma=%s)", sig[:8])
+    try:
+        import copy as _copy
+        _state["router_cfg"] = _copy.deepcopy({"p": (cfg or {}).get("providers", {}), "r": (cfg or {}).get("router", {})})
+    except Exception:
+        _state["router_cfg"] = {"p": (cfg or {}).get("providers", {}), "r": (cfg or {}).get("router", {})}
     router = _build_router(cfg)
     _state["router"] = router
     _state["router_sig"] = sig
@@ -3427,6 +3491,7 @@ def _get_router(cfg: dict):
 def _invalidate_router() -> None:
     r = _state.pop("router", None)
     _state.pop("router_sig", None)
+    _state.pop("health", None)
     if r is not None:
         _retire_router(r)
 
@@ -5572,23 +5637,39 @@ async def chat(request: Request):
     # (session_log=slog), para que el historial se cargue entre turnos (memoria multi-turno).
     # Try to run AgentLoop if providers are configured
     try:
+        import time as _time
+        _perf: dict = {"t0": _time.monotonic()}
         cfg = _load_config_safe()
         router = _get_router(cfg)
 
-        # Quick health probe with short timeout — don't block chat if providers offline
-        health = {}
-        if hasattr(router, "health_all"):
-            try:
-                health = await asyncio.wait_for(router.health_all(), timeout=3.0)
-            except Exception:
-                health = {}
+        # Si el router ya resuelve un modelo no hace falta sondear la salud: el probe
+        # pega a Ollama (/api/tags) y a los catalogos BYOK por HTTPS y costaba 1,6-3 s
+        # en el primer turno de cada proceso (medido 2026-10-26). Solo se usa para
+        # decidir el fallback cuando NO hay ningun modelo resoluble.
+        _resolved = None
+        try:
+            _resolved = router.resolve(task_hint=hint or message)
+        except Exception:
+            _resolved = None
+        health: dict = {}
+        if _resolved is None:
+            _hc = _state.get("health") or {}
+            if _hc.get("r") is router and (_time.monotonic() - float(_hc.get("t") or 0)) < 30.0:
+                health = _hc.get("v") or {}
+                _perf["health_cached"] = True
+            elif hasattr(router, "health_all"):
+                try:
+                    health = await asyncio.wait_for(router.health_all(), timeout=3.0)
+                except Exception:
+                    health = {}
+                _state["health"] = {"r": router, "t": _time.monotonic(), "v": health}
+        _perf["health"] = _time.monotonic()
         any_healthy = any(
             (v.get("ok") if isinstance(v, dict) else bool(v))
             for v in (health.values() if isinstance(health, dict) else [])
         )
-        # If no provider resolves at all (no models registered), go fallback immediately
-        # Otherwise attempt AgentLoop even if health check failed — loop will error and fallback will handle
-        if not router.resolve(task_hint=hint or message) and not any_healthy:
+        # Sin modelo resoluble y sin proveedor vivo -> fallback inmediato.
+        if _resolved is None and not any_healthy:
             raise RuntimeError("no healthy provider — echo fallback")
 
         # Scope + tools (mismo helper que /v1, /ws y /stream)
@@ -5605,6 +5686,7 @@ async def chat(request: Request):
         if scope.level == 0:
             registry = registry.subset([])
         registry.approval = _approval
+        _perf["registry"] = _time.monotonic()
 
         _gema = (_agent_cfg or {}).get("gema") or ""
         _sys = (_agent_cfg or {}).get("system_prompt") or ""
@@ -5632,16 +5714,29 @@ async def chat(request: Request):
             _extra = _kb or ""
         except Exception:
             pass
+        _perf["kb"] = _time.monotonic()
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
                                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
                                 images=images or None,
                                 system_prompt=_sys or None,
                                 extra_system=(_extra or None))
+        _perf["loop"] = _time.monotonic()
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
                                model=body.get("model"))
+        _perf["learn"] = _time.monotonic()
+        _steps = list(_perf.items())
+        logger.info(
+            "chat perf: health=%dms registry=%dms kb=%dms loop=%dms learn=%dms total=%dms",
+            int((_perf.get("health", _perf["t0"]) - _perf["t0"]) * 1000),
+            int((_perf.get("registry", _perf["t0"]) - _perf.get("health", _perf["t0"])) * 1000),
+            int((_perf.get("kb", _perf["t0"]) - _perf.get("registry", _perf["t0"])) * 1000),
+            int((_perf.get("loop", _perf["t0"]) - _perf.get("kb", _perf["t0"])) * 1000),
+            int((_perf.get("learn", _perf["t0"]) - _perf.get("loop", _perf["t0"])) * 1000),
+            int((_perf.get("learn", _perf["t0"]) - _perf["t0"]) * 1000),
+        )
         _memory_audit_close(session_id, _batch, result)
         _spawn_bg(_memory_extract(cfg, session_id, message, result))
 
