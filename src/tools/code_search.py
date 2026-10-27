@@ -57,12 +57,16 @@ async def code_search(
             cmd.extend(["--glob", include])
         cmd.extend([query, search_path])
         
-        # en hilo: rg puede tardar 30 s y esto corre en el event loop
+        # en hilo: rg puede tardar 30 s y esto corre en el event loop.
+        # Sin `text=True`: decodifica con el locale (cp1252 en Windows) y la
+        # salida UTF-8 de rg llegaba mojibake ("caÃ±Ã³n" por "cañón"). rg siempre
+        # escribe UTF-8, asi que se decodifica como tal.
         proc = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, timeout=30)
+            subprocess.run, cmd, capture_output=True, timeout=30)
         if proc.returncode == 0:
             import re as _re
-            for line in proc.stdout.strip().split('\n'):
+            salida = (proc.stdout or b"").decode("utf-8", "replace")
+            for line in salida.strip().split('\n'):
                 if line:
                     # Formato ripgrep: path:line:content. El path puede tener ':' (unidad
                     # Windows C:\) -> match no-greedy hasta el primer ':digitos:'.
@@ -75,6 +79,11 @@ async def code_search(
                         })
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+    # `--max-count` de rg es POR ARCHIVO: con limit=3 y 10 coincidencias en un
+    # archivo volvian las 10. El limite del contrato es el total.
+    if len(results) > limit:
+        results = results[:limit]
     
     # Fallback to Python grep
     if not results:
@@ -106,17 +115,20 @@ async def code_search(
                 try:
                     if os.path.getsize(fpath) > max_file_size:
                         continue
-                    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
-                        for line_num, line in enumerate(f, 1):
-                            if pattern.search(line):
-                                results.append({
-                                    "file": fpath,
-                                    "line": line_num,
-                                    "text": line.strip()[:200],
-                                })
-                                count += 1
-                                if count >= limit:
-                                    break
+                    # Mismo encoding real que read_file/edit: con utf-8+replace un
+                    # archivo cp1252 nunca matcheaba un query con acentos.
+                    from src.core.file_text import read_text_file
+                    texto, _enc = read_text_file(fpath)
+                    for line_num, line in enumerate(texto.splitlines(), 1):
+                        if pattern.search(line):
+                            results.append({
+                                "file": fpath,
+                                "line": line_num,
+                                "text": line.strip()[:200],
+                            })
+                            count += 1
+                            if count >= limit:
+                                break
                     if count >= limit:
                         break
                 except (PermissionError, OSError):

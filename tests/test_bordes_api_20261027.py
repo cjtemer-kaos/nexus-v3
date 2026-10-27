@@ -16,6 +16,10 @@ devolvia 200 con una respuesta que "parece valida" y no lo es.
 3. `GET /api/sessions/<id>/replay` de un id inexistente: 200 `{"events": []}`,
    que el cliente lee como "sesion vacia" (mismo caso que /messages y /tree,
    que ya eran 404).
+
+4. `GET /api/usage?session_id=X` **ignoraba el parametro**: un cliente que pedia
+   el uso de una sesion recibia los totales globales con `session_id: null`,
+   como si fueran de X.
 """
 from __future__ import annotations
 
@@ -174,3 +178,90 @@ def test_replay_devuelve_eventos_de_una_sesion_podada(cliente):
     assert len(eventos) == 1
     assert eventos[0]["kind"] == "user_message"
     assert eventos[0]["session_id"] == "podada"
+
+
+# ------------------------------------------------------------------- usage
+
+
+def _dos_sesiones_con_uso(slog):
+    slog.create_session(project="u", session_id="uno")
+    slog.append("uno", Message(role="assistant", content="a", tokens=10, model="m1"))
+    slog.append("uno", Message(role="user", content="b", tokens=5, model="m1"))
+    slog.create_session(project="u", session_id="dos")
+    slog.append("dos", Message(role="assistant", content="c", tokens=7, model="m2"))
+
+
+def test_usage_global_suma_todas_las_sesiones(cliente):
+    http, slog, _ = cliente
+    _dos_sesiones_con_uso(slog)
+
+    r = http.get("/api/usage")
+
+    assert r.status_code == 200
+    j = r.json()
+    assert j["session_id"] is None
+    assert (j["messages"], j["tokens"]) == (3, 22)
+    assert "cost" in j
+
+
+def test_usage_con_session_id_filtra_de_verdad(cliente):
+    """Antes el parametro se ignoraba y devolvia los totales globales."""
+    http, slog, _ = cliente
+    _dos_sesiones_con_uso(slog)
+
+    r = http.get("/api/usage", params={"session_id": "uno"})
+
+    assert r.status_code == 200, r.text[:200]
+    j = r.json()
+    assert j["session_id"] == "uno"
+    assert (j["messages"], j["tokens"]) == (2, 15), j
+    assert [m["model"] for m in j["by_model"]] == ["m1"]
+
+
+def test_usage_de_sesion_y_el_global_coinciden_en_el_filtro(cliente):
+    http, slog, _ = cliente
+    _dos_sesiones_con_uso(slog)
+
+    por_query = http.get("/api/usage", params={"session_id": "dos"}).json()
+    por_path = http.get("/api/sessions/dos/usage").json()
+
+    assert por_query == por_path
+    assert (por_path["messages"], por_path["tokens"]) == (1, 7)
+
+
+def test_usage_con_session_id_inexistente_es_404(cliente):
+    http, _, _ = cliente
+
+    r = http.get("/api/usage", params={"session_id": "no-existe-xyz"})
+
+    assert r.status_code == 404, r.text[:200]
+    assert "no-existe-xyz" in r.json()["detail"]
+
+
+def test_usage_de_sesion_inexistente_es_404(cliente):
+    http, _, _ = cliente
+
+    r = http.get("/api/sessions/no-existe-xyz/usage")
+
+    assert r.status_code == 404, r.text[:200]
+    assert "no-existe-xyz" in r.json()["detail"]
+
+
+def test_usage_con_session_id_vacio_sigue_siendo_el_global(cliente):
+    http, slog, _ = cliente
+    _dos_sesiones_con_uso(slog)
+
+    for params in ({}, {"session_id": ""}, {"session_id": "   "}):
+        r = http.get("/api/usage", params=params)
+        assert r.status_code == 200, (params, r.text[:160])
+        assert r.json()["session_id"] is None, params
+
+
+def test_usage_de_una_sesion_sin_mensajes_es_200_en_ceros(cliente):
+    http, slog, _ = cliente
+    slog.create_session(project="u", session_id="vacia")
+
+    r = http.get("/api/sessions/vacia/usage")
+
+    assert r.status_code == 200
+    assert (r.json()["messages"], r.json()["tokens"]) == (0, 0)

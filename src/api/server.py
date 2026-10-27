@@ -3277,8 +3277,32 @@ async def worktree_remove(request: Request):
     return res
 
 
+def _usage_de_sesion(session_id: str) -> dict:
+    """Uso de UNA sesion; 404 si no existe (mismo contrato que /messages, /tree)."""
+    from src.core.cost import cost_by_model
+    log = _session_log()
+    try:
+        existe = log.get_session(session_id) is not None
+    except Exception:
+        existe = True  # si el log no se puede leer, no se inventa un 404
+    if not existe:
+        raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    u = log.usage(session_id)
+    return {**u, "cost": cost_by_model(u.get("by_model", []), _load_config_safe())}
+
+
 @app.get("/api/usage")
-async def usage_global():
+async def usage_global(session_id: str = ""):
+    """Agregado global, o el de una sesion si viene `session_id`.
+
+    `session_id` como query se IGNORABA (FastAPI descarta los parametros que el
+    endpoint no declara): un cliente que pedia `/api/usage?session_id=X` recibia
+    los totales de todas las sesiones como si fueran de X, con
+    `session_id: null` en la respuesta.
+    """
+    sid = (session_id or "").strip()
+    if sid:
+        return _usage_de_sesion(sid)
     from src.core.cost import cost_by_model
     u = _session_log().usage()
     return {**u, "cost": cost_by_model(u.get("by_model", []), _load_config_safe())}
@@ -3286,9 +3310,7 @@ async def usage_global():
 
 @app.get("/api/sessions/{session_id}/usage")
 async def usage_session(session_id: str):
-    from src.core.cost import cost_by_model
-    u = _session_log().usage(session_id)
-    return {**u, "cost": cost_by_model(u.get("by_model", []), _load_config_safe())}
+    return _usage_de_sesion(session_id)
 
 
 @app.get("/api/plugins")
@@ -4069,14 +4091,14 @@ def _steer_drain(session_id: str) -> list:
 
 _SUB_TOOLSETS: dict[str, tuple[str, ...]] = {
     # Investigación: solo lectura + web + memoria. Sin mutaciones ni shell.
-    "scholar": ("read_file", "list_dir", "glob", "code_search", "web_search", "web_fetch",
+    "scholar": ("read_file", "list_dir", "glob", "grep", "code_search", "web_search", "web_fetch",
                 "recall", "learn", "todo_write"),
     # Código: lectura/escritura + shell + web. La delegación queda fuera.
-    "code": ("read_file", "list_dir", "glob", "code_search", "write_file", "edit",
+    "code": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
              "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
-    "engineer": ("read_file", "list_dir", "glob", "code_search", "write_file", "edit",
+    "engineer": ("read_file", "list_dir", "glob", "grep", "code_search", "write_file", "edit",
                  "apply_patch", "exec", "web_search", "web_fetch", "recall", "learn", "todo_write"),
-    "debugger": ("read_file", "list_dir", "glob", "code_search", "exec", "web_search",
+    "debugger": ("read_file", "list_dir", "glob", "grep", "code_search", "exec", "web_search",
                  "web_fetch", "recall", "learn", "todo_write"),
 }
 
@@ -4566,13 +4588,27 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         """Busca archivos por patrón glob (ej: '**/*.py') dentro del scope.
 
         Devuelve el conteo y el archivo más grande con su tamaño, para responder
-        "cuántos / cuál es el más grande" sin leer archivo por archivo.
+        "cuántos / cuál es el más grande" sin leer archivo por archivo. Un patrón
+        de un solo segmento ('*.py') busca en todo el árbol, como ripgrep.
         """
         import json as _json
         base = scope.check_path(path or ".")
+        if not base.exists() or not base.is_dir():
+            raise FileNotFoundError(f"directorio no existe: {path}")
+        pat = (pattern or "*").strip() or "*"
+        # `*.py` con pathlib matchea SOLO el nivel superior; ripgrep (y por lo
+        # tanto opencode) lo matchea a cualquier profundidad. Un patron sin
+        # separadores se vuelve recursivo para que `glob '*.py'` encuentre lo
+        # mismo que `glob '**/*.py'` en vez de devolver 0 sin explicacion.
+        if "/" not in pat and "\\" not in pat and not pat.startswith("**"):
+            pat = "**/" + pat
         found = []
         sizes: dict[str, int] = {}
-        for f in sorted(base.glob(pattern or "*")):
+        try:
+            it = sorted(base.glob(pat))
+        except (ValueError, OSError) as e:
+            raise ValueError(f"patrón glob inválido ({pattern}): {e}")
+        for f in it:
             try:
                 scope.check_path(str(f))
             except Exception:
@@ -4589,6 +4625,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         payload: dict = {"pattern": pattern, "path": path, "count": len(found),
                          "files": sum(1 for v in sizes.values()), "matches": found,
                          "truncated": len(found) >= 500}
+        if pat != (pattern or "*"):
+            payload["pattern_effective"] = pat
         if sizes:
             largest = max(sizes.items(), key=lambda kv: kv[1])
             payload["largest"] = {"path": largest[0], "size_bytes": largest[1]}
@@ -4908,6 +4946,44 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                    "include": {"type": "string", "description": "Filtro de archivos glob (ej: *.py)"},
                                    "limit": {"type": "integer", "description": "Máximo de resultados (1-50, default 20)"}},
                                    "required": ["query"], "additionalProperties": False})
+
+    async def grep_tool(pattern: str, path: str = ".", include: str = "", limit: int = 50) -> str:
+        """Busca un patrón (regex) en el contenido de los archivos.
+
+        Nombre y forma que usan Claude Code/opencode: `pattern`, `path`,
+        `include`, `limit`. Devuelve una línea `ruta:línea: texto` por
+        coincidencia (texto plano, no JSON anidado). `code_search` sigue
+        existiendo: es el mismo motor con salida JSON.
+        """
+        p = scope.check_path(path or ".")
+        n = max(1, min(200, int(limit or 50)))
+        from src.tools.code_search import code_search as _cs
+        res = await _cs(pattern, path=str(p), include=include, limit=n)
+        if not isinstance(res, dict):
+            return str(res)
+        if res.get("error"):
+            raise ValueError(str(res["error"]))
+        filas = res.get("results") or []
+        if not filas:
+            return f"sin coincidencias para {pattern!r} en {path}"
+        lineas = [f"{r['file']}:{r['line']}: {r['text']}" for r in filas]
+        from src.core.text_limits import truncate_head_tail
+        return truncate_head_tail(
+            "\n".join(lineas), 48000, label=f"grep {pattern!r}",
+            hint=f"bajá limit (hay {len(filas)}) o afiná pattern/include")
+
+    registry.register_function(
+        grep_tool, name="grep",
+        description=("Busca un patrón regex en el CONTENIDO de los archivos y devuelve "
+                     "ruta:línea: texto. Usalo para encontrar donde está algo; para listar "
+                     "archivos por nombre usá glob."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "pattern": {"type": "string", "description": "Regex a buscar (ej: 'def main' o 'TODO|FIXME')"},
+            "path": {"type": "string", "description": "Archivo o directorio donde buscar (default '.')"},
+            "include": {"type": "string", "description": "Filtro de archivos glob (ej: '*.py')"},
+            "limit": {"type": "integer", "description": "Máximo TOTAL de coincidencias (1-200, default 50)"}},
+            "required": ["pattern"], "additionalProperties": False})
 
     async def repo_map_tool(root: str = ".", budget_tokens: int = 2000,
                             max_files: int = 300) -> str:
