@@ -120,6 +120,27 @@ def test_commits_locales_no_se_tocan(repos):
     assert "local" in (res.get("blocked") or "").lower()
 
 
+def test_sin_trackear_no_bloquea_el_update(repos):
+    """`.venv/` o `memories.json` sin trackear no impiden el pull.
+
+    En la practica toda PC tiene carpetas asi (entornos, volcados del brain).
+    Contarlas como "cambios locales" dejaba el auto-update frenado para siempre.
+    """
+    origen, clon = repos
+    _nuevo_commit(origen, "app.py", "print('v4')\n")
+    (clon / ".venv").mkdir()
+    (clon / ".venv" / "pyvenv.cfg").write_text("home = C:\\Python\n", encoding="utf-8")
+    (clon / "memories.json").write_text("{}\n", encoding="utf-8")
+
+    res = su.apply(clon, CFG)
+    assert res["applied"] is True
+    assert res["dirty"] == 0
+    assert res.get("untracked") == 2
+    assert (clon / "app.py").read_text(encoding="utf-8") == "print('v4')\n"
+    # Y siguen ahi despues del pull.
+    assert (clon / "memories.json").is_file()
+
+
 def test_rama_inexistente_reporta_en_vez_de_romper(repos):
     _, clon = repos
     cfg = {**CFG, "git_branch": "no-existe"}

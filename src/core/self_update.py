@@ -9,7 +9,9 @@ cuando la ventana aparece, ya es la version nueva.
 Reglas (si algo no cuadra, NO se toca nada y la app arranca igual):
 
 - `git pull --ff-only`: si el remoto divergio o hay commits locales, no se toca.
-- Arbol con cambios sin commitear: no se toca (puede ser trabajo de alguien).
+- Archivos versionados con cambios sin commitear: no se toca (puede ser trabajo
+  de alguien). Los archivos SIN trackear (`.venv/`, `brain/memories.json`,
+  volcados de base) no bloquean: existen asi en todas las PC y no los pisa un pull.
 - Sin repo git (instalacion por zip/release): se reporta y se sigue.
 - Solo se recompila lo que cambio (`ui/dist`, `electron/dist`) y solo si hay npm.
 - Nunca se tocan datos: `data/`, `brain/`, `workspace/`, `.venv*` estan ignorados.
@@ -138,30 +140,41 @@ def repo_state(root: Path = ROOT) -> dict[str, Any]:
     code, out, _ = _git(root, "rev-parse", "--is-inside-work-tree", timeout=10)
     if code != 0 or out.strip() != "true":
         return {"is_repo": False, "branch": "", "head": "", "dirty": 0,
-                "dirty_files": [], "reason": "no es un repo git"}
+                "dirty_files": [], "untracked": 0, "untracked_files": [],
+                "reason": "no es un repo git"}
     _, top, _ = _git(root, "rev-parse", "--show-toplevel", timeout=10)
     top_raw = top.strip()
     if not top_raw:
         return {"is_repo": False, "branch": "", "head": "", "dirty": 0,
-                "dirty_files": [], "reason": "git no reporto la raiz del repo"}
+                "dirty_files": [], "untracked": 0, "untracked_files": [],
+                "reason": "git no reporto la raiz del repo"}
     try:
         same = os.path.normcase(str(Path(top_raw).resolve())) == os.path.normcase(str(Path(root).resolve()))
     except OSError:
         same = False
     if not same:
         return {"is_repo": False, "branch": "", "head": "", "dirty": 0, "dirty_files": [],
-                "repo_root": top_raw,
+                "untracked": 0, "untracked_files": [], "repo_root": top_raw,
                 "reason": f"el proyecto no es la raiz del repo (el .git esta en {top_raw})"}
     _, branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD", timeout=10)
     _, head, _ = _git(root, "rev-parse", "--short", "HEAD", timeout=10)
     _, porcelain, _ = _git(root, "status", "--porcelain", timeout=20)
     files = [ln for ln in porcelain.splitlines() if ln.strip()]
+    # Solo lo que git va a pisar con el pull: archivos versionados modificados
+    # o en el index. Los "??" (sin trackear) NO bloquean nada: un `.venv/`,
+    # `brain/memories.json` o un volcado de base viven asi en todas las PC, y
+    # contarlos como "cambios locales" dejaba el auto-update frenado de por vida.
+    # Si un pull chocara con uno de ellos, git aborta solo y avisa.
+    modificados = [ln for ln in files if not ln.startswith("??")]
+    sueltos = [ln[3:].strip() for ln in files if ln.startswith("??")]
     return {
         "is_repo": True,
         "branch": branch.strip(),
         "head": head.strip(),
-        "dirty": len(files),
-        "dirty_files": files[:20],
+        "dirty": len(modificados),
+        "dirty_files": modificados[:20],
+        "untracked": len(sueltos),
+        "untracked_files": sueltos[:20],
     }
 
 
