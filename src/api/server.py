@@ -6305,6 +6305,201 @@ def _openai_model_target(model: str) -> dict:
     return {"requested": requested, "gema": "", "model": None, "fallback": True}
 
 
+def _openai_normalize_tools(tools) -> list[dict]:
+    """Valida y normaliza el campo `tools` del request (shape OpenAI)."""
+    if not isinstance(tools, list):
+        raise ValueError("tools debe ser una lista")
+    out = []
+    for i, t in enumerate(tools):
+        if not isinstance(t, dict):
+            raise ValueError(f"tools[{i}] debe ser un objeto")
+        typ = t.get("type")
+        if typ not in (None, "function"):
+            raise ValueError(f"tools[{i}].type no soportado: {typ!r} (solo 'function')")
+        fn = t.get("function") if isinstance(t.get("function"), dict) else t
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"tools[{i}].function.name requerido")
+        params = fn.get("parameters")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError(f"tools[{i}].function.parameters debe ser un objeto")
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": str(fn.get("description") or ""),
+                "parameters": params or {"type": "object", "properties": {}},
+            },
+        })
+    return out
+
+
+def _openai_to_llm_messages(messages: list) -> list:
+    """Convierte mensajes OpenAI (assistant.tool_calls, role=tool) a LLMMessage."""
+    import json as _js
+
+    from src.core.provider_base import LLMMessage, ToolCall
+
+    out = []
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "user")
+        content = m.get("content")
+        images = None
+        if isinstance(content, list):
+            texts, imgs = [], []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    texts.append(str(part.get("text") or ""))
+                elif part.get("type") == "image_url":
+                    raw = part.get("image_url")
+                    url = raw.get("url") if isinstance(raw, dict) else raw
+                    if isinstance(url, str) and url.startswith("data:"):
+                        imgs.append(url)
+            content = "\n".join(t for t in texts if t)
+            images = tuple(imgs) or None
+        calls = []
+        for j, tc in enumerate(m.get("tool_calls") or []):
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = _js.loads(args) if args.strip() else {}
+                except Exception:
+                    args = {"_raw": args}
+            if not isinstance(args, dict):
+                args = {"_raw": args}
+            calls.append(ToolCall(
+                id=str(tc.get("id") or f"call_{i}_{j}"),
+                name=str(fn.get("name") or ""),
+                arguments=args,
+            ))
+        out.append(LLMMessage(
+            role=role,
+            content=None if content is None else str(content),
+            tool_calls=tuple(calls),
+            tool_call_id=str(m.get("tool_call_id") or ""),
+            images=images,
+        ))
+    return out
+
+
+async def _openai_tools_completion(body: dict, target: dict, tools: list[dict],
+                                   stream: bool, user_text: str):
+    """Passthrough de tools: NO ejecutamos, devolvemos tool_calls (estandar OpenAI).
+
+    Antes `/v1/chat/completions` descartaba `tools` en silencio y respondia texto
+    con `finish_reason="stop"`: un cliente OpenAI (opencode, Cline, Continue)
+    concluia que el modelo no quiso usar herramientas y el turno se degradaba a
+    charla. El contrato correcto es devolver `tool_calls` y que el cliente las
+    ejecute (el harness interno tiene su propio loop y no debe correr dos veces).
+    """
+    import json as _js
+
+    from src.core.provider_router import infer_hint
+
+    msgs = _openai_to_llm_messages(body.get("messages") or [])
+    hint = None
+    if target["gema"]:
+        try:
+            from src.core.gema_profiles import hint_for_gema
+            hint = hint_for_gema(target["gema"])
+        except Exception:
+            hint = None
+    elif not target["model"]:
+        hint = infer_hint(user_text)
+
+    router = _get_router(_load_config_safe())
+    try:
+        resp = await router.chat(msgs, tools=tools, model=target["model"], hint=hint)
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger("nexus-v3").exception("openai compat tools error: %s", e)
+        raise HTTPException(status_code=500, detail="no se pudo completar la solicitud de tools")
+
+    tc_out = [
+        {
+            "id": tc.id or f"call_{i}",
+            "type": "function",
+            "function": {
+                "name": tc.name,
+                "arguments": _js.dumps(tc.arguments or {}, ensure_ascii=False),
+            },
+        }
+        for i, tc in enumerate(resp.tool_calls or ())
+    ]
+    finish = "tool_calls" if tc_out else (resp.finish_reason or "stop")
+    usage_raw = resp.usage or {}
+    uso = {k: int(usage_raw.get(k, 0) or 0)
+           for k in ("prompt_tokens", "completion_tokens", "total_tokens")}
+    model_id = target["gema"] or resp.model or target["model"] or target["requested"] or "nexus-v3"
+    hdrs = {
+        "x-nexus-gema": target["gema"],
+        "x-nexus-model": resp.model or target["model"] or "auto",
+        "x-nexus-tools": "passthrough",
+    }
+    if target["fallback"]:
+        hdrs["x-nexus-fallback"] = target["requested"]
+
+    if not stream:
+        _content = resp.content
+        if tc_out and not (_content or "").strip():
+            # Spec OpenAI: con tool_calls, content es null (no "").
+            _content = None
+        message: dict = {"role": "assistant", "content": _content}
+        if tc_out:
+            message["tool_calls"] = tc_out
+        return JSONResponse(
+            {
+                "id": "chatcmpl-nexus",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model_id,
+                "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+                "usage": uso,
+            },
+            headers=hdrs,
+        )
+
+    def _chunk(delta: dict, finish_reason=None, extra: dict | None = None) -> str:
+        payload = {
+            "id": "chatcmpl-nexus",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model_id,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        if extra:
+            payload.update(extra)
+        return f"data: {_js.dumps(payload, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        if resp.content:
+            yield _chunk({"content": resp.content})
+        if tc_out:
+            deltas = [
+                {
+                    "index": i,
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": tc["function"],
+                }
+                for i, tc in enumerate(tc_out)
+            ]
+            yield _chunk({"tool_calls": deltas})
+        yield _chunk({}, finish_reason=finish, extra={"usage": uso})
+        yield "data: [DONE]\n\n"
+
+    h = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    h.update(hdrs)
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=h)
+
+
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(req: Request):
     """Compat OpenAI. `stream=true` emite tokens a medida que el loop los produce
@@ -6340,6 +6535,17 @@ async def openai_chat_completions(req: Request):
         _lg.getLogger("nexus-v3").warning(
             "openai compat: modelo '%s' desconocido; se usa el routing automatico", model)
     stream = bool(body.get("stream"))
+    tools = body.get("tools")
+    if tools is not None:
+        try:
+            tools = _openai_normalize_tools(tools)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if tools and str(body.get("tool_choice") or "").strip().lower() == "none":
+            # tool_choice="none" es explicito: el cliente quiere texto.
+            tools = None
+    if tools:
+        return await _openai_tools_completion(body, target, tools, stream, user_text)
     if stream:
         # Streaming REAL (antes era buffered: el primer byte llegaba recien al final).
         # Reusa el mismo motor de eventos que /api/chat/stream, sin correr el turno dos veces.
