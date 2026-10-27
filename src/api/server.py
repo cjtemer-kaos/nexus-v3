@@ -1118,10 +1118,7 @@ async def get_providers_config():
 @app.put("/api/providers/config")
 async def put_providers_config(request: Request):
     """Save providers (+router). Validates and writes config.yaml."""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid json")
+    body = await _json_body(request)
     providers_in = body.get("providers")
     router_in = body.get("router")
     if not isinstance(providers_in, dict):
@@ -1191,10 +1188,7 @@ async def put_providers_config(request: Request):
 @app.post("/api/providers/test")
 async def test_provider(request: Request):
     """Test connection without saving. Body: {provider, base_url, api_key, auth_style, fallback_url?}"""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid json")
+    body = await _json_body(request)
     provider = (body.get("provider") or body.get("name") or "custom").strip().lower() or "custom"
     base_url = (body.get("base_url") or "").strip().rstrip("/")
     api_key = body.get("api_key") or ""
@@ -1579,6 +1573,11 @@ async def rag_index_graph(request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    # Un body que parsea pero no es objeto no es "sin body": es una llamada mal
+    # formada, y tomarla como {} dispara un indexado COMPLETO del grafo (minutos
+    # de trabajo en background) que nadie pidio.
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body debe ser un objeto JSON")
     background = body.get("background")
     if background is None:
         background = (int(body.get("limit", 0) or 0) == 0)
@@ -2329,11 +2328,20 @@ async def _json_body(request: Request, required: bool = True):
     """Parsea el body JSON del request. Body invalido -> 400 (no 500).
     required=False devuelve {} si el body falta o es invalido (endpoints opcionales)."""
     try:
-        return await request.json()
+        data = await request.json()
     except Exception:
         if required:
             raise HTTPException(status_code=400, detail="invalid json")
         return {}
+    # Un JSON valido no tiene por que ser un objeto: `[1,2,3]`, `"hola"` o `null`
+    # parsean bien y despues `body.get(...)` revienta con AttributeError -> 500.
+    # Son 21 endpoints con la misma falla; se corta aca, en el unico lugar por el
+    # que pasan los bodies.
+    if not isinstance(data, dict):
+        if required:
+            raise HTTPException(status_code=400, detail="body debe ser un objeto JSON")
+        return {}
+    return data
 
 
 @app.get("/api/fs/list")
@@ -2434,10 +2442,7 @@ async def fs_read(path: str):
 @app.put("/api/fs/write")
 async def fs_write(request: Request):
     from src.core.scope import ScopeDenied
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid json")
+    body = await _json_body(request)
     path = (body.get("path") or "").strip()
     content = body.get("content", "")
     if not path:
@@ -2605,10 +2610,7 @@ def _exec_jail(cmd: str, cwd_p, scope) -> str | None:
 async def exec_cmd(request: Request):
     from src.core.scope import ScopeDenied
     import subprocess, shlex
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid json")
+    body = await _json_body(request)
     command = (body.get("command") or body.get("cmd") or "").strip()
     cwd = (body.get("cwd") or "./workspace").strip() or "./workspace"
     try:
