@@ -269,7 +269,20 @@ def _changed_files(root: Path, old: str, new: str) -> list[str]:
     return [ln.strip().replace("\\", "/") for ln in out.splitlines() if ln.strip()]
 
 
+# Archivos de configuracion que cambian el bundler aunque no vivan en ui/.
+_BUILD_CONFIG_FILES = {
+    "tsconfig.json", "vite.config.ts", "vite.config.js", "tailwind.config.js",
+    "tailwind.config.ts", "postcss.config.js", "postcss.config.cjs",
+}
+
+
 def _needs_build(changed: list[str]) -> dict[str, bool]:
+    """Que hay que recompilar para que el cambio se vea de verdad.
+
+    `ui/dist` es un artefacto: si el pull trae `ui/src/…` nuevo y nadie corre
+    Vite, la ventana sigue sirviendo el bundle viejo. Por eso cualquier archivo
+    bajo `ui/` (menos `ui/dist/`) exige rebuild de la UI.
+    """
     ui = False
     electron = False
     for p in changed:
@@ -277,9 +290,35 @@ def _needs_build(changed: list[str]) -> dict[str, bool]:
             ui = True
         elif p.startswith("electron/") and not p.startswith("electron/dist/"):
             electron = True
-        elif p in ("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts"):
+        elif p in ("package.json", "package-lock.json") or p in _BUILD_CONFIG_FILES \
+                or p.startswith(("electron/tsconfig", "ui/tsconfig")):
             ui = electron = True
     return {"ui": ui, "electron": electron}
+
+
+def _ui_bundle_problem(root: Path, since: float) -> str:
+    """Verifica que el build haya dejado un bundle nuevo y coherente.
+
+    Un `vite build` que devuelve 0 pero escribe en otro lado (o un index.html
+    viejo apuntando a un asset que ya no existe) deja la ventana en blanco y
+    nadie se entera. Devuelve "" si esta todo bien.
+    """
+    import re
+
+    index = root / "ui" / "dist" / "index.html"
+    if not index.is_file():
+        return "no quedo ui/dist/index.html"
+    try:
+        if index.stat().st_mtime + 5 < since:
+            return "el build no regenero ui/dist/index.html"
+        html = index.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"no se pudo leer ui/dist/index.html: {e}"
+    refs = re.findall(r'(?:src|href)="(/?assets/[^"]+)"', html)
+    faltan = [r for r in refs if not (root / "ui" / "dist" / r.lstrip("/")).is_file()]
+    if faltan:
+        return f"index.html referencia assets que no existen: {', '.join(faltan[:3])}"
+    return ""
 
 
 def _npm(root: Path, script: str, timeout: float) -> str:
@@ -364,6 +403,7 @@ def apply(root: Path = ROOT, cfg: dict | None = None, fetch: bool = True) -> dic
         old_head = res.get("head") or ""
         remote = str(c.get("git_remote") or "origin")
         branch = str(c.get("git_branch") or "").strip() or res.get("branch") or "master"
+        pull_ts = time.time()
         code, out = _run(["git", "pull", "--ff-only", "--no-rebase", "--no-tags", remote, branch],
                          root, float(c.get("pull_timeout_s") or 180), env={
                              "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo",
@@ -380,12 +420,26 @@ def apply(root: Path = ROOT, cfg: dict | None = None, fetch: bool = True) -> dic
         new_head = st.get("head") or ""
         changed = _changed_files(root, old_head, new_head) if old_head and new_head else []
         built: dict[str, str] = {}
+        stale: list[str] = []
+        need = _needs_build(changed)
         if c.get("build_on_update", True):
-            need = _needs_build(changed)
             if need["electron"]:
                 built["electron"] = _npm(root, "build:electron", float(c.get("build_timeout_s") or 300))
+                if built["electron"] != "ok":
+                    stale.append("electron")
             if need["ui"]:
                 built["ui"] = _npm(root, "build:ui", float(c.get("build_timeout_s") or 300))
+                if built["ui"] != "ok":
+                    stale.append("ui")
+                else:
+                    problema = _ui_bundle_problem(root, since=pull_ts)
+                    if problema:
+                        built["ui"] = f"error:{problema}"
+                        stale.append("ui")
+        elif need["ui"] or need["electron"]:
+            # build_on_update apagado: el codigo nuevo esta en disco pero el
+            # bundle que sirve Electron sigue siendo el viejo.
+            stale.extend([k for k, v in need.items() if v])
 
         # Codigo Python/config no necesita compilar: necesita que el proceso
         # vuelva a arrancar para importar los modulos nuevos.
@@ -396,9 +450,14 @@ def apply(root: Path = ROOT, cfg: dict | None = None, fetch: bool = True) -> dic
         res.update(
             applied=True, ok=True, reason="", from_head=old_head, to_head=new_head,
             head=new_head, changed=changed[:200], changed_count=len(changed),
-            built=built, restart_required=restart, applied_at=_now_iso(),
+            built=built, needs_build=need, stale=stale, ui_stale="ui" in stale,
+            reload_required="ui" in built and built.get("ui") == "ok",
+            restart_required=restart, applied_at=_now_iso(),
             update_available=False, behind=0, commits=[],
         )
+        if stale:
+            _log("OJO: quedo sin recompilar " + ", ".join(stale)
+                 + f" (builds={built}); la app va a seguir mostrando la version vieja")
         _log(f"aplicado {old_head}->{new_head}: {len(changed)} archivo(s)"
              + (f" builds={built}" if built else "") + ("; requiere reinicio" if restart else ""))
         save_state({**last_state(), "last_check": res})
@@ -440,6 +499,9 @@ def main(argv: list[str] | None = None) -> int:
         if res.get("applied"):
             print(f"actualizado {res.get('from_head')} -> {res.get('to_head')}"
                   f" ({res.get('changed_count')} archivos)")
+            if res.get("stale"):
+                print("OJO: quedo sin recompilar " + ", ".join(res["stale"])
+                      + " -> la app sigue con la version vieja (ver data/self_update.log)")
         elif res.get("update_available"):
             print(f"hay {res.get('behind')} commit(s) nuevos ({res.get('blocked') or 'listo para aplicar'})")
         elif res.get("ok"):

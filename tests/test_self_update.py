@@ -6,7 +6,10 @@ arbol sucio, commits locales y remoto inexistente.
 """
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -96,6 +99,81 @@ def test_solo_ui_no_pide_reinicio_del_backend(repos):
     assert res["applied"] is True
     # Cambio de UI: se recompila, pero el backend Python no cambia.
     assert res["restart_required"] is False
+
+
+def _dist_nuevo(root: Path, asset: str = "index-nuevo.js") -> None:
+    dist = Path(root) / "ui" / "dist"
+    (dist / "assets").mkdir(parents=True, exist_ok=True)
+    (dist / "assets" / asset).write_text("console.log(1)\n", encoding="utf-8")
+    (dist / "index.html").write_text(
+        f'<script type="module" src="/assets/{asset}"></script>\n', encoding="utf-8")
+
+
+def test_ui_recompilada_pide_recargar_la_ventana(repos, monkeypatch):
+    """Si el build sale bien, el que tiene la ventana abierta tiene que recargarla."""
+    origen, clon = repos
+    _nuevo_commit(origen, "ui/src/App.tsx", "export default 2\n")
+
+    def fake_npm(root, script, timeout):
+        if script == "build:ui":
+            _dist_nuevo(root)
+        return "ok"
+
+    monkeypatch.setattr(su, "_npm", fake_npm)
+    res = su.apply(clon, {**CFG, "build_on_update": True})
+    assert res["applied"] is True
+    assert res["built"]["ui"] == "ok"
+    assert res["stale"] == []
+    assert res["ui_stale"] is False
+    assert res["reload_required"] is True
+    assert res["restart_required"] is False
+
+
+def test_sin_node_modules_la_ui_queda_marcada_vieja(repos):
+    """Sin npm/node_modules el pull entra pero el bundle sigue viejo: hay que decirlo."""
+    origen, clon = repos
+    _nuevo_commit(origen, "ui/src/App.tsx", "export default 3\n")
+    res = su.apply(clon, {**CFG, "build_on_update": True})
+    assert res["applied"] is True
+    assert res["built"]["ui"].startswith("skip")
+    assert res["ui_stale"] is True
+    assert "ui" in res["stale"]
+    assert res["reload_required"] is False
+
+
+def test_build_que_no_regenera_el_index_queda_stale(repos, monkeypatch):
+    origen, clon = repos
+    _nuevo_commit(origen, "ui/src/App.tsx", "export default 4\n")
+    # Sale 0 pero no escribio nada: seria el caso de un build a otro directorio.
+    monkeypatch.setattr(su, "_npm", lambda root, script, timeout: "ok")
+    res = su.apply(clon, {**CFG, "build_on_update": True})
+    assert res["applied"] is True
+    assert res["ui_stale"] is True
+    assert "index.html" in res["built"]["ui"]
+
+
+def test_needs_build_clasifica_por_carpeta():
+    assert su._needs_build(["ui/src/App.tsx"]) == {"ui": True, "electron": False}
+    assert su._needs_build(["ui/dist/assets/index.js"]) == {"ui": False, "electron": False}
+    assert su._needs_build(["electron/main.ts"]) == {"ui": False, "electron": True}
+    assert su._needs_build(["package.json"]) == {"ui": True, "electron": True}
+    # Python/config no toca ninguno de los dos bundles.
+    assert su._needs_build(["src/api/server.py", "config/config.yaml"]) == {"ui": False, "electron": False}
+
+
+def test_ui_bundle_problem_detecta_index_viejo_y_assets_faltantes(tmp_path):
+    _dist_nuevo(tmp_path, "index-abc.js")
+    assert su._ui_bundle_problem(tmp_path, since=0) == ""
+
+    index = tmp_path / "ui" / "dist" / "index.html"
+    os.utime(index, (1_000, 1_000))
+    assert "no regenero" in su._ui_bundle_problem(tmp_path, since=time.time())
+
+    (tmp_path / "ui" / "dist" / "assets" / "index-abc.js").unlink()
+    assert "no existen" in su._ui_bundle_problem(tmp_path, since=0)
+
+    shutil.rmtree(tmp_path / "ui")
+    assert "no quedo" in su._ui_bundle_problem(tmp_path, since=0)
 
 
 def test_arbol_sucio_no_se_toca(repos):

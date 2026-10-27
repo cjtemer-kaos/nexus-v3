@@ -24,6 +24,10 @@ type UpdateState = {
   commits?: string[]
   applied?: boolean
   restart_required?: boolean
+  reload_required?: boolean
+  ui_stale?: boolean
+  stale?: string[]
+  built?: Record<string, string>
   changed_count?: number
 }
 
@@ -209,14 +213,16 @@ function UpdatesCard() {
       const j = await r.json()
       setSt(j)
       if (j.applied) {
-        setOk(true)
         const w = window as unknown as { nexus?: { restartBackend?: () => Promise<unknown> }; location: Location }
-        if (j.restart_required && w.nexus?.restartBackend) {
+        if (j.ui_stale) {
+          setOk(false)
+          setMsg(`Se trajo el código nuevo, pero la UI no se pudo recompilar (${j.built?.ui || 'sin detalle'}). La ventana sigue mostrando el bundle anterior.`)
+        } else if (j.restart_required && w.nexus?.restartBackend) {
           setMsg('Actualizado. Reiniciando el backend para tomar el código nuevo…')
           await w.nexus.restartBackend()
           setTimeout(() => w.location.reload(), 1800)
         } else {
-          setMsg('Actualizado. Recargá la ventana para ver la UI nueva.')
+          setMsg(j.reload_required ? 'Actualizado. Recargando la ventana con la UI nueva…' : 'Actualizado. Recargá la ventana para ver la UI nueva.')
           setTimeout(() => w.location.reload(), 1500)
         }
       } else {
@@ -238,9 +244,11 @@ function UpdatesCard() {
       ? 'sin git en esta instalación'
       : nuevo
         ? `${st.behind} commit${st.behind === 1 ? '' : 's'} nuevo${st.behind === 1 ? '' : 's'}`
-        : desfasado
-          ? 'código nuevo en disco — falta reiniciar'
-          : 'al día'
+        : st.ui_stale
+          ? 'código nuevo, UI sin recompilar'
+          : desfasado
+            ? 'código nuevo en disco — falta reiniciar'
+            : 'al día'
 
   return (
     <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-4">
@@ -272,7 +280,7 @@ function UpdatesCard() {
         <span className="rounded-full border border-[#2C3037] bg-[#22262D] px-2 py-0.5 font-mono text-[#9BA1AA]">
           {st?.head || '—'}
         </span>
-        <span className={`rounded-full px-2 py-0.5 border ${nuevo || desfasado ? 'border-[#FFB86B]/30 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#3DDC84]/30 bg-[#3DDC84]/10 text-[#3DDC84]'}`}>
+        <span className={`rounded-full px-2 py-0.5 border ${nuevo || desfasado || st?.ui_stale ? 'border-[#FFB86B]/30 bg-[#FFB86B]/10 text-[#FFB86B]' : 'border-[#3DDC84]/30 bg-[#3DDC84]/10 text-[#3DDC84]'}`}>
           {estado}
         </span>
         {!!st?.dirty && (
@@ -287,6 +295,13 @@ function UpdatesCard() {
         </div>
       )}
       {st?.blocked && <div className="mt-2 text-[11px] text-[#FFB86B]">{st.blocked}</div>}
+      {!!st?.stale?.length && (
+        <div className="mt-2 rounded-lg border border-[#FFB86B]/30 bg-[#FFB86B]/10 p-2 text-[11px] text-[#FFB86B]">
+          El código nuevo está en disco, pero no se pudo recompilar: {st.stale.join(', ')}.
+          Esta máquina necesita <span className="font-mono">npm</span> y <span className="font-mono">node_modules</span> para
+          que el cambio de UI se vea; sin eso, la ventana sigue con el bundle anterior.
+        </div>
+      )}
       {!st?.ok && !!st?.reason && <div className="mt-1 text-[11px] text-[#9BA1AA]">{st.reason}</div>}
       {msg && <div className={`mt-2 text-[11px] ${ok ? 'text-[#3DDC84]' : 'text-[#FF6259]'}`}>{msg}</div>}
     </div>
