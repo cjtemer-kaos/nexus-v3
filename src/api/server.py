@@ -4820,10 +4820,18 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             except Exception:
                 cwd = "./workspace"
         cwd_p = scope.check_path(cwd)
+        # `mkdir` acá era una trampa: un typo en `cwd` creaba el directorio y el
+        # comando corría en un lugar vacío, con salida "normal" (medido:
+        # cwd="no-existe-dir" -> 200, `cd` devolvía la ruta nueva y el dir
+        # quedaba creado). exec no es una tool de escritura: si falta, se dice.
         if not cwd_p.exists():
-            cwd_p.mkdir(parents=True, exist_ok=True)
+            raise FileNotFoundError(
+                f"cwd no existe: {cwd}. exec no crea directorios; creálo antes "
+                f"(write_file dentro, o exec con mkdir) o mandá cwd vacío para usar la raíz.")
         if not cwd_p.is_dir():
-            raise NotADirectoryError("cwd debe ser directorio dentro de allowed_roots")
+            raise NotADirectoryError(
+                f"cwd debe ser un directorio y {cwd} es un archivo. "
+                f"Pasá el directorio que lo contiene.")
         return cwd_p
 
     def _validate_command(command: str) -> str:

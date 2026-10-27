@@ -1,6 +1,6 @@
-"""Bordes de las tools de archivos, medidos con el registry real.
+"""Bordes de las tools de archivos, medidas con el registry real.
 
-Tres defectos encontrados en un barrido (scope temporal, permiso `full`):
+Defectos encontrados en los barridos (scope temporal, permiso `full`):
 
 1. `edit(old="", new="X", replace_all=true)` DESTRUÍA el archivo:
    `str.count("")` devuelve len+1, así que reemplazaba "nada" entre cada par de
@@ -10,6 +10,9 @@ Tres defectos encontrados en un barrido (scope temporal, permiso `full`):
    el modelo reintentaba la misma ruta.
 3. `write_file(path=<directorio>)` salía como "[Errno 13] Permission denied",
    indistinguible de un bloqueo del scope jail.
+4. `glob(pattern="[")` devolvía `count: 0` sin avisar (Path.glob no lanza con un
+   patrón roto): indistinguible de "no hay archivos".
+5. `exec(cwd="no-existe")` creaba el directorio y corría el comando ahí.
 
 Y el regex inválido de grep/code_search hablaba en inglés y no decía qué
 escapar ("Invalid regex pattern: def (").
@@ -142,3 +145,29 @@ def test_grep_con_regex_invalida_dice_que_escapar(tools):
     assert "regex inválida" in msg
     assert "Escapá" in msg
     assert "Invalid regex" not in msg
+
+
+def test_exec_con_cwd_inexistente_no_crea_el_directorio(tools):
+    """Antes creaba el directorio y corría ahí: un typo en cwd daba salida normal."""
+    llamar, raiz = tools
+    destino = raiz / "no-existe-dir"
+
+    with pytest.raises(FileNotFoundError) as e:
+        llamar("exec", {"command": "echo hola", "cwd": "no-existe-dir"})
+
+    msg = str(e.value)
+    assert "cwd no existe" in msg
+    assert "no crea directorios" in msg
+    assert not destino.exists(), "exec no debe crear el cwd por su cuenta"
+
+
+def test_exec_con_cwd_que_es_archivo_lo_explica(tools):
+    llamar, _ = tools
+
+    with pytest.raises(NotADirectoryError) as e:
+        llamar("exec", {"command": "echo hola", "cwd": "sub/nota.txt"})
+
+    msg = str(e.value)
+    assert "un directorio" in msg and "sub/nota.txt" in msg
+
+

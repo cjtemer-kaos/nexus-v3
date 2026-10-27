@@ -7,6 +7,7 @@ import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uplo
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 import { Markdown } from '@/components/chat/Markdown'
+import { InlineAsks } from '@/components/chat/InlineAsks'
 
 type Pending = { key: string; file: File; preview?: string }
 
@@ -584,6 +585,7 @@ export function ChatPanel() {
             </div>
           </div>
         )}
+        <InlineAsks />
         <div ref={bottomRef} />
       </div>
 

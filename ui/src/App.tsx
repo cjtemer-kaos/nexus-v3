@@ -12,7 +12,6 @@ import { BoardPanel } from '@/components/board/BoardPanel'
 import { SkillsPanel } from '@/components/skills/SkillsPanel'
 import { SubAgentsPanel } from '@/components/subagents/SubAgentsPanel'
 import { ApprovalsPanel } from '@/components/approvals/ApprovalsPanel'
-import { QuestionsPanel } from '@/components/questions/QuestionsPanel'
 import { PlanPanel } from '@/components/plan/PlanPanel'
 import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
@@ -31,7 +30,6 @@ const viewLabels: Record<string, string> = {
   agents: 'Ayudantes',
   review: 'Cambios',
   approvals: 'Aprobaciones',
-  questions: 'Preguntas',
   plan: 'Plan',
   worktrees: 'Worktrees',
   usage: 'Uso',
@@ -193,6 +191,14 @@ export default function App() {
                     <div className={`mt-3 rounded-lg p-2 text-xs ${liveStatus ? 'bg-[#1E2127] text-[#9BA1AA]' : 'bg-[#FF6B6B]/10 text-[#FFA8A8]'}`}>
                       {liveStatus ? `WAL+FTS activo · sesión ${activeSession}` : 'Revisá data/backend.log'}
                     </div>
+                    {(liveStatus?.questions_pending ?? 0) + (liveStatus?.approvals_pending ?? 0) > 0 && (
+                      <button
+                        onClick={() => { setView('chat'); setShowNotifications(false) }}
+                        className="mt-2 w-full rounded-lg border border-[#4C9DFF]/40 bg-[#4C9DFF]/10 px-2 py-1.5 text-xs text-[#8CC1FF] hover:bg-[#4C9DFF]/20"
+                      >
+                        Responder en el chat
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -211,7 +217,6 @@ export default function App() {
           {view==='agents' && <AgentsPanel />}
           {view==='review' && <ReviewPanel />}
           {view==='approvals' && <ApprovalsPanel />}
-          {view==='questions' && <QuestionsPanel />}
           {view==='plan' && <PlanPanel />}
           {view==='worktrees' && <WorktreesPanel />}
           {view==='usage' && <UsagePanel />}
