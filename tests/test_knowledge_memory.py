@@ -163,6 +163,53 @@ def test_learn_upsert_topic_key(km):
     con.close()
 
 
+def test_learn_identico_no_sube_revision(km):
+    """Reaprender el MISMO contenido con topic_key no debe crear una revision falsa.
+
+    Antes: revision 2, una copia archivada en node_revisions y re-indexado de RAG
+    aunque el contenido fuera byte a byte igual.
+    """
+    r1 = km.learn("El router persiste en data/router_state.json", topic_key="router/estado")
+    assert r1["deduped"] is False and r1["revision"] == 1
+
+    r2 = km.learn("El router persiste en data/router_state.json", topic_key="router/estado")
+    assert r2["node_id"] == r1["node_id"]
+    assert r2["deduped"] is True
+    assert r2.get("outputs", {}).get("graph") == "deduped"
+
+    st = km.status()
+    assert st["nodes"] == 1
+    assert st["total_revisions"] == 0, "no debe archivar una copia identica"
+
+    import sqlite3
+    con = sqlite3.connect(str(km.db_path))
+    row = con.execute(
+        "SELECT revision_count, importance FROM nodes WHERE topic_key='router/estado'"
+    ).fetchone()
+    con.close()
+    assert row[0] == 1, "revision_count no debe incrementarse sin cambios"
+
+    # ... pero reafirmar SI puede subir la importancia (recencia/prioridad)
+    r3 = km.learn("El router persiste en data/router_state.json",
+                  topic_key="router/estado", importance=9)
+    assert r3["deduped"] is True
+    con = sqlite3.connect(str(km.db_path))
+    imp = con.execute(
+        "SELECT importance FROM nodes WHERE topic_key='router/estado'"
+    ).fetchone()[0]
+    con.close()
+    assert imp == 9
+
+
+def test_learn_contenido_distinto_si_sube_revision(km):
+    """El camino de supersede sigue intacto cuando el contenido cambia."""
+    r1 = km.learn("version uno", topic_key="cambia/contenido")
+    r2 = km.learn("version dos", topic_key="cambia/contenido")
+    assert r2["deduped"] is False
+    assert r2["revision"] == 2
+    assert km.status()["total_revisions"] == 1
+
+
 def test_learn_dedupe_hash_24h(km):
     r1 = km.learn("hecho repetido sin topic key")
     r2 = km.learn("hecho repetido sin topic key")

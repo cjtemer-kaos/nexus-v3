@@ -2049,6 +2049,16 @@ async def delete_session_endpoint(session_id: str):
 @app.get("/api/sessions/{session_id}/messages")
 async def get_messages(session_id: str, limit: int = 10000, offset: int = 0):
     slog = _session_log()
+    # Un id inexistente no es "historial vacio": la UI lo interpretaria como sesion
+    # nueva y el cliente no se enteraria de que perdio el id. Mismo contrato que
+    # /tree y /fork, que ya devuelven 404.
+    try:
+        if slog.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo leer la sesión: {e}")
     try:
         rows = slog.messages_with_ids(session_id, limit=limit)
     except Exception as e:
@@ -2066,11 +2076,21 @@ async def append_message(session_id: str, request: Request):
     if not content:
         raise HTTPException(status_code=400, detail="content required")
     slog = _session_log()
+    # Sin esto el INSERT choca con la FK y sale un 500 por un error del cliente.
+    if slog.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
     from src.core.session_log import Message
     msg = Message(role=role, content=content, tool_call_id=body.get("tool_call_id", ""),
                   tool_name=body.get("tool_name", ""), kind=body.get("kind", "") or "",
                   display_role=body.get("display_role", "") or "")
-    mid = slog.append(session_id, msg)
+    try:
+        mid = slog.append(session_id, msg)
+    except Exception as e:
+        import sqlite3 as _sq
+        if isinstance(e, _sq.IntegrityError):
+            # Carrera: la sesión se borró entre el chequeo y el INSERT.
+            raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id} ({e})")
+        raise HTTPException(status_code=500, detail=f"no se pudo guardar el mensaje: {e}")
     return {"id": mid, "session_id": session_id}
 
 

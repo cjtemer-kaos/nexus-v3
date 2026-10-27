@@ -26,10 +26,25 @@ def test_delete_session_flow():
 
 
 def test_delete_session_cascades_messages():
+    import sqlite3
+
+    from src.api.server import _session_log
+
     client = TestClient(app)
     sid = client.post("/api/sessions", json={"project": "pytest-delete"}).json()["id"]
     client.post(f"/api/sessions/{sid}/messages", json={"role": "user", "content": "hola borrado"})
     assert client.get(f"/api/sessions/{sid}/messages").json()["count"] >= 1
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
-    # la sesion ya no existe -> el endpoint de mensajes devuelve vacio/0
-    assert client.get(f"/api/sessions/{sid}/messages").json()["count"] == 0
+    # La sesion ya no existe: el endpoint responde 404 (igual que /tree y /fork),
+    # no un 200 vacio que el cliente confundiria con una sesion nueva.
+    assert client.get(f"/api/sessions/{sid}/messages").status_code == 404
+    # El objetivo real del test: no quedan mensajes huerfanos tras el cascade.
+    slog = _session_log()
+    con = sqlite3.connect(str(slog.db_path))
+    try:
+        huerfanos = con.execute(
+            "SELECT count(*) FROM messages WHERE session_id=?", (sid,)
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert huerfanos == 0

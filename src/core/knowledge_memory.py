@@ -488,6 +488,18 @@ class KnowledgeMemory:
                 if row:
                     node_id = int(row["id"])
                     prev_revision = int(row["revision_count"] or 0)
+                    # Reescritura identica: no hay nada que superseder. Subir la
+                    # revision aca inflaba revision_count, archivaba una copia
+                    # igual en node_revisions y volvia a indexar RAG sin cambios.
+                    if (row["content_hash"] or "") == chash:
+                        con.execute(
+                            "UPDATE nodes SET updated_at=?,"
+                            " importance=MAX(importance, ?) WHERE id=?",
+                            (now, int(importance or 5), node_id),
+                        )
+                        con.commit()
+                        return {"deduped": True, "node_id": node_id,
+                                "revision": prev_revision}
                     revision = prev_revision + 1
                     # supersede-not-delete: la version que sale queda archivada
                     # (y por lo tanto restaurable) antes de pisarla.

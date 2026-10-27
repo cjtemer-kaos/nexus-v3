@@ -167,3 +167,47 @@ def test_fts_tolerante_no_propaga_excepciones():
             raise RuntimeError("db bloqueada")
 
     assert _fts_search_tolerant(_Roto(), "barrido prueba dedupe") == []
+
+
+def test_get_messages_de_sesion_inexistente_da_404():
+    """Antes devolvia 200 con historial vacio: el cliente creia que era una sesion nueva."""
+    from fastapi.testclient import TestClient
+
+    from src.api.server import app
+
+    r = TestClient(app).get("/api/sessions/no-existe-abc123/messages")
+    assert r.status_code == 404, r.text
+    assert "inexistente" in r.json()["detail"].lower()
+
+
+def test_post_mensaje_a_sesion_inexistente_da_404_y_no_500():
+    """Antes el INSERT chocaba con la FK y salia un 500 por un error del cliente."""
+    from fastapi.testclient import TestClient
+
+    from src.api.server import app
+
+    r = TestClient(app).post(
+        "/api/sessions/no-existe-abc123/messages",
+        json={"role": "user", "content": "huerfano?"},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_mensajes_de_sesion_real_sigue_funcionando():
+    """La sesion existe -> 200 (no rompimos el camino normal)."""
+    from fastapi.testclient import TestClient
+
+    from src.api.server import _session_log, app
+
+    sess = _session_log().create_session(project="test-regresion-404")
+    try:
+        c = TestClient(app)
+        assert c.get(f"/api/sessions/{sess.id}/messages").status_code == 200
+        r = c.post(
+            f"/api/sessions/{sess.id}/messages",
+            json={"role": "user", "content": "hola"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["session_id"] == sess.id
+    finally:
+        _session_log().delete_session(sess.id)
