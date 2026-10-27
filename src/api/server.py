@@ -508,6 +508,91 @@ async def _distill_orphan_sessions(limit: int = 50) -> int:
     return n
 
 
+def _seed_bundle_path() -> Path | None:
+    """Bundle de arranque por defecto: el curado (26 nodos, instantaneo).
+
+    La base completa (nexus-base.nexuskg.json.gz, ~9k nodos) queda disponible para
+    importar a mano con POST /api/knowledge/import: importarla en el arranque pelea
+    con el mantenimiento del grafo y tarda minutos. Para forzarla:
+    NEXUS_SEED_BUNDLE=<ruta al bundle>.
+    """
+    import os as _os_seed
+
+    custom = str(_os_seed.environ.get("NEXUS_SEED_BUNDLE", "")).strip()
+    if custom:
+        p = Path(custom).expanduser()
+        return p if p.is_file() else None
+    p = _PROJECT_ROOT / "brain" / "seed" / "nexus-seed.nexuskg.json"
+    return p if p.is_file() else None
+
+
+def _seed_knowledge_if_empty() -> dict:
+    """Red de seguridad para un arranque en frio: deja la semilla curada en el grafo.
+
+    El instalador (scripts/bootstrap_brain.py) importa la base completa; esto cubre el
+    caso de ejecutar el .exe sin instalador o con un brain recien creado. Es idempotente
+    (marca `.seed-imported` en el brain), no pisa contenido existente y se apaga con
+    NEXUS_SEED_SKIP=1.
+    """
+    import gzip
+    import json as _json_seed
+    import os as _os_seed
+    import time as _time_seed
+
+    if str(_os_seed.environ.get("NEXUS_SEED_SKIP", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return {"skipped": "NEXUS_SEED_SKIP"}
+    path = _seed_bundle_path()
+    if path is None:
+        return {"skipped": "sin brain/seed"}
+    from src.core.knowledge_bundle import import_bundle, validate_bundle
+    from src.core.knowledge_memory import get_knowledge_memory
+
+    km = get_knowledge_memory()
+    try:
+        brain_dir = Path(km.status().get("db", "") or "").parent
+    except Exception:
+        brain_dir = Path()
+    marca = brain_dir / ".seed-imported" if str(brain_dir) not in {"", "."} else None
+    if marca is not None and marca.exists():
+        return {"skipped": "ya importado"}
+    try:
+        nodos = int(km.status().get("nodes", 0) or 0)
+    except Exception as e:
+        return {"skipped": f"status no disponible: {e}"}
+    if nodos > 200:
+        if marca is not None:
+            try:
+                marca.write_text("skip: grafo con datos\n", encoding="utf-8")
+            except Exception:
+                pass
+        return {"skipped": "grafo con datos", "nodes": nodos}
+    try:
+        if path.suffix == ".gz":
+            bundle = _json_seed.loads(gzip.open(path, "rb").read().decode("utf-8"))
+        else:
+            bundle = _json_seed.loads(path.read_text(encoding="utf-8"))
+        validate_bundle(bundle)
+    except Exception as e:
+        logger.warning("seed %s invalido: %s", path.name, e)
+        return {"skipped": f"bundle invalido: {e}"}
+    res = import_bundle(km, bundle, dry_run=False, overwrite=False,
+                        source_label=f"seed:{path.name}")
+    nodos_res = res.get("nodes") or {}
+    aristas_res = res.get("edges") or {}
+    detalle = (f"nodos nuevos={nodos_res.get('new', 0)} actualizados={nodos_res.get('updated', 0)} "
+               f"omitidos={nodos_res.get('skipped', 0)} · aristas nuevas={aristas_res.get('new', 0)}")
+    if marca is not None:
+        try:
+            marca.write_text(
+                f"{path.name} {_time_seed.strftime('%Y-%m-%dT%H:%M:%S')} {detalle}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+    logger.info("seed importado desde %s: %s", path.name, detalle)
+    return {"file": path.name, "nodes": nodos_res, "edges": aristas_res}
+
+
 @app.on_event("startup")
 async def _startup():
     logger.info("Starting Nexus v3 harness backend")
@@ -539,6 +624,11 @@ async def _startup():
         logger.info(f"SessionLog ready: {_state['brain'].get('brain_path')}")
     except Exception as e:
         logger.warning(f"SessionLog startup warning: {e}")
+    # Instalacion nueva: el grafo nace con la base versionada, no en blanco.
+    try:
+        _spawn_bg(asyncio.to_thread(_seed_knowledge_if_empty))
+    except Exception as e:
+        logger.debug("seed de conocimiento no arranco: %s", e)
     # Red de seguridad: destilar sesiones con turnos que nunca compactaron (background)
     try:
         import asyncio as _asyncio_d

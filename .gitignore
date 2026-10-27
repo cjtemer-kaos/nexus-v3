@@ -93,3 +93,6 @@ INSTALAR-LOG.txt
 
 # Backups del brain (incluye exports de tareas): nunca se versionan
 brain/backups/
+
+# Marca de seed ya importado en ESTA instalacion (no es conocimiento)
+brain/.seed-imported
