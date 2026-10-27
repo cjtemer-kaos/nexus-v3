@@ -348,8 +348,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                           <div className="font-medium text-white">{current.label}</div>
                           <div className="text-[#9BA1AA] font-mono text-[11px]">{current.id} · {current.ctx.toLocaleString()} ctx</div>
                         </>
+                      ) : selectedModel === 'auto' ? (
+                        <>
+                          <div className="font-medium text-white">Auto (router)</div>
+                          <div className="text-[#9BA1AA] font-mono text-[11px]">el harness elige según la tarea</div>
+                        </>
                       ) : (
-                        <div className="text-xs text-[#9BA1AA] mt-1">{isProvidersLoading ? 'Detectando…' : 'Ninguno — sin proveedores en línea'}</div>
+                        <div className="text-xs text-[#9BA1AA] mt-1">{isProvidersLoading ? 'Detectando…' : 'Ninguno — elegí uno en Proveedores LLM'}</div>
                       )}
                     </div>
                     <div className="rounded-lg bg-[#22262D] border border-[#2C3037] p-2.5">
