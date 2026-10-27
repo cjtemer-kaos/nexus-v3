@@ -47,6 +47,12 @@ class TeamRuntime:
             return key
         return self._aliases.get(key)
 
+    def _desconocido(self, key: str) -> dict:
+        """Error con los ids vivos: sin la lista el modelo no puede reintentar bien."""
+        activos = sorted(self._meta.keys())
+        cola = f" Activos: {', '.join(activos)}." if activos else " No hay equipos activos."
+        return {"ok": False, "error": f"team_id/child_id desconocido: {key}.{cola}"}
+
     def spawn(self, spec: SubAgentSpec, name: str = "") -> dict:
         team_id = (name or "").strip() or f"team-{uuid.uuid4().hex[:8]}"
         if team_id in self._tasks:
@@ -87,7 +93,7 @@ class TeamRuntime:
     async def await_member(self, key: str, timeout: float | None = None) -> dict:
         team_id = self._resolve(key)
         if team_id is None:
-            return {"ok": False, "error": f"team_id/child_id desconocido: {key}"}
+            return self._desconocido(key)
         task = self._tasks[team_id]
         meta = self._meta[team_id]
         try:
@@ -109,7 +115,7 @@ class TeamRuntime:
     async def send(self, key: str, message: str) -> dict:
         team_id = self._resolve(key)
         if team_id is None:
-            return {"ok": False, "error": f"team_id/child_id desconocido: {key}"}
+            return self._desconocido(key)
         child_id = self._meta[team_id].get("child_id", "")
         sent = False
         for _ in range(3):
@@ -123,7 +129,7 @@ class TeamRuntime:
     def inbox(self, key: str) -> dict:
         team_id = self._resolve(key)
         if team_id is None:
-            return {"ok": False, "error": f"team_id/child_id desconocido: {key}"}
+            return self._desconocido(key)
         child_id = self._meta[team_id].get("child_id", "")
         msgs = []
         try:
@@ -146,3 +152,4 @@ class TeamRuntime:
             item.pop("result", None)
             out.append(item)
         return out
+

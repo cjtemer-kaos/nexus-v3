@@ -83,3 +83,21 @@ def test_team_list_members():
         await asyncio.gather(*(rt.await_member(t, 5) for t in ("uno", "dos")))
 
     asyncio.run(run())
+
+
+def test_id_desconocido_dice_cuales_hay():
+    """Sin la lista, el modelo reintenta con otro id inventado."""
+    async def run():
+        rt = TeamRuntime(FakeSpawner())
+        solo = await rt.await_member("no-existe", timeout=1)
+        assert solo["ok"] is False
+        assert "No hay equipos activos" in solo["error"]
+
+        rt.spawn(SubAgentSpec(task="a"), name="scout")
+        con_equipo = rt.inbox("no-existe")
+        assert "Activos: scout" in con_equipo["error"]
+        assert rt.inbox("no-existe")["error"].count("no-existe") == 1
+        await rt.await_member("scout", timeout=5)
+
+    asyncio.run(run())
+

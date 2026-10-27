@@ -5374,6 +5374,12 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "required": ["query"], "additionalProperties": False},
     )
 
+    def _mcp_server_names(cli) -> list[str]:
+        try:
+            return [str(s.get("name")) for s in cli.list_servers() if s.get("name")]
+        except Exception:
+            return []
+
     async def mcp_list(server: str = "") -> str:
         """Lista los servidores MCP del bundle y sus tools (server vacío = solo servidores)."""
         import json as _j
@@ -5381,6 +5387,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         cli = get_mcp_client(_PROJECT_ROOT)
         if not server:
             return _j.dumps({"servers": await asyncio.to_thread(cli.list_servers)}, ensure_ascii=False)
+        nombres = await asyncio.to_thread(_mcp_server_names, cli)
+        if nombres and server not in nombres:
+            raise ValueError(f"servidor MCP desconocido: {server}. "
+                             f"Disponibles: {', '.join(sorted(nombres))}")
         return _j.dumps({"server": server, "tools": await asyncio.to_thread(cli.list_tools, server)}, ensure_ascii=False)
     registry.register_function(
         mcp_list, name="mcp_list",
@@ -5396,7 +5406,23 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         import json as _j
         from src.core.mcp_client import get_mcp_client
         cli = get_mcp_client(_PROJECT_ROOT)
-        res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
+        nombres = await asyncio.to_thread(_mcp_server_names, cli)
+        if nombres and server not in nombres:
+            raise ValueError(f"servidor MCP desconocido: {server}. "
+                             f"Disponibles: {', '.join(sorted(nombres))}")
+        try:
+            res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
+        except KeyError as e:
+            raise ValueError(str(e).strip("'\"")) from None
+        # "Tool ... not found" sin la lista obliga al modelo a adivinar el nombre
+        # correcto (y con 45 tools en playwright, adivinar es caro).
+        texto = str(res.get("content") if isinstance(res, dict) else res or "")
+        if isinstance(res, dict) and res.get("isError") and "not found" in texto.lower():
+            try:
+                res["available_tools"] = [t.get("name") for t in
+                                          await asyncio.to_thread(cli.list_tools, server)]
+            except Exception:
+                pass
         return _j.dumps(res, ensure_ascii=False)
     registry.register_function(
         mcp_call, name="mcp_call",
