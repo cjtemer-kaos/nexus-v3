@@ -1949,7 +1949,9 @@ async def _self_update_watcher() -> None:
             if up.get("auto", True):
                 from src.core import self_update as _su
 
-                res = await asyncio.to_thread(_su.check, _PROJECT_ROOT, up, True, 0.0)
+                # min_age: el lanzador ya hizo el fetch hace un instante; repetirlo
+                # en el primer ciclo solo gasta red.
+                res = await asyncio.to_thread(_su.check, _PROJECT_ROOT, up, True, 300.0)
                 _state["self_update"] = res
                 if res.get("update_available"):
                     logger.info(
