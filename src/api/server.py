@@ -4177,8 +4177,12 @@ def _get_spawner(session_id: str, router, scope, cfg=None):
     if sp is None:
         from src.core.sub_agent_spawner import SubAgentSpawner
 
-        async def _exec(task: str, gem: str = "auto", context: str = "", allowed_tools=()):
-            child_sid = f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}"
+        async def _exec(task: str, gem: str = "auto", context: str = "", allowed_tools=(),
+                        child_session_id: str = ""):
+            # La sesión hija la manda el spawner (`{padre}::child::{child_id}`); si
+            # el executor se usa suelto, se deriva del hash de la tarea.
+            child_sid = child_session_id or (
+                f"{session_id}::sub::{abs(hash((task, context))) % 10_000_000}")
             reg = _build_registry(scope, child_sid, cfg, router=router, include_subagents=False)
             # Set curado por gema (o el pedido explícito): menos tools = menos
             # superficie de error y menos tokens de esquema en el prompt.
@@ -5642,12 +5646,18 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return _json.dumps({"child_id": res.child_id, "status": res.status.value,
                             "result": res.result, "error": res.error}, ensure_ascii=False, default=str)
 
-    def sub_agent_message_tool(child_id: str, message: str) -> str:
-        """Envía un mensaje a un sub-agente continuable (child_id de sub_agent)."""
+    async def sub_agent_message_tool(child_id: str, message: str) -> str:
+        """Manda un mensaje a un sub-agente continuable y devuelve su respuesta."""
+        import json as _json
         sp = _SUB_SPAWNERS.get(session_id)
         if sp is None:
             raise RuntimeError("no hay sub-agentes en esta sesión")
-        return "ok" if sp.send_message(child_id, message) else "child_id no encontrado"
+        if getattr(sp, "resume_child", None) is None:
+            return "ok" if sp.send_message(child_id, message) else "child_id no encontrado"
+        res = await sp.resume_child(child_id, message)
+        return _json.dumps({"child_id": res.child_id, "status": res.status.value,
+                            "result": res.result, "error": res.error},
+                           ensure_ascii=False, default=str)
 
     def sub_agent_list_tool() -> str:
         """Lista los sub-agentes de la sesión (child_id, estado, profundidad)."""
@@ -5669,7 +5679,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     )
     registry.register_function(
         sub_agent_message_tool, name="sub_agent_message",
-        description="Envía un mensaje a un sub-agente continuable (child_id devuelto por sub_agent).",
+        description=("Manda un mensaje a un sub-agente continuable y devuelve SU RESPUESTA "
+                     "(child_id devuelto por sub_agent). El hijo debe haberse lanzado con "
+                     "mode='continuable' y haber terminado su turno anterior."),
         category="local",
         parameters={"type": "object", "properties": {"child_id": {"type": "string"}, "message": {"type": "string"}},
                     "required": ["child_id", "message"], "additionalProperties": False},
@@ -5759,7 +5771,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     )
     registry.register_function(
         team_mailbox_tool, name="team_mailbox",
-        description="Envía un mensaje al hijo (message no vacío) o lee su buzón (message vacío).",
+        description=("Envía un mensaje al hijo (message no vacío) o lee su buzón (vacío). Si el hijo "
+                     "ya terminó y es 'continuable', corre otro turno con ese mensaje. Después "
+                     "recogé la respuesta con team_await."),
         category="local",
         parameters={"type": "object", "properties": {
             "team_id": {"type": "string"},

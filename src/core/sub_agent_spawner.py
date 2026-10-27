@@ -130,6 +130,9 @@ class SubAgentSpawner:
         # PASO 3: registro de hijos (persiste para continuable) + buzones + interrupciones.
         self._children: Dict[str, SubAgentResult] = {}
         self._inbox: Dict[str, List[str]] = {}
+        # Spec original por hijo: `resume_child` corre otro turno con la MISMA
+        # gema/tools/timeout en vez de inventar un spec nuevo.
+        self._specs: Dict[str, SubAgentSpec] = {}
         self._interrupted: set[str] = set()
         self._child_scopes: Dict[str, frozenset] = {}
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -152,6 +155,20 @@ class SubAgentSpawner:
         if not spec.scope_roots:
             return self.scope_roots
         return self.scope_roots & frozenset(spec.scope_roots)
+
+    def _executor_kwargs(self, spec: SubAgentSpec, child_session_id: str = "") -> dict:
+        """Kwargs para el executor segun SU firma (executors viejos de 3 args siguen valiendo)."""
+        kwargs = {"gem": spec.gem, "context": spec.context}
+        try:
+            params = inspect.signature(self.executor).parameters
+            extra = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            if "allowed_tools" in params or extra:
+                kwargs["allowed_tools"] = tuple(spec.allowed_tools or ())
+            if child_session_id and ("child_session_id" in params or extra):
+                kwargs["child_session_id"] = child_session_id
+        except (TypeError, ValueError):
+            pass
+        return kwargs
 
     def _child_session_id(self, child_id: str) -> str:
         """Sesión hija aislada: namespace propio derivado del padre."""
@@ -386,6 +403,7 @@ class SubAgentSpawner:
         self._ensure_child_session(result.child_session_id)
         self._children[child_id] = result
         self._inbox.setdefault(child_id, [])
+        self._specs[child_id] = spec
         self._active_agents[agent_id] = result
         self._notify_status_change(agent_id, SubAgentStatus.BEGIN, "Created and queued")
 
@@ -403,18 +421,11 @@ class SubAgentSpawner:
             logger.info(f"  Task: {spec.task[:100]}")
 
             try:
-                # Ejecutar con timeout. `allowed_tools` es opcional: se pasa
-                # solo si el executor lo declara (compatibilidad con executors
-                # viejos de 3 argumentos).
-                call_kwargs = {"gem": spec.gem, "context": spec.context}
-                try:
-                    params = inspect.signature(self.executor).parameters
-                    if "allowed_tools" in params or any(
-                        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-                    ):
-                        call_kwargs["allowed_tools"] = tuple(spec.allowed_tools or ())
-                except (TypeError, ValueError):
-                    pass
+                # Ejecutar con timeout. `allowed_tools`/`child_session_id` se pasan
+                # solo si el executor los declara (compatibilidad con executors
+                # viejos). La sesión hija es la MISMA que reporta el spawner: antes
+                # el server inventaba otro id y la sesión reportada salía vacía.
+                call_kwargs = self._executor_kwargs(spec, result.child_session_id)
                 if inspect.iscoroutinefunction(self.executor):
                     task_result = await asyncio.wait_for(
                         self.executor(spec.task, **call_kwargs),
@@ -474,6 +485,102 @@ class SubAgentSpawner:
                     result.inbox = []
 
         return result
+
+    # -- continuacion de hijos continuables ------------------------------
+    def _check_resumible(self, child_id: str) -> SubAgentResult:
+        """Devuelve el registro si el hijo acepta otro turno; si no, ValueError con el motivo."""
+        rec = self._children.get(child_id)
+        if rec is None:
+            conocidos = ", ".join(sorted(self._children)[-10:]) or "ninguno"
+            raise ValueError(f"sub-agente desconocido: {child_id}. "
+                             f"Hijos de esta sesion: {conocidos}")
+        if rec.mode != "continuable":
+            raise ValueError(
+                f"el sub-agente {child_id} es '{rec.mode or 'one-shot'}': no acepta mas "
+                f"mensajes. Lanzalo con mode='continuable' si necesitas seguir hablando con el.")
+        if child_id in self._active_agents or rec.status in (
+                SubAgentStatus.PENDING, SubAgentStatus.BEGIN,
+                SubAgentStatus.ACTIVE, SubAgentStatus.RUNNING):
+            raise ValueError(
+                f"el sub-agente {child_id} sigue trabajando: espera su resultado "
+                f"(team_await / sub_agent_list) antes de mandarle otro mensaje.")
+        return rec
+
+    def can_resume(self, child_id: str) -> bool:
+        try:
+            self._check_resumible(child_id)
+            return True
+        except ValueError:
+            return False
+
+    async def resume_child(self, child_id: str, message: str = "") -> SubAgentResult:
+        """Corre otro turno del hijo continuable con lo que haya en su buzon.
+
+        `send_message` solo encolaba: nadie drenaba el buzon y el mensaje nunca
+        se respondia. Aca se drena, se ejecuta un turno mas con la MISMA gema,
+        tools y timeout del spec original, y se actualiza el registro del hijo.
+        """
+        rec = self._check_resumible(child_id)
+        spec = self._specs.get(child_id) or SubAgentSpec(
+            task=rec.task, gem="auto", mode=rec.mode)
+        pendientes = list(self.drain_inbox(child_id) or [])
+        nuevo = (message or "").strip()
+        if nuevo:
+            pendientes.append(nuevo)
+        turno = "\n\n".join(p for p in pendientes if p).strip()
+        if not turno:
+            raise ValueError(f"el sub-agente {child_id} no tiene mensajes pendientes: "
+                             f"manda uno (message=...) para reanudarlo.")
+
+        rec.status = SubAgentStatus.ACTIVE
+        rec.progress = f"Reanudado: {turno[:120]}"
+        rec.active_time = datetime.now().isoformat()
+        rec.started_at = rec.active_time
+        rec.completed_at = ""
+        rec.error = ""
+        self._active_agents[rec.agent_id] = rec
+        self._notify_status_change(rec.agent_id, SubAgentStatus.ACTIVE, rec.progress)
+        self._stats["total_spawned"] += 1
+        start = time.time()
+        logger.info(f"Sub-agent resumed: {child_id} (gem: {spec.gem})")
+        try:
+            kwargs = self._executor_kwargs(spec, rec.child_session_id)
+            if inspect.iscoroutinefunction(self.executor):
+                out = await asyncio.wait_for(self.executor(turno, **kwargs),
+                                             timeout=spec.timeout_seconds)
+            else:
+                out = self.executor(turno, **kwargs)
+            rec.status = SubAgentStatus.COMPLETED
+            rec.result = out
+            rec.progress = "Reanudado y completado"
+            if isinstance(out, dict):
+                rec.tokens_used = out.get("tokens_used", rec.tokens_used)
+            self._stats["total_completed"] += 1
+            self._notify_status_change(rec.agent_id, SubAgentStatus.COMPLETED, "Done")
+        except asyncio.TimeoutError:
+            rec.status = SubAgentStatus.TIMEOUT
+            rec.error = f"Timeout after {spec.timeout_seconds}s"
+            rec.progress = f"Timed out after {spec.timeout_seconds}s"
+            self._stats["total_timeout"] += 1
+            self._notify_status_change(rec.agent_id, SubAgentStatus.TIMEOUT, rec.progress)
+        except asyncio.CancelledError:
+            rec.status = SubAgentStatus.CANCELLED
+            rec.progress = "Cancelled by user"
+            self._stats["total_cancelled"] += 1
+            self._notify_status_change(rec.agent_id, SubAgentStatus.CANCELLED, "Cancelled")
+        except Exception as e:
+            rec.status = SubAgentStatus.FAILED
+            rec.error = str(e)
+            rec.progress = f"Failed: {str(e)[:100]}"
+            self._stats["total_failed"] += 1
+            self._notify_status_change(rec.agent_id, SubAgentStatus.FAILED, rec.progress)
+            logger.error(f"Sub-agent resume failed: {child_id} - {e}")
+        finally:
+            rec.completed_at = datetime.now().isoformat()
+            rec.duration_ms = (time.time() - start) * 1000
+            self._stats["total_duration_ms"] += rec.duration_ms
+            self._active_agents.pop(rec.agent_id, None)
+        return rec
 
     def cancel_agent(self, agent_id: str) -> bool:
         """Cancela un sub-agente activo"""
