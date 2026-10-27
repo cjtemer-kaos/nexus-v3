@@ -3179,8 +3179,19 @@ async def tools_list():
     cfg = _load_config_safe()
     scope = _build_scope(cfg)
     reg = _build_registry(scope, "api", cfg)
-    return {"tools": [{"name": t.name, "description": t.description, "category": t.category}
-                      for t in reg.list()]}
+    # `parameters` es el JSON Schema que la tool ya declara al registrarse. Sin
+    # el, un cliente (UI, MCP, ACP, OpenAI-compat) conocia el nombre pero no los
+    # argumentos, y no podia construir el prompt ni validar antes de llamar.
+    return {"tools": [
+        {
+            "name": t.name,
+            "description": t.description,
+            "category": t.category,
+            "parameters": t.parameters or {"type": "object", "properties": {}},
+            "source": t.source,
+        }
+        for t in reg.list()
+    ]}
 
 
 @app.post("/api/worktree/remove")

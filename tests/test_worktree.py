@@ -83,3 +83,45 @@ def test_remove_dirty_worktree_requires_force(repo, tmp_path):
     forced = remove_worktree(repo, str(target), force=True)
     assert forced["ok"] is True, forced.get("output")
     assert not target.exists()
+
+
+def _rama_existe(repo, branch):
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo, capture_output=True, text=True,
+    ).returncode == 0
+
+
+def test_path_ocupado_no_deja_rama_huerfana(repo, tmp_path):
+    """git crea la rama antes de validar el destino: el 409 no debe ensuciar .git."""
+    ocupado = tmp_path / "ocupado.txt"
+    ocupado.write_text("x", encoding="utf-8")
+    res = add_worktree(repo, str(ocupado), "nexus/ocupado")
+    assert res["ok"] is False
+    assert "no esta vacio" in res["output"]
+    assert not _rama_existe(repo, "nexus/ocupado")
+
+
+def test_directorio_vacio_sigue_siendo_valido(repo, tmp_path):
+    vacio = tmp_path / "vacio"
+    vacio.mkdir()
+    res = add_worktree(repo, str(vacio), "nexus/vacio")
+    assert res["ok"] is True, res.get("output")
+
+
+def test_rollback_deshace_rama_creada_por_git(repo, tmp_path, monkeypatch):
+    """Si git alcanza a crear la rama y despues falla, se borra."""
+    import src.core.worktree as wt
+
+    real_run = wt._run
+
+    def fake_run(args, cwd, timeout=60):
+        if list(args)[:2] == ["worktree", "add"]:
+            real_run(["branch", "nexus/rota", "HEAD"], cwd)
+            return 1, "boom simulado"
+        return real_run(args, cwd, timeout)
+
+    monkeypatch.setattr(wt, "_run", fake_run)
+    res = wt.add_worktree(repo, str(tmp_path / "wt-rota"), "nexus/rota")
+    assert res["ok"] is False
+    assert not _rama_existe(repo, "nexus/rota")

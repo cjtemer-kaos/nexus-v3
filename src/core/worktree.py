@@ -62,13 +62,37 @@ def list_worktrees(repo: str) -> list[dict]:
     return items
 
 
+def _branch_exists(repo: str, branch: str) -> bool:
+    rc, _ = _run(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], repo, timeout=15)
+    return rc == 0
+
+
 def add_worktree(repo: str, path: str, branch: str, base: str = "HEAD") -> dict:
     if not is_repo(repo):
         parent = repo_root(repo)
         hint = f"; la raíz del repo que lo contiene es {parent}" if parent else ""
         return {"ok": False, "error": f"no es repo git: {repo}{hint}"}
     path = os.path.abspath(path)
+    # `git worktree add -b` crea la RAMA antes de crear el arbol y, si el destino
+    # esta ocupado, falla dejando la rama huerfana. Nos adelantamos al caso comun
+    # (destino existente y no vacio) y, si git igual falla, deshacemos la rama
+    # que no existia antes.
+    if os.path.exists(path):
+        try:
+            ocupado = (not os.path.isdir(path)) or bool(os.listdir(path))
+        except OSError:
+            ocupado = True
+        if ocupado:
+            return {
+                "ok": False,
+                "path": path,
+                "branch": branch,
+                "output": f"el path ya existe y no esta vacio: {path}",
+            }
+    existia = _branch_exists(repo, branch)
     rc, out = _run(["worktree", "add", "-b", branch, path, base], repo, timeout=120)
+    if rc != 0 and not existia:
+        _run(["branch", "-D", branch], repo, timeout=20)
     return {"ok": rc == 0, "path": path, "branch": branch, "output": out}
 
 
