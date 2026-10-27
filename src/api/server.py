@@ -2436,10 +2436,83 @@ _EXEC_META = re.compile(r"[;&|`<>]|\$\(|\$\{|\r|\n")
 _EXEC_PATHY = re.compile(r"[\\/]|^[A-Za-z]:")
 
 
+_EXEC_TOKEN = re.compile(r"[^\s\"';&|<>()\[\]{},]+")
+
+
+def _secret_path_in_command(cmd: str, cwd_p, scope) -> str | None:
+    """Ruta protegida (secretos) referenciada por el comando, o None.
+
+    Se aplica SIEMPRE, incluso con permission='full': la garantia de
+    `Scope.check_path` ("ningun preset lee material de claves") se rompia por
+    aca. `/api/fs/read?path=.env` respondia 403 mientras
+    `POST /api/exec {"command": "type .env"}` devolvia el contenido: el jail de
+    exec se desactivaba entero en 'full' y la shell era la puerta de atras.
+
+    El chequeo es lexico (tokens que resuelven a un patrón de denegación), no
+    un sandbox de SO: frena `type .env`, `cat ../../x/.ssh/id_rsa`,
+    `powershell -c "Get-Content .env"`, pero no pretende parar ofuscacion
+    deliberada. Es defensa en profundidad sobre la misma lista de `Scope`.
+    """
+    from pathlib import Path as _P
+
+    if not getattr(scope.cfg, "deny_patterns", ()):
+        return None
+    for raw in _EXEC_TOKEN.findall(cmd or ""):
+        t = raw.strip("\"'")
+        if not t or t.startswith("-") or t.startswith("$") or len(t) > 400:
+            continue
+        tok = _P(t)
+        cands = [tok] if tok.is_absolute() else [tok, _P(cwd_p) / tok]
+        for cand in cands:
+            try:
+                if scope._is_denied(cand):
+                    return str(cand)
+            except Exception:
+                continue
+    return None
+
+
+def _decode_process_bytes(raw) -> str:
+    """Decodifica stdout/stderr de un subproceso sin perder texto.
+
+    Con `text=True` Python usa la codificacion ANSI del sistema (cp1252 en este
+    Windows). Cualquier salida UTF-8 (un README con acentos, `git log`, un JSON
+    con tildes) lanzaba UnicodeDecodeError DENTRO del hilo lector de
+    subprocess: `stdout` quedaba en None y el endpoint respondia
+    `{"ok": true, "output": ""}` — el cliente creia que el comando no imprimio
+    nada. Mismo criterio que `process_tree.run_shell_capture` (utf-8/replace)
+    para que la tool del agente y el endpoint den el mismo texto.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    return raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+
+def _exec_permission_error(cmd: str, cwd_p, scope) -> str | None:
+    """Motivo de bloqueo completo de un comando: jail + archivos protegidos.
+
+    Punto unico para las cuatro puertas de shell (HTTP /api/exec, tool exec,
+    pty_exec y jobs en background). Antes cada una repetia el chequeo del jail
+    y ninguna miraba los patrones de secretos.
+    """
+    jail = _exec_jail(cmd, cwd_p, scope)
+    if jail is not None:
+        return jail
+    secret = _secret_path_in_command(cmd, cwd_p, scope)
+    if secret is not None:
+        return f"comando bloqueado: referencia a un archivo protegido ({secret})"
+    return None
+
+
 def _exec_jail(cmd: str, cwd_p, scope) -> str | None:
     """Motivo de bloqueo del comando, o None si esta permitido en el jail."""
     from src.core.scope import ScopeDenied
-    perm = getattr(scope.cfg, "permission", "workspace_write") or "workspace_write"
+    # `scope.permission` (runtime > config) y no `scope.cfg.permission`: el
+    # peldaño del turno puede bajar a read_only mientras la config dice 'full',
+    # y el jail tiene que seguir al permiso EFECTIVO, no al estatico.
+    perm = getattr(scope, "permission", None) or "workspace_write"
     if perm == "full":
         return None
     m = _EXEC_META.search(cmd or "")
@@ -2502,16 +2575,17 @@ async def exec_cmd(request: Request):
             raise HTTPException(status_code=400, detail="cwd debe ser directorio dentro de allowed_roots")
     except ScopeDenied as e:
         raise HTTPException(status_code=403, detail=str(e))
-    _jail = _exec_jail(command, cwd_p, scope)
-    if _jail is not None:
-        raise HTTPException(status_code=403, detail=_jail)
+    _blocked = _exec_permission_error(command, cwd_p, scope)
+    if _blocked is not None:
+        raise HTTPException(status_code=403, detail=_blocked)
     try:
-        # ejecutar con shell — cwd jailado
+        # ejecutar con shell — cwd jailado. Sin `text=True`: se decodifica abajo
+        # en utf-8/replace para no perder la salida (ver _decode_process_bytes).
         proc = await asyncio.to_thread(
             subprocess.run, command, shell=True, cwd=str(cwd_p),
-            capture_output=True, text=True, timeout=timeout_s
+            capture_output=True, timeout=timeout_s
         )
-        out = (proc.stdout or "") + (proc.stderr or "")
+        out = _decode_process_bytes(proc.stdout) + _decode_process_bytes(proc.stderr)
         # truncar salida gigante (20k chars)
         if len(out) > 20000:
             out = out[:20000] + "\n... [truncado]"
@@ -4424,9 +4498,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         from src.core.process_tree import run_shell_capture
         cmd = _validate_command(command)
         cwd_p = _resolve_exec_cwd(cwd)
-        _jail = _exec_jail(cmd, cwd_p, scope)
-        if _jail is not None:
-            raise PermissionError(_jail)
+        _blocked = _exec_permission_error(cmd, cwd_p, scope)
+        if _blocked is not None:
+            raise PermissionError(_blocked)
         timeout = max(1, min(60, int(timeout)))
         rc, out = await run_shell_capture(cmd, cwd_p, timeout)
         from src.core.text_limits import truncate_head_tail
@@ -4760,9 +4834,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                 import json as _j
                 cmd = _validate_command(command)
                 cwd_p = _resolve_exec_cwd(cwd)
-                _jail = _exec_jail(cmd, cwd_p, scope)
-                if _jail is not None:
-                    raise PermissionError(_jail)
+                _blocked = _exec_permission_error(cmd, cwd_p, scope)
+                if _blocked is not None:
+                    raise PermissionError(_blocked)
                 pty_cwd = str(cwd_p) if (cwd or "").strip() else ""
                 out, err, code, interrupted = await _pty_run(
                     cmd, pty_cwd, max(1, min(120, int(timeout))))
@@ -4792,9 +4866,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         import json as _json
         cmd = _validate_command(command)
         cwd_p = _resolve_exec_cwd(cwd)
-        _jail = _exec_jail(cmd, cwd_p, scope)
-        if _jail is not None:
-            raise PermissionError(_jail)
+        _blocked = _exec_permission_error(cmd, cwd_p, scope)
+        if _blocked is not None:
+            raise PermissionError(_blocked)
         return _json.dumps(_jobs().start(cmd, cwd_p, label=label), ensure_ascii=False)
 
     def job_read_tool(job_id: str, cursor: int = 0, max_chars: int = 20000) -> str:
@@ -5387,10 +5461,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if _img_cfg.get("url"):
             _env["COMFYUI_URL"] = str(_img_cfg["url"])
         try:
-            p = await asyncio.to_thread(_sp.run, args, capture_output=True, text=True, timeout=1200, env=_env)
+            p = await asyncio.to_thread(_sp.run, args, capture_output=True, timeout=1200, env=_env)
         except _sp.TimeoutError:
             return "timeout: la generación excedió 20 min (ComfyUI lento/colgado)"
-        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        out = (_decode_process_bytes(p.stdout) + _decode_process_bytes(p.stderr)).strip()
         # El script externo grita "ERROR conectando a ComfyUI" por stderr y sale != 0.
         # Antes eso volvía como texto de éxito y el agente creía que había una imagen.
         if p.returncode != 0:
