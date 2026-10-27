@@ -5274,7 +5274,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
 
     # --- learn (Método OPCODE: vía única de escritura de conocimiento) ---
     async def learn_tool(content: str, topic_key: str = "", category: str = "general",
-                         tags: str = "") -> str:
+                         tags: str = "", importance: int = 5, source: str = "agent") -> str:
         """Persist knowledge in the knowledge graph (OPCODE method).
 
         Use AFTER learning something durable: findings, decisions, preferences,
@@ -5292,11 +5292,20 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if len(_c) < _min:
             raise ValueError(f"content demasiado corto para learn (min {_min} caracteres)")
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        # La escala del core es 1..10. Un modelo que manda 0.1 (escala 0-1) o 100
+        # quedaba con un valor fuera de rango sin aviso: se acota.
+        try:
+            _imp = int(round(float(importance)))
+        except (TypeError, ValueError):
+            _imp = 5
+        _imp = max(1, min(10, _imp))
         res = await asyncio.to_thread(
             lambda: get_knowledge_memory().learn(
                 content.strip(), topic_key=(topic_key or "").strip(),
                 category=(category or "general").strip(), tags=tag_list,
-                title=content.strip().split("\n")[0][:80], source="agent",
+                title=content.strip().split("\n")[0][:80],
+                source=(source or "agent").strip() or "agent",
+                importance=_imp,
                 session_id=session_id,
                 informed_by=list(getattr(registry, "current_memory_node_ids", []) or []),
             )
@@ -5311,6 +5320,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "topic_key": {"type": "string", "description": "Stable slug for evolving topics (UPSERT). Empty = append with dedupe."},
             "category": {"type": "string", "description": "general|concept|lesson|architecture|fix|fact"},
             "tags": {"type": "string", "description": "Comma-separated tags."},
+            "importance": {"type": "integer", "description": "1-10 (default 5). Relevancia para recall."},
+            "source": {"type": "string", "description": "Origen del aprendizaje (default 'agent')."},
         }, "required": ["content"], "additionalProperties": False},
     )
 

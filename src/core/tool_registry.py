@@ -126,6 +126,11 @@ def _coerce(val, want):
     try:
         if want == "integer" and isinstance(val, str):
             return int(float(val.strip()))
+        # Un float donde el schema pide integer (importance=0.5, timeout=2.5) se
+        # rechazaba con "debe ser integer": el modelo perdia el turno por un
+        # detalle de forma. Se redondea; el handler acota el rango si le importa.
+        if want == "integer" and isinstance(val, float) and not isinstance(val, bool):
+            return int(round(val))
         if want == "number" and isinstance(val, str):
             return float(val.strip())
         if want == "boolean" and isinstance(val, str):
@@ -170,6 +175,8 @@ ARG_ALIASES: dict[str, str] = {
     "query": "pattern",
     "pattern": "query",
     "regex": "pattern",
+    "topic": "topic_key",
+    "key": "topic_key",
     "cmd": "command",
 }
 

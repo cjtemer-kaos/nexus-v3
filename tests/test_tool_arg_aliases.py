@@ -88,7 +88,7 @@ def test_los_alias_declarados_tienen_destino_conocido():
     entera aca y no en produccion."""
     destinos_args = {d for d in ARG_ALIASES.values()}
     assert destinos_args <= {"path", "root", "old", "new", "replace_all",
-                             "pattern", "query", "command"}
+                             "pattern", "query", "command", "topic_key"}
     assert set(TOOL_ALIASES.values()) <= {
         "read_file", "write_file", "list_dir", "exec", "apply_patch",
         "web_fetch", "todo_write", "todo_read"}
