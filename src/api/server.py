@@ -5568,18 +5568,47 @@ async def memory_audit_report(days: int = 30, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _node_exists(node_id: int) -> bool:
+    """True si el id existe en el grafo. La tabla verdicts no tiene FK a nodes,
+    asi que sin este chequeo se acumulan veredictos de nodos que no existen."""
+    from src.brain.link import brain_path
+
+    db_path = brain_path() / "knowledge_graph.db"
+    if not db_path.exists():
+        return False
+    try:
+        con = sqlite3.connect(str(db_path), timeout=5.0)
+        try:
+            return con.execute(
+                "SELECT 1 FROM nodes WHERE id=?", (int(node_id),)
+            ).fetchone() is not None
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
 @app.post("/api/memory/verdict")
 async def memory_verdict(request: Request):
     """Marca un nodo: helpful / outdated / harmful / wrong."""
     body = await _json_body(request)
     if not isinstance(body, dict):
         body = {}
+    raw_id = body.get("node_id")
+    try:
+        node_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="node_id (int) requerido")
+    # Un veredicto sobre un nodo inexistente no se puede aplicar nunca: es una
+    # fila huerfana en el ledger. 404, igual que /api/graph/node.
+    if not await asyncio.to_thread(_node_exists, node_id):
+        raise HTTPException(status_code=404, detail=f"nodo inexistente: {node_id}")
     from src.core.memory_audit import get_memory_audit
 
     try:
         res = await asyncio.to_thread(
             get_memory_audit().add_verdict,
-            body.get("node_id"),
+            node_id,
             body.get("verdict"),
             batch=str(body.get("batch") or ""),
             note=str(body.get("note") or ""),

@@ -615,9 +615,35 @@ def test_status_reporta_aprobaciones_pendientes():
     assert isinstance(body["approvals_pending"], int) and body["approvals_pending"] >= 0
 
 
+def _grafo_minimo(brain: Path, ids: tuple[int, ...]) -> None:
+    """knowledge_graph.db con los nodos justos para validar veredictos."""
+    import sqlite3
+
+    brain.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(brain / "knowledge_graph.db"))
+    con.execute(
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, content TEXT, title TEXT,"
+        " category TEXT, source TEXT, importance INTEGER, tags TEXT,"
+        " content_hash TEXT, created_at TEXT, updated_at TEXT, access_count INTEGER,"
+        " last_accessed TEXT, topic_key TEXT, revision_count INTEGER)"
+    )
+    for nid in ids:
+        con.execute(
+            "INSERT INTO nodes (id, content, title, category, source, importance, tags,"
+            " content_hash, created_at, updated_at, access_count, topic_key, revision_count)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (nid, f"contenido {nid}", f"nodo {nid}", "general", "test", 5, "[]",
+             f"h{nid}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 0, "", 1),
+        )
+    con.commit()
+    con.close()
+
+
 def test_memoria_auditada_endpoints(tmp_path, monkeypatch):
     """El ledger de memoria se consulta y se marca sin tocar el brain real."""
     monkeypatch.setenv("NEXUS_V3_MEMORY_AUDIT", str(tmp_path / "memory_audit.db"))
+    monkeypatch.setenv("NEXUS_V3_BRAIN", str(tmp_path / "brain"))
+    _grafo_minimo(tmp_path / "brain", (1, 2))
 
     r = client.get("/api/memory/audit")
     assert r.status_code == 200, r.text[:200]
@@ -639,6 +665,15 @@ def test_memoria_auditada_endpoints(tmp_path, monkeypatch):
     r = client.get("/api/memory/audit")
     assert r.status_code == 200
     assert r.json()["totals"]["verdicts"] == 2
+
+    # Un nodo inexistente no puede acumular veredictos: la tabla verdicts no
+    # tiene FK a nodes, asi que sin chequeo quedaba una fila huerfana.
+    r = client.post("/api/memory/verdict", json={"node_id": 424242, "verdict": "helpful"})
+    assert r.status_code == 404, r.text[:200]
+    r = client.post("/api/memory/verdict", json={"verdict": "helpful"})
+    assert r.status_code == 400, r.text[:200]
+    r = client.get("/api/memory/audit")
+    assert r.json()["totals"]["verdicts"] == 2, "no se inserto nada para el nodo inexistente"
 
 
 def test_escalera_de_permisos_endpoints(monkeypatch):
