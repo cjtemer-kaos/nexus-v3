@@ -693,6 +693,9 @@
             "type": "string"
           }
         },
+        "include_default_roots": {
+          "type": "boolean"
+        },
         "watch": {
           "type": "boolean"
         }

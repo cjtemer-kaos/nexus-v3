@@ -340,5 +340,6 @@ def test_config_reminders_y_skills_y_schema():
 
     cfg = load_config()
     assert cfg["reminders"] == {"min_every_s": 300, "max_active": 50}
-    assert cfg["skills"] == {"roots": ["./data/skills"], "watch": False}
+    assert cfg["skills"] == {"roots": ["./data/skills"], "include_default_roots": True,
+                             "watch": False}
     assert validate_config(cfg) == []

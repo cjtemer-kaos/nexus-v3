@@ -12,6 +12,7 @@ export function SkillsPanel() {
   const [error, setError] = useState<string | null>(null)
   const [reloading, setReloading] = useState(false)
   const [tab, setTab] = useState<'skills' | 'tools' | 'plugins'>('tools')
+  const [q, setQ] = useState('')
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -43,7 +44,16 @@ export function SkillsPanel() {
 
   useEffect(() => { void load() }, [])
 
-  const items = tab === 'skills' ? skills : tools
+  const filtro = q.trim().toLowerCase()
+  const filtrar = <T extends { name: string; description?: string }>(list: T[]) =>
+    filtro
+      ? list.filter((x) =>
+          x.name.toLowerCase().includes(filtro) ||
+          (x.description || '').toLowerCase().includes(filtro))
+      : list
+  const skillsVisibles = filtrar(skills)
+  const toolsVisibles = filtrar(tools)
+  const TOPE = 300
 
   return (
     <div className="flex h-full flex-col">
@@ -64,6 +74,20 @@ export function SkillsPanel() {
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </Button>
       </div>
+      {tab !== 'plugins' && (
+        <div className="flex items-center gap-2 border-b border-[#2C3037] px-4 py-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filtrar por nombre o descripción…"
+            className="w-full rounded-md border border-[#2C3037] bg-[#15171B] px-2 py-1 text-xs text-[#EDEEF0] outline-none placeholder:text-[#6B7280] focus:border-[#4C9DFF]"
+          />
+          <span className="shrink-0 text-[10px] text-[#9BA1AA]">
+            {tab === 'skills' ? skillsVisibles.length : toolsVisibles.length}
+            {filtro ? ' de ' + (tab === 'skills' ? skills.length : tools.length) : ''}
+          </span>
+        </div>
+      )}
       <ScrollArea className="flex-1">
         {error && (
           <div className="flex items-center gap-2 border-b border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-4 py-2 text-xs text-[#FFA8A8]">
@@ -71,10 +95,10 @@ export function SkillsPanel() {
             <button onClick={() => void load()} className="underline hover:text-white">Reintentar</button>
           </div>
         )}
-        {items.length === 0 && !error && (
-          <div className="p-4 text-xs text-[#9BA1AA]">{loading ? 'Cargando…' : 'Nada para mostrar.'}</div>
+        {tab !== 'plugins' && (tab === 'skills' ? skillsVisibles : toolsVisibles).length === 0 && !error && (
+          <div className="p-4 text-xs text-[#9BA1AA]">{loading ? 'Cargando…' : filtro ? 'Ninguna coincide con el filtro.' : 'Nada para mostrar.'}</div>
         )}
-        {tab === 'tools' && tools.map((t) => (
+        {tab === 'tools' && toolsVisibles.slice(0, TOPE).map((t) => (
           <div key={t.name} className="border-b border-[#2C3037] px-4 py-2">
             <div className="flex items-center gap-2">
               <span className="font-mono text-xs text-[#8CC1FF]">{t.name}</span>
@@ -83,12 +107,17 @@ export function SkillsPanel() {
             <div className="mt-0.5 text-xs text-[#9BA1AA]">{t.description}</div>
           </div>
         ))}
-        {tab === 'skills' && skills.map((s) => (
+        {tab === 'skills' && skillsVisibles.slice(0, TOPE).map((s) => (
           <div key={s.path} className="border-b border-[#2C3037] px-4 py-2">
             <div className="font-mono text-xs text-[#C9B6FF]">{s.name}</div>
             <div className="mt-0.5 text-xs text-[#9BA1AA]">{s.description || '(sin descripción)'}</div>
           </div>
         ))}
+        {tab !== 'plugins' && (tab === 'skills' ? skillsVisibles : toolsVisibles).length > TOPE && (
+          <div className="px-4 py-3 text-[10px] text-[#9BA1AA]">
+            Mostrando {TOPE} de {(tab === 'skills' ? skillsVisibles : toolsVisibles).length}. Filtrá para ver el resto.
+          </div>
+        )}
         {tab === 'plugins' && (
           <>
             {plugins.length === 0 && !error && !loading && <div className="p-4 text-xs text-[#9BA1AA]">Sin plugins. Poné un .py en ./plugins con una función <span className="font-mono text-[#8CC1FF]">register(registry)</span>.</div>}

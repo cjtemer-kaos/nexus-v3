@@ -291,6 +291,8 @@ reminders:
 skills:
   roots:
   - ./data/skills
+  # Suma ./skills y ./data/skills al final (true). En tests se apaga para aislar.
+  include_default_roots: true
   watch: false
 memory:
   agent_write_enabled: true

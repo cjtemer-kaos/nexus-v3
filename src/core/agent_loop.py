@@ -849,6 +849,17 @@ class AgentLoop:
         except Exception:
             pass
 
+        # Skills instaladas: en vez de volcar el catalogo entero (miles de SKILL.md
+        # no entran en el prompt), se listan solo las que se parecen a la tarea y
+        # se ensena a buscar el resto con la tool `skill`.
+        try:
+            from src.core.skills_catalog import hint_block as _skills_hint
+            _shint = _skills_hint(task)
+            if _shint and messages and messages[0].role == "system":
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _shint)
+        except Exception:
+            pass
+
         # Ayudantes + gemas disponibles (lo inyecta el server para que el agente delegue).
         if extra_system and messages and messages[0].role == "system":
             try:

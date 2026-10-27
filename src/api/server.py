@@ -3074,26 +3074,30 @@ async def plan_endpoint(request: Request):
 
 
 @app.get("/api/skills")
-async def skills_list():
-    out = []
-    seen: set[str] = set()
-    for base in (_PROJECT_ROOT / "skills", _PROJECT_ROOT / "data" / "skills"):
-        if not base.is_dir():
-            continue
-        for d in sorted(base.iterdir()):
-            md = d / "SKILL.md"
-            if md.is_file() and d.name not in seen:
-                seen.add(d.name)
-                name, desc = d.name, ""
-                try:
-                    from src.core.skill_frontmatter import parse_frontmatter_file
-                    fm = parse_frontmatter_file(str(md)) or {}
-                    name = fm.get("name") or name
-                    desc = fm.get("description") or ""
-                except Exception:
-                    pass
-                out.append({"name": name, "description": desc, "path": str(md)})
-    return {"skills": out}
+async def skills_list(q: str = "", limit: int = 0, refresh: bool = False):
+    """Skills instaladas. Sin `q` devuelve el indice completo; con `q`, busca.
+
+    `limit=0` (default) no recorta, para que el panel de Capacidades siga viendo
+    todo. La busqueda tambien esta disponible como tool `skill` para el agente.
+    """
+    from src.core import skills_catalog
+
+    cfg = _load_config_safe()
+    if refresh:
+        skills_catalog.invalidate()
+    total = skills_catalog.list_skills(cfg)
+    if q:
+        entries = skills_catalog.search(q, cfg, limit=limit or 20)
+    else:
+        entries = total if not limit else total[: max(0, int(limit))]
+    out = [{"name": s.get("name"), "description": s.get("description") or "",
+            "path": s.get("path")} for s in entries]
+    return {
+        "skills": out,
+        "total": len(total),
+        "returned": len(out),
+        "roots": [str(r) for r in skills_catalog.skill_roots(cfg)],
+    }
 
 
 @app.get("/api/tools")
@@ -4100,6 +4104,64 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         category="local",
         parameters={"type": "object", "properties": {"text": {"type": "string"}},
                     "required": ["text"], "additionalProperties": False})
+
+    async def skill_tool(query: str = "", name: str = "", limit: int = 10) -> str:
+        """Descubre y carga skills instaladas (mismo patron que opencode).
+
+        Sin argumentos: cuantas hay y donde. Con `query`: busca por relevancia y
+        devuelve nombre+descripcion. Con `name`: devuelve el SKILL.md completo
+        para seguir sus instrucciones.
+        """
+        import json as _js
+
+        from src.core import skills_catalog as _sk
+
+        cfg_live = cfg if cfg is not None else _load_config_safe()
+        if name:
+            got = _sk.get_skill(name, cfg_live)
+            if got is None:
+                sug = _sk.search(name, cfg_live, limit=5)
+                return _js.dumps({
+                    "error": f"skill no encontrada: {name}",
+                    "suggestions": [s["name"] for s in sug],
+                    "hint": 'usa skill(query="...") para buscar',
+                }, ensure_ascii=False)
+            return _js.dumps({
+                "skill": {
+                    "name": got["name"],
+                    "description": got["description"],
+                    "path": got["path"],
+                    "whenToUse": got.get("whenToUse") or "",
+                    "truncated": got["truncated"],
+                },
+                "body": got["body"],
+            }, ensure_ascii=False)
+        if query:
+            hits = _sk.search(query, cfg_live, limit=max(1, min(50, int(limit or 10))))
+            return _js.dumps({
+                "query": query,
+                "count": len(hits),
+                "results": hits,
+                "hint": 'carga la elegida con skill(name="<nombre>")',
+            }, ensure_ascii=False)
+        st = _sk.stats(cfg_live)
+        return _js.dumps({
+            "installed": st["count"],
+            "roots": st["roots"],
+            "hint": 'skill(query="tema") busca; skill(name="x") carga el SKILL.md',
+        }, ensure_ascii=False)
+
+    registry.register_function(
+        skill_tool, name="skill",
+        description=("Descubre y carga skills instaladas (descubrimiento progresivo). "
+                     'skill(query="tema") busca; skill(name="x") devuelve el SKILL.md '
+                     'completo para seguirlo; skill() lista cuantas hay y sus roots.'),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "query": {"type": "string", "description": "Texto a buscar en nombre/descripcion/whenToUse."},
+            "name": {"type": "string", "description": "Nombre exacto de la skill a cargar completa."},
+            "limit": {"type": "integer", "description": "Maximo de resultados (1-50, default 10)."},
+        }, "required": [], "additionalProperties": False})
 
     if router is not None:
         async def roundtable_tool(task: str, seats: int = 3, timeout_s: int = 90) -> str:
