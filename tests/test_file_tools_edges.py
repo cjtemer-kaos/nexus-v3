@@ -101,6 +101,37 @@ def test_write_file_sigue_creando_directorios(tools):
     assert (raiz / "nuevo" / "a" / "b.txt").read_text(encoding="utf-8") == "hola"
 
 
+def test_glob_con_patron_roto_no_dice_cero_en_silencio(tools):
+    """`Path.glob("[")` no lanza: devolvía count 0 como si no hubiera archivos."""
+    llamar, _ = tools
+
+    for roto in ("[", "**/[", "[abc", "sub/[!]"):
+        with pytest.raises(ValueError) as e:
+            llamar("glob", {"pattern": roto})
+        msg = str(e.value)
+        assert "patrón glob inválido" in msg, roto
+        assert "corchete sin cerrar" in msg, roto
+        assert "'*.py'" in msg, roto
+
+
+def test_glob_con_clase_de_caracteres_valida_sigue_andando(tools):
+    llamar, raiz = tools
+
+    out = llamar("glob", {"pattern": "[no]*.txt"})
+    assert "nota.txt" in out
+
+    out2 = llamar("glob", {"pattern": "[!x]*.txt"})
+    assert "nota.txt" in out2
+
+
+def test_glob_con_corchete_literal_en_el_nombre_no_es_un_patron_roto(tools):
+    llamar, raiz = tools
+    (raiz / "bra[ck]et.md").write_text("# ojo\n", encoding="utf-8")
+
+    out = llamar("glob", {"pattern": "*"})
+    assert "bra[ck]et.md" in out
+
+
 def test_grep_con_regex_invalida_dice_que_escapar(tools):
     llamar, _ = tools
 

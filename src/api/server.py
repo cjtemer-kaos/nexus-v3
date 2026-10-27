@@ -2310,6 +2310,30 @@ async def dream_run():
 
 
 # ---- FS (Scope-guarded) ----
+def _glob_invalido(pat: str) -> str:
+    """Motivo por el que un patrón glob no puede matchear ('' = válido).
+
+    `Path.glob("[")` NO lanza: devuelve vacío, así que un patrón roto era
+    indistinguible de "no hay archivos" (medido: `glob(pattern="[")` devolvía
+    `count: 0` sin avisar y el modelo repetía el mismo patrón).
+    """
+    i = 0
+    while i < len(pat):
+        if pat[i] != "[":
+            i += 1
+            continue
+        j = i + 1
+        if j < len(pat) and pat[j] in "!^":
+            j += 1
+        if j < len(pat) and pat[j] == "]":
+            j += 1
+        cierre = pat.find("]", j)
+        if cierre < 0:
+            return f"corchete sin cerrar en {pat[i:][:40]!r}"
+        i = cierre + 1
+    return ""
+
+
 def _rel(p) -> str:
     """Ruta relativa al proyecto (POSIX) o absoluta si está fuera (no lanza)."""
     try:
@@ -2910,6 +2934,8 @@ async def session_rewind(session_id: str, request: Request):
 
 @app.get("/api/sessions/{session_id}/mode")
 async def session_mode_get(session_id: str):
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
     return {"mode": _SESSION_MODES.get(session_id, "act")}
 
 
@@ -2919,6 +2945,11 @@ async def session_mode_set(session_id: str, request: Request):
     mode = str(body.get("mode", "act"))
     if mode not in ("act", "plan"):
         raise HTTPException(status_code=400, detail="mode debe ser act|plan")
+    # Sin esto, `POST /sessions/no-existe/mode` devolvía 200 y dejaba un modo
+    # huérfano en _SESSION_MODES (persistido en disco): la sesión fantasma
+    # reaparecía como "plan" y nadie sabía de dónde salía.
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
     if mode == "plan":
         _SESSION_MODES[session_id] = "plan"
     else:
@@ -2937,7 +2968,12 @@ async def session_steer(session_id: str, request: Request):
     if e is not None:
         e.setdefault("steer", []).append(msg)
         return {"ok": True, "queued": True}
-    return {"ok": True, "queued": False}
+    # Antes respondía 200 igual para una sesión inexistente: el cliente creía
+    # que la instrucción había entrado a un turno que no existía.
+    if _session_log().get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesión inexistente: {session_id}")
+    return {"ok": True, "queued": False,
+            "note": "no hay un turno en curso en esa sesión: mandá el mensaje con /api/chat"}
 
 
 @app.get("/api/status")
@@ -4730,6 +4766,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         # mismo que `glob '**/*.py'` en vez de devolver 0 sin explicacion.
         if "/" not in pat and "\\" not in pat and not pat.startswith("**"):
             pat = "**/" + pat
+        # `Path.glob("[")` no lanza: devuelve vacío, así que un patrón roto se
+        # veía igual que "no hay archivos" y el modelo insistía con el mismo
+        # patrón. El motivo se dice en el momento.
+        motivo = _glob_invalido(pat)
+        if motivo:
+            raise ValueError(
+                f"patrón glob inválido ({pattern}): {motivo}. "
+                f"Válidos: '*', '*.py', 'src/**/*.ts', 'sub/*.{{py,md}}'.")
         found = []
         sizes: dict[str, int] = {}
         try:

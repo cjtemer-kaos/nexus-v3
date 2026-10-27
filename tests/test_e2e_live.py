@@ -618,6 +618,24 @@ def test_status_reporta_aprobaciones_pendientes():
     assert isinstance(body["questions_pending"], int) and body["questions_pending"] >= 0
 
 
+def test_sessions_mode_y_steer_inexistentes_son_404():
+    """Antes: `mode` devolvía 200 y dejaba un modo huérfano persistido en
+    data/session_modes.json; `steer` devolvía 200 queued=false como si hubiera
+    entrado a un turno que no existía. El resto de las rutas de sesión (messages,
+    tree, export, replay, usage, fork) ya eran 404."""
+    ghost = "sesion-fantasma-404"
+    assert client.get(f"/api/sessions/{ghost}/mode").status_code == 404
+    assert client.post(f"/api/sessions/{ghost}/mode", json={"mode": "plan"}).status_code == 404
+    assert client.post(f"/api/sessions/{ghost}/steer", json={"message": "hola"}).status_code == 404
+
+    # Y en una sesión real sigue funcionando.
+    sid = client.post("/api/sessions", json={"project": "modes"}).json()["id"]
+    assert client.post(f"/api/sessions/{sid}/steer", json={"message": "hola"}).status_code == 200
+    assert client.post(f"/api/sessions/{sid}/steer", json={"message": "  "}).status_code == 400
+    assert client.post(f"/api/sessions/{sid}/mode", json={"mode": "inventado"}).status_code == 400
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+
+
 def test_questions_endpoints_responden_y_validan():
     """Ciclo completo por HTTP: la pregunta queda pendiente, la UI la ve, la
     responde y el turno que esperaba recibe ese texto."""
