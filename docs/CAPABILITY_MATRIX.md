@@ -24,6 +24,8 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Checkpoints / rollback de FS | ✅ | `checkpoints.snapshot` antes de cada `write_file`/`edit` + `/api/checkpoints/restore` |
 | Lista de tareas persistente por sesión | ✅ | tools `todo_write`/`todo_read` (`todo_store`, tabla `todos` en `session.db`), `GET/POST /api/todos` |
 | Comandos propios en markdown | ✅ | `custom_commands.py`: cada `.md` en `.nexus/commands/` (o `~/.nexus/commands/`) es `/nombre`, con `$ARGUMENTS`, `$1..$9` y `@ruta` acotado al proyecto; `GET/POST /api/slash` refresca en cada llamada |
+| Formateo tras escribir | ✅ | `formatters.py` + hook en `agent_loop` después de `write_file`/`edit`/`apply_patch`: `ruff` del venv o PATH, `prettier` local (nunca `npx`), `gofmt`, `rustfmt`; por argv, con timeout, nunca lanza. Bloque `formatters:` en `config.yaml` (enabled/timeout_s/commands) con schema. Reporta `formatted` en el resultado del tool; `clean`/`skipped` no agregan ruido |
+| Generar AGENTS.md (`/init`) | ✅ | `project_init.py` + `/init [ruta] [force]`: stack, comandos de test/build/run y estructura leídos del disco (`pyproject`/`package.json`/`Cargo.toml`/`go.mod`, con BOM tolerado); no pisa un AGENTS.md existente sin `force` y respeta el peldaño de permisos (se niega con #0/#1) |
 
 ## 2. Multi-agente / orquestación
 
@@ -100,7 +102,7 @@ dedicados) y **opcionales por hardware** (STT local), no de arquitectura.
 
 | Prueba | Resultado |
 |---|---|
-| Suite completa (`pytest`) | **607 passed, 3 skipped, exit 0** (171 s) |
+| Suite completa (`pytest`) | **1.579 tests en 136 archivos, exit 0** (2026-10-27; `--collect-only -q` + corrida completa sin fallos) |
 | Skips | 3 honestos: no existe `cerebro.db` de v2 (el lector se cubre con brain sintético) |
 | Diagnóstico E2E (`e2e_diagnostic.py`) | **total=41 pass=41 fail=0** |
 | Modo app (Electron) | backend en puerto dinámico, `/api/health` 200, `ui/dist` servido, bundle servido == disco, favicon 200 |
