@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera,
   FileText, Database, ChevronRight, Volume2, MoreHorizontal, ArrowUp, GitBranch, CheckCircle2,
-  Undo2, Square, Download, ClipboardCopy,
+  Undo2, Square, Download, ClipboardCopy, ArrowDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore, type ChatMessage } from '@/store/app-store'
@@ -135,6 +135,25 @@ export function ChatPanel() {
   const [copiadoTodo, setCopiadoTodo] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const dragDepth = useRef(0)
+  // Si el usuario subió a leer, el stream no puede arrastrarlo al final.
+  const cercaDelFinal = useRef(true)
+  const [hayQueBajar, setHayQueBajar] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const onScrollMensajes = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const resto = el.scrollHeight - el.scrollTop - el.clientHeight
+    const abajo = resto < 120
+    cercaDelFinal.current = abajo
+    // El botón aparece exactamente cuando el auto-scroll se apagó: un solo umbral
+    // evita el caso raro de "no me sigue pero tampoco hay botón".
+    setHayQueBajar(!abajo)
+  }, [])
+  const irAlFinal = useCallback(() => {
+    cercaDelFinal.current = true
+    setHayQueBajar(false)
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [])
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_FALLBACK)
 
   // Los comandos los define el server (/api/slash); la lista local es solo fallback.
@@ -163,7 +182,7 @@ export function ChatPanel() {
     return () => { vivo = false }
   }, [activeSession, messages.length, isStreaming])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isStreaming, lastSteps, lastTodos])
+  useEffect(() => { if (cercaDelFinal.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isStreaming, lastSteps, lastTodos])
 
   const toast = useCallback((msg: string) => {
     setAttachToast(msg)
@@ -650,7 +669,7 @@ export function ChatPanel() {
         </div>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-[#9BA1AA]">
           {usage && usage.tokens > 0 && (
-            <span title={`${usage.messages} mensajes · ${usage.tokens} tokens`} className="hidden tabular-nums sm:inline">
+            <span title={`${usage.messages} mensajes · ${usage.tokens} tokens`} className="hidden whitespace-nowrap tabular-nums sm:inline">
               {usage.tokens >= 1000 ? `${(usage.tokens / 1000).toFixed(1)} mil` : usage.tokens} tokens
               {usage.cost.total_usd > 0 && ` · ${usage.cost.total_usd.toFixed(2)} US$`}
             </span>
@@ -716,7 +735,7 @@ export function ChatPanel() {
       </div>
 
       {/* messages */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <div ref={scrollRef} onScroll={onScrollMensajes} className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
         {messagesError && (
           <div className="flex items-center gap-2 rounded-lg border border-[#5A2A2A] bg-[#3A1F1F]/60 px-3 py-2 text-xs text-[#FFA8A8]">
@@ -917,6 +936,16 @@ export function ChatPanel() {
 
       {/* composer DECK */}
       <div className="relative border-t border-[#2C3037] bg-[#15171B] px-4 py-3">
+        {hayQueBajar && (
+          <button
+            onClick={irAlFinal}
+            aria-label="Ir al final del chat"
+            title="Ir al final"
+            className="absolute -top-12 right-6 z-40 flex items-center gap-1.5 rounded-full border border-[#2C3037] bg-[#1E2127] px-3 py-1.5 text-xs text-[#C9CDD3] shadow-xl hover:bg-[#262A31] hover:text-[#EDEEF0]"
+          >
+            <ArrowDown className="h-3.5 w-3.5" /> Ir al final
+          </button>
+        )}
         <div className="mx-auto w-full max-w-3xl">
         {/* previews de adjuntos */}
         {pending.length > 0 && (
