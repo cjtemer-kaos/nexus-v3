@@ -2384,14 +2384,6 @@ async def fs_list(path: str = "./workspace"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-_BOMS_TEXTO = (
-    (b"\xff\xfe\x00\x00", "utf-32"),
-    (b"\x00\x00\xfe\xff", "utf-32"),
-    (b"\xff\xfe", "utf-16"),
-    (b"\xfe\xff", "utf-16"),
-)
-
-
 def _leer_como_texto(p, size: int, etiqueta: str) -> str:
     """Contenido de texto, o 415 si el archivo es binario.
 
@@ -2403,17 +2395,17 @@ def _leer_como_texto(p, size: int, etiqueta: str) -> str:
 
     Un NUL en la cabeza es la senal clasica de binario. Un archivo UTF-16/32
     tambien tiene NULs, pero empieza con BOM: esos se decodifican con su
-    encoding en vez de rechazarse.
+    encoding en vez de rechazarse. El texto se lee con el encoding real del
+    archivo (cp1252 incluido), no con utf-8+replace.
     """
+    from src.core.file_text import detectar_bom, parece_binario, read_text_file
     with open(p, "rb") as fh:
         cabeza = fh.read(8192)
-    for bom, enc in _BOMS_TEXTO:
-        if cabeza.startswith(bom):
-            return p.read_text(encoding=enc, errors="replace")
-    if b"\x00" in cabeza:
+    if parece_binario(cabeza) and not detectar_bom(cabeza):
         raise HTTPException(status_code=415,
                             detail=f"no es texto (binario, {size} bytes): {etiqueta}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    texto, _enc = read_text_file(p)
+    return texto
 
 
 @app.get("/api/fs/read")
@@ -2455,8 +2447,10 @@ async def fs_write(request: Request):
         # auth de escritura PRIMERO, luego crear directorios (no crear dirs si se deniega)
         scope.check_tool("write_file", {"path": path, "content": content})
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return {"ok": True, "path": path, "size": len(content.encode("utf-8"))}
+        from src.core.file_text import write_preserving_encoding
+        enc, convertido = write_preserving_encoding(p, content)
+        return {"ok": True, "path": path, "size": len(content.encode(enc)),
+                "encoding": enc, "converted": convertido}
     except ScopeDenied as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
@@ -4373,7 +4367,20 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         size = p.stat().st_size
         if size > scope.cfg.effective_max_bytes():
             raise ValueError(f"archivo excede limite {scope.cfg.effective_max_bytes()} bytes (tiene {size})")
-        text = p.read_text(encoding="utf-8", errors="replace")
+        from src.core.file_text import detectar_bom, parece_binario, read_text_file
+        with open(p, "rb") as fh:
+            cabeza = fh.read(8192)
+        if parece_binario(cabeza) and not detectar_bom(cabeza):
+            raise ValueError(
+                f"no es texto (binario, {size} bytes): {path}. No se decodifica: "
+                f"usa exec con una herramienta adecuada si necesitas inspeccionarlo.")
+        # Se lee con el encoding real del archivo (cp1252, utf-16 con BOM...), no
+        # con utf-8+replace: ese replace metia un U+FFFD por cada acento y el
+        # modelo despues reescribia el archivo con el dano adentro.
+        text, enc = read_text_file(p)
+        nota_enc = ""
+        if enc not in ("utf-8", "utf-8-sig"):
+            nota_enc = (f"[codificacion: {enc}; el edit preserva este encoding]\n")
         start = max(0, int(offset or 0))
         n = max(0, int(limit or 0))
         if start == 0 and n == 0:
@@ -4384,7 +4391,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             # El aviso por defecto manda a "refinar el comando (grep/head/tail)",
             # que no aplica: aca ya se leyo el archivo, lo unico que puede hacer
             # el modelo es paginar con offset/limit.
-            return truncate_head_tail(
+            return nota_enc + truncate_head_tail(
                 text, 48000, label=f"contenido de {path}",
                 hint=(f"Para ver el medio volve a leerlo con offset/limit "
                       f"(el archivo tiene {total_lineas} lineas, 2000 por pagina)"))
@@ -4405,7 +4412,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             header += f"; seguí con offset={end}"
         header += "]\n"
         from src.core.text_limits import truncate_head_tail
-        return header + truncate_head_tail(
+        return nota_enc + header + truncate_head_tail(
             "".join(chunk), 48000, label=f"lectura de {path}")
 
     def write_file_tool(path: str, content: str) -> str:
@@ -4421,8 +4428,15 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             except Exception:
                 pass
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return f"escrito {path} ({len(content.encode('utf-8'))} bytes)"
+            from src.core.file_text import write_preserving_encoding
+            enc, convertido = write_preserving_encoding(p, content)
+            if convertido:
+                extra = ", convertido a utf-8 porque el texto no entraba en el encoding previo"
+            elif enc != "utf-8":
+                extra = f", codificacion {enc}"
+            else:
+                extra = ""
+            return f"escrito {path} ({len(content.encode(enc))} bytes{extra})"
 
         if _auto_apply_mode(cfg) == "approve":
             _ctx = getattr(registry, "approval", None)
@@ -4447,7 +4461,15 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         scope.check_tool("edit", {"path": path, "content": new})
         if not p.is_file():
             raise FileNotFoundError(f"no existe o no es archivo: {path}")
-        text = p.read_text(encoding="utf-8", errors="replace")
+        from src.core.file_text import detectar_bom, encode_text, parece_binario, read_text_file, write_bytes_file
+        with open(p, "rb") as fh:
+            cabeza = fh.read(8192)
+        if parece_binario(cabeza) and not detectar_bom(cabeza):
+            raise ValueError(f"no es texto (binario): {path}; no se puede editar como texto")
+        # Se lee con el encoding real y se escribe con ESE mismo encoding. Con
+        # utf-8+replace, un archivo cp1252 volvia con U+FFFD en las lineas que el
+        # modelo ni habia tocado.
+        text, enc = read_text_file(p)
         # Tolerar CRLF vs LF sin cambiar el estilo de fin de línea del archivo.
         crlf = "\r\n" in text
         text_c = text.replace("\r\n", "\n")
@@ -4462,18 +4484,23 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
 
         def _do() -> str:
+            new_text = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
+            if crlf:
+                new_text = new_text.replace("\n", "\r\n")
+            # El chequeo de encoding va ANTES del snapshot: si el texto nuevo no
+            # entra en el encoding del archivo, no se toca nada (ni checkpoint).
+            datos = encode_text(new_text, enc)
             try:
                 from src.core.checkpoints import snapshot
                 snapshot(session_id, p)
             except Exception:
                 pass
-            new_text = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
-            if crlf:
-                new_text = new_text.replace("\n", "\r\n")
-            p.write_text(new_text, encoding="utf-8")
+            write_bytes_file(p, datos)
             from src.core.diffutil import line_diff
             _diff = line_diff(text, new_text)
             _res = f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+            if enc not in ("utf-8", "utf-8-sig"):
+                _res += f" [codificacion preservada: {enc}]"
             return f"{_res}\n{_diff}" if _diff else _res
 
         if _auto_apply_mode(cfg) == "approve":
@@ -4484,7 +4511,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     "edit requiere aprobacion y no hay canal interactivo (fail-closed)")
             from src.core.approvals import fingerprint, get_approvals
             from src.core.diffutil import unified
-            _new = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+            _new = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
+            if crlf:
+                _new = _new.replace("\n", "\r\n")
             _act = f"edit:{path}"
             pr = get_approvals().propose(
                 session_id, "edit", {"path": path, "old": old, "new": new},

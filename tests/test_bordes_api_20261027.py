@@ -61,7 +61,9 @@ def test_fs_read_de_binario_es_415_y_no_devuelve_mojibake(cliente, tmp_path):
 def test_fs_read_de_texto_sigue_funcionando(cliente, tmp_path):
     http, _, _ = cliente
     f = tmp_path / "nota.txt"
-    f.write_text("hola\nacentos: ñ á\n", encoding="utf-8")
+    # write_bytes, no write_text: en Windows write_text traduce \n a \r\n y el
+    # contenido servido es el de los bytes reales del archivo.
+    f.write_bytes("hola\nacentos: ñ á\n".encode("utf-8"))
 
     r = http.get("/api/fs/read", params={"path": str(f)})
 
