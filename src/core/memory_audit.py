@@ -48,8 +48,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# `timedelta(days=...)` revienta por encima de 999_999_999 dias y la API acepta
+# cualquier int: `GET /api/memory/audit?days=100000000000` devolvia 500
+# ("Python int too large to convert to C int") en vez de una ventana acotada.
+# 100 anios es mas que cualquier retencion real.
+MAX_REPORT_DAYS = 36500
+
+
+def clamp_days(days: Any, default: int = 30) -> int:
+    """Ventana en dias acotada a [1, MAX_REPORT_DAYS] (nunca lanza)."""
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(MAX_REPORT_DAYS, value))
+
+
 def _since(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (datetime.now(timezone.utc)
+            - timedelta(days=clamp_days(days, 1))).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def audit_cfg() -> dict:
@@ -323,6 +340,7 @@ class MemoryAudit:
     # ------------------------------------------------------------------ report
     def report(self, days: int = 30, limit: int = 20) -> dict:
         """Lo que la UI necesita: volumen, nodos que mas viajan y los castigados."""
+        days = clamp_days(days)
         since = _since(days)
         limit = max(1, min(100, int(limit or 20)))
         con = self._connect()

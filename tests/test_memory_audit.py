@@ -188,3 +188,48 @@ def test_recall_queda_registrado_con_su_batch(km, tmp_path):
         con.close()
     assert filas == [("s1:7", "s1")]
 
+
+
+# --- ventana de dias (days) --------------------------------------------------
+
+def test_days_gigante_no_revienta_y_se_acota(audit):
+    """`GET /api/memory/audit?days=100000000000` devolvia 500 por OverflowError.
+
+    `timedelta(days=...)` no acepta mas de 999_999_999 dias, y el endpoint
+    acepta cualquier int: la ventana se acota antes de construir el `since`.
+    """
+    from src.core.memory_audit import MAX_REPORT_DAYS
+
+    rep = audit.report(days=100_000_000_000)
+    assert rep["days"] == MAX_REPORT_DAYS
+    assert rep["totals"]["recalls"] == 0
+
+
+@pytest.mark.parametrize("entrada,esperado", [
+    (0, 1),
+    (-5, 1),
+    (1, 1),
+    (30, 30),
+    (36500, 36500),
+    (36501, 36500),
+    ("abc", 30),
+    (None, 30),
+])
+def test_clamp_days(audit, entrada, esperado):
+    from src.core.memory_audit import clamp_days
+
+    assert clamp_days(entrada) == esperado
+    assert audit.report(days=entrada)["days"] == esperado
+
+
+def test_days_acotado_sigue_contando_lo_reciente(audit):
+    audit.record_recall(session_id="s1", batch="s1:1", node_ids=[7], terms=["x"])
+    # una ventana absurda en negativo no borra el pasado reciente de la vista
+    assert audit.report(days=-100)["totals"]["recalls"] == 1
+    assert audit.report(days=10**15)["totals"]["recalls"] == 1
+
+
+def test_prune_con_days_invalido_no_borra_todo(audit):
+    audit.record_recall(session_id="s1", batch="s1:1", node_ids=[1], terms=["x"])
+    assert audit.prune(days=10**12) == 0
+    assert audit.prune(days=-30) == 0
