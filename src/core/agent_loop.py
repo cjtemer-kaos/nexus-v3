@@ -674,6 +674,43 @@ class AgentLoop:
             last = last[:1500] + "\n…[truncado]"
         return "Listo (respuesta sintetizada de las herramientas ejecutadas):\n" + last
 
+    async def _final_wrapup(self, messages, hint, steps, iteration) -> str:
+        """Pide un cierre en TEXTO (sin herramientas) cuando el turno se corta.
+
+        Si se agota el presupuesto iterando, o el anti-bucle corta una repeticion,
+        el modelo estaba a mitad de la tarea: antes el turno terminaba con
+        `[presupuesto agotado antes de respuesta final]` y el usuario no recibia
+        NADA. Se le da un ultimo turno con `tools=None` para que explique que
+        hizo, que encontro y que falta. Una sola llamada, sin tools: no puede
+        volver a entrar en el bucle.
+        """
+        sintetizado = self._synthesize_from_tools(messages)
+        if self.router is None:
+            return sintetizado
+        try:
+            aviso = ("[sistema] Se agoto el presupuesto de herramientas de este turno y ya no "
+                     "podes llamar ninguna. Responde AHORA en texto, conciso: que hiciste, que "
+                     "encontraste y que queda pendiente, con lo que ya tenes.")
+            payload = self._prune_payload(messages) + [LLMMessage(role="user", content=aviso)]
+            if hasattr(self.router, "chat"):
+                resp = await self.router.chat(
+                    payload, tools=None, hint=hint,
+                    model=getattr(self, "_req_model", None),
+                )
+            else:
+                routed = self.router.resolve(task_hint=hint)
+                if routed is None:
+                    return sintetizado
+                resp = await routed.provider.chat(payload, tools=None, model=routed.model)
+            out = (getattr(resp, "content", "") or "").strip()
+            if out:
+                steps.append(LoopStep(iteration=iteration, phase="decide",
+                                      content=f"cierre forzado sin herramientas ({len(out)} caracteres)"))
+                return out
+        except Exception as e:
+            logger.debug("cierre forzado fallo: %s", e)
+        return sintetizado
+
     async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, on_reasoning=None, on_step=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
 
@@ -1495,6 +1532,9 @@ class AgentLoop:
             await _flush_steps()
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado tras iter {iteration}: {self.budget.reason}"))
+                # El placeholder se reemplaza por un cierre en texto al salir del
+                # loop (un solo camino para los tres cortes: presupuesto, doom-loop
+                # y bucle por herramienta).
                 final_output = final_output or "[presupuesto agotado antes de respuesta final]"
                 await _close_turn("budget")
                 break
@@ -1542,6 +1582,26 @@ class AgentLoop:
             )
         except Exception:
             pass
+        # Un turno cortado (presupuesto agotado, doom-loop, bucle por herramienta, o
+        # la salida por iteraciones cuando los reintentos de razonamiento/vacio
+        # consumieron el presupuesto con `continue`) no puede terminar en un
+        # placeholder NI quedar vacio: el usuario pidio algo y recibe "[...]" o "".
+        # Se pide un cierre en texto, SIN herramientas, con lo ya averiguado. El
+        # diagnostico del bucle se conserva (es honesto sobre por que se corto) y
+        # el exito sigue siendo False para los bucles.
+        _placeholder = ("[presupuesto agotado", "[doom-loop", "[bucle de herramienta")
+        if (not final_output) or final_output.startswith(_placeholder):
+            _cierre = await self._final_wrapup(messages, hint, steps, iteration)
+            _es_bucle = final_output.startswith(("[doom-loop", "[bucle de herramienta"))
+            if _cierre:
+                if _es_bucle:
+                    final_output = final_output + "\n\n" + _cierre
+                else:
+                    final_output = _cierre
+                    success = True
+            elif not final_output:
+                final_output = "[presupuesto agotado antes de respuesta final]"
+
         if not final_output and trajectory.steps:
             # Fallback: last assistant content
             last = trajectory.last_assistant
