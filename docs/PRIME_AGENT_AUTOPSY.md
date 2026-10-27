@@ -125,6 +125,10 @@ copiar, y hay un test que congela el reloj a propósito.
 
 ### 3.1 Continual harness (`refine`)
 
+> Lectura profunda del mecanismo (ciclo completo, gates, validación, rollback, concurrencia y
+> plan de aterrizaje en fases): **`docs/PRIME_AGENT_AUTOMEJORA.md`**. Esta sección es el
+> resumen; ese documento es la referencia.
+
 La pieza más ambiciosa y la que más valor tiene a largo plazo. En prime-agent: al cerrar el turno,
 el planificador lee la trayectoria y produce un **plan de edits**; un ejecutor los aplica y un
 **review gate** decide si se aceptan (con modo `auto` y umbral). Los edits son pequeños y
