@@ -277,6 +277,18 @@ export async function forkSessionApi(sessionId: string, copyMessages = true): Pr
   return res.json();
 }
 
+// Borra en el server los mensajes POSTERIORES a `messageId` (exclusive). Con 0
+// borra todos: es la forma de volver a antes del primer mensaje.
+export async function rewindSessionApi(sessionId: string, messageId: number): Promise<{ ok: boolean; deleted: number }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!res.ok) throw new Error(await resError(res, "no se pudo volver al mensaje"));
+  return res.json()
+}
+
 export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean; deleted: boolean; id: string }> {
   const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) throw new Error(`sessions DELETE ${res.status}: ${await res.text()}`);

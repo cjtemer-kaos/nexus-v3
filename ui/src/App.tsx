@@ -1,6 +1,7 @@
 import { Sidebar } from '@/components/Sidebar'
 import { SessionTabs } from '@/components/chat/SessionTabs'
 import { ChatPanel } from '@/components/chat/ChatPanel'
+import { CommandPalette } from '@/components/CommandPalette'
 import { GraphView } from '@/components/graph/GraphView'
 import { MemoryPanel } from '@/components/memory/MemoryPanel'
 import { FileEditor } from '@/components/editor/FileEditor'
@@ -15,10 +16,9 @@ import { PlanPanel } from '@/components/plan/PlanPanel'
 import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
 import { useAppStore } from '@/store/app-store'
-import { Search, Bell, User, FileText, Loader2 } from 'lucide-react'
+import { Search, Bell, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState, useEffect } from 'react'
-import { searchApi } from '@/lib/api'
 
 const viewLabels: Record<string, string> = {
   chat: 'Chat',
@@ -40,11 +40,7 @@ const viewLabels: Record<string, string> = {
 type SearchResult = { role: string; content: string; session_id?: string }
 
 export default function App() {
-  const { view, setView, activeSession, setActiveSession, loadMessages, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus } = useAppStore()
-  const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
-  const [searching, setSearching] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
+  const { view, setView, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus, activeSession } = useAppStore()
   const [showNotifications, setShowNotifications] = useState(false)
 
   useEffect(() => {
@@ -61,35 +57,6 @@ export default function App() {
     // Hidratar sesiones reales del server (SessionLog WAL+FTS) y garantizar una activa
     void (async () => { await loadSessions(); await ensureSession() })()
   }, [refreshProviders, loadSessions, ensureSession])
-
-  const runSearch = async () => {
-    const q = search.trim()
-    if (q.length < 2) { setSearchResults(null); setSearchError(null); return }
-    setSearching(true); setSearchError(null)
-    try {
-      const results = await searchApi(q)
-      setSearchResults(results)
-      if (!results.length) setSearchError('Sin resultados')
-    } catch (e) {
-      setSearchResults(null)
-      setSearchError('Búsqueda no disponible: ' + (e as Error).message.slice(0, 80))
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  const closeSearch = () => { setSearchResults(null); setSearchError(null) }
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        document.getElementById('global-search')?.focus()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-[#15171B] text-[#EDEEF0]">
@@ -112,55 +79,18 @@ export default function App() {
           )}
 
           <div className="flex shrink-0 items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9BA1AA]" />
-              <input
-                id="global-search"
-                value={search}
-                onChange={e=>setSearch(e.target.value)}
-                onKeyDown={e=>{
-                  if (e.key === 'Enter') { e.preventDefault(); void runSearch() }
-                  if (e.key === 'Escape') { e.preventDefault(); closeSearch() }
-                }}
-                placeholder="Buscar…"
-                aria-label="Buscar en Nexus"
-                className="w-32 rounded-lg border border-[#2C3037] bg-[#1E2127] py-1.5 pl-8 pr-2 text-xs placeholder:text-[#9BA1AA] focus:border-[#4C9DFF]/50 focus:outline-none sm:w-52"
-              />
+            <button
+              onClick={() => window.dispatchEvent(new Event('nexus:palette'))}
+              title="Buscar o ejecutar un comando (Ctrl+K)"
+              aria-label="Abrir paleta de comandos"
+              className="flex items-center gap-2 rounded-lg border border-[#2C3037] bg-[#1E2127] py-1.5 pl-2.5 pr-2 text-xs text-[#9BA1AA] hover:border-[#4C9DFF]/40 hover:text-[#EDEEF0]"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Buscar…</span>
+              <kbd className="hidden rounded border border-[#2C3037] bg-[#22262D] px-1 py-0.5 text-[10px] sm:inline">Ctrl K</kbd>
+            </button>
 
-              {(searching || searchResults || searchError) && (
-                <>
-                  <div className="fixed inset-0 z-[60]" onClick={closeSearch} />
-                  <div className="absolute right-0 top-full z-[70] mt-2 w-96 rounded-xl border border-[#2C3037] bg-[#1E2127] shadow-2xl">
-                    <div className="flex items-center gap-2 border-b border-[#2C3037] px-3 py-2 text-xs text-[#9BA1AA]">
-                      {searching ? <><Loader2 className="h-3 w-3 animate-spin" /> Buscando “{search.trim()}”…</> : <><FileText className="h-3 w-3" /> {searchError ? searchError : `${searchResults!.length} resultado${searchResults!.length===1?'':'s'} FTS5 global`}</>}
-                    </div>
-                    {searchResults && searchResults.length > 0 && (
-                      <div className="max-h-72 overflow-auto p-1.5">
-                        {searchResults.map((r, i) => (
-                          <button
-                            key={i}
-                            onMouseDown={e=>e.preventDefault()}
-                            onClick={() => {
-                              closeSearch()
-                              setView('chat')
-                              // Abrir la sesión del hit (antes solo cerraba el buscador).
-                              if (r.session_id && r.session_id !== activeSession) {
-                                setActiveSession(r.session_id)
-                                void loadMessages(r.session_id)
-                              }
-                            }}
-                            className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-[#2C3037]"
-                          >
-                            <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${r.role==='user' ? 'bg-[#0B62D6]/20 text-[#8CC1FF]' : r.role==='tool' ? 'bg-[#FFB86B]/15 text-[#FFB86B]' : 'bg-[#3DDC84]/15 text-[#3DDC84]'}`}>{r.role}</span>
-                            <span className="line-clamp-2 text-xs leading-relaxed text-[#EDEEF0]">{r.content.slice(0, 220)}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+
 
             <div className="relative hidden sm:flex">
               <Button variant="ghost" size="icon" aria-label="Notificaciones" onClick={()=>setShowNotifications(v=>!v)}>
@@ -240,6 +170,8 @@ export default function App() {
           <span className="ml-auto md:ml-0 flex items-center gap-2"><span className="rounded bg-[#2C3037] px-1.5 py-0.5 font-mono text-[11px]"><User className="h-3 w-3 inline mr-1" />nexus-v3 3.0.0-alpha</span></span>
         </footer>
       </div>
+
+      <CommandPalette onAjustes={() => window.dispatchEvent(new Event('nexus:ajustes'))} />
     </div>
   )
 }

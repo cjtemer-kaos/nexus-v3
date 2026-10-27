@@ -46,6 +46,11 @@ function NavButton({ item, active, onClick, indented }: { item: NavItem; active:
 export function Sidebar() {
   const { view, setView, sessions, sessionsError, activeSession, setActiveSession, createSession, forkSession, deleteSession } = useAppStore()
   const [ajustesOpen, setAjustesOpen] = useState(false)
+  useEffect(() => {
+    const abrir = () => setAjustesOpen(true)
+    window.addEventListener('nexus:ajustes', abrir)
+    return () => window.removeEventListener('nexus:ajustes', abrir)
+  }, [])
   const inMore = more.some(i => i.id === view)
   const [moreOpen, setMoreOpen] = useState(false)
   useEffect(() => { if (inMore) setMoreOpen(true) }, [inMore])

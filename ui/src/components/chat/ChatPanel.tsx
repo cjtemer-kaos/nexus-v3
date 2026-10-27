@@ -2,15 +2,17 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera,
   FileText, Database, ChevronRight, Volume2, MoreHorizontal, ArrowUp, GitBranch, CheckCircle2,
+  Undo2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore, type ChatMessage } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, type UploadResult, type Usage } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, rewindSessionApi, type UploadResult, type Usage } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 import { Markdown } from '@/components/chat/Markdown'
 import { InlineAsks } from '@/components/chat/InlineAsks'
+import { ToolOutput } from '@/components/chat/ToolOutput'
 import { AgentSelector } from '@/components/AgentSelector'
 import { ModelSelector } from '@/components/ModelSelector'
 
@@ -455,6 +457,26 @@ export function ChatPanel() {
     }
   }, [activeSession, sessionMode, modeBusy, loadStatus, addMessage])
 
+  // Volver acá (como el revert de opencode): borra en el server todo lo posterior
+  // al mensaje ANTERIOR al elegido y devuelve el texto del usuario al composer.
+  const volverAca = useCallback(async (m: ChatMessage) => {
+    if (!activeSession || isStreaming) return
+    const ok = confirm('¿Volver a este mensaje?\n\nSe descarta la respuesta y todo lo que vino después en esta sesión, y el texto vuelve al cuadro de escritura para editarlo.')
+    if (!ok) return
+    const idx = messages.findIndex((x) => x.id === m.id)
+    const prev = idx > 0 ? messages[idx - 1] : null
+    const prevId = prev ? Number(prev.id.slice(activeSession.length + 1)) : 0
+    try {
+      await rewindSessionApi(activeSession, Number.isFinite(prevId) ? prevId : 0)
+      await loadMessages(activeSession)
+      setInput(m.content)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    } catch (e) {
+      setAttachToast(`no se pudo volver: ${(e as Error).message.slice(0, 140)}`)
+      setTimeout(() => setAttachToast(null), 5000)
+    }
+  }, [activeSession, isStreaming, messages, loadMessages])
+
   const distillNow = useCallback(async () => {
     const { activeSession } = useAppStore.getState()
     if (!activeSession) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
@@ -625,7 +647,7 @@ export function ChatPanel() {
                           <span className="shrink-0 text-[#59616D]">{t.timestamp}</span>
                         </div>
                         <div className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-[#C9D2E0]">
-                          {t.toolName === 'apply_patch' ? <ApplyPatchResult content={t.content} /> : t.content}
+                          {t.toolName === 'apply_patch' ? <ApplyPatchResult content={t.content} /> : <ToolOutput content={t.content} />}
                         </div>
                         <button
                           onClick={() => { void navigator.clipboard.writeText(t.content).catch(() => {}); setCopied(t.id); setTimeout(() => setCopied(null), 1200) }}
@@ -700,6 +722,15 @@ export function ChatPanel() {
                 <div className="whitespace-pre-wrap break-words">{m.content}</div>
                 <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-[#9BA1AA]">
                   <span>{m.timestamp}</span>
+                  <button
+                    onClick={() => { void volverAca(m) }}
+                    disabled={isStreaming}
+                    title="Volver acá (descarta lo posterior y trae el texto al composer)"
+                    aria-label="Volver a este mensaje"
+                    className="opacity-0 transition-opacity hover:text-[#EDEEF0] disabled:opacity-30 group-hover:opacity-100"
+                  >
+                    <Undo2 className="h-3 w-3" />
+                  </button>
                   <button
                     onClick={() => { void navigator.clipboard.writeText(m.content).catch(() => {}); setCopied(m.id); setTimeout(() => setCopied(null), 1200) }}
                     aria-label={copied === m.id ? 'Copiado' : 'Copiar mensaje'}
