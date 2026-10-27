@@ -5186,7 +5186,14 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         res = HTTPFetcher(url, timeout=timeout, max_length=15000).fetch()
         if not res.get("success"):
             err = str(res.get("error") or "error desconocido")
-            if "restringido" in err:
+            motivo = str(res.get("reason") or "")
+            # No mentir con "SSRF": un host que no resuelve o una cadena que no es
+            # una URL son otra cosa, y el modelo tiene que reintentar distinto.
+            if motivo == "dns":
+                raise ValueError(f"{err} ({res.get('url', url)})")
+            if motivo == "url_invalida":
+                raise ValueError(err)
+            if motivo == "privada" or "restringido" in err:
                 raise PermissionError(f"URL bloqueada (SSRF/metadata/privada): {res.get('url', url)}")
             raise RuntimeError(f"web_fetch failed: {err}")
         text = str(res.get("content") or "")

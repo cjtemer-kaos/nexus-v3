@@ -70,40 +70,66 @@ def _ip_is_blocked(ip) -> bool:
     )
 
 
-def is_safe_url(url: str) -> bool:
-    """Check if the URL hostname resolves to a safe (non-private, non-loopback) IP address."""
+def url_rejection(url: str) -> str:
+    """'' si la URL es usable; si no, el MOTIVO (`dns`, `url_invalida`, `privada`).
+
+    Antes todo lo que no pasaba el chequeo devolvia el mismo
+    "Acceso a direcciones privadas/locales restringido". Un host con typo
+    (`no-existe-xyz.invalid`) o una cadena que no es una URL recibian el mismo
+    mensaje que un intento de SSRF: el modelo concluia "el sitio esta bloqueado"
+    en lugar de "la URL esta mal", y no reintentaba con la buena.
+    """
     try:
         parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-
-        # Check DNS blocklist
-        if hostname.lower() in DNS_BLOCKLIST:
-            return False
-
-        # Check blocked domain patterns
-        hostname_lower = hostname.lower()
-        for pattern in BLOCKED_DOMAIN_PATTERNS:
-            if hostname_lower.endswith(pattern):
-                return False
-
-        # Check if the hostname itself is a raw IP first
-        try:
-            ip = ipaddress.ip_address(hostname)
-            return not _ip_is_blocked(ip)
-        except ValueError:
-            # Resolve DNS to check for private IPs
-            try:
-                addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            except socket.gaierror:
-                return False  # DNS resolution failed — block for safety
-            for info in addr_info:
-                if _ip_is_blocked(ipaddress.ip_address(info[4][0])):
-                    return False
-        return True
     except Exception:
-        return False
+        return "url_invalida"
+    if parsed.scheme not in ("http", "https"):
+        return "url_invalida"
+    hostname = parsed.hostname
+    if not hostname:
+        return "url_invalida"
+
+    if hostname.lower() in DNS_BLOCKLIST:
+        return "privada"
+
+    hostname_lower = hostname.lower()
+    for pattern in BLOCKED_DOMAIN_PATTERNS:
+        if hostname_lower.endswith(pattern):
+            return "privada"
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            return "dns"
+        except Exception:
+            return "dns"
+        for info in addr_info:
+            try:
+                if _ip_is_blocked(ipaddress.ip_address(info[4][0])):
+                    return "privada"
+            except ValueError:
+                continue
+        return ""
+    return "privada" if _ip_is_blocked(ip) else ""
+
+
+def is_safe_url(url: str) -> bool:
+    """Check if the URL hostname resolves to a safe (non-private, non-loopback) IP address."""
+    return url_rejection(url) == ""
+
+
+def motivo_de_bloqueo(url: str) -> str:
+    """MOTIVO por el que no se puede pedir `url`, o '' si se puede.
+
+    `is_safe_url` decide (es el gate, y los tests lo parchean para apuntar al
+    servidor local); `url_rejection` solo aporta el motivo cuando rechaza.
+    """
+    if is_safe_url(url):
+        return ""
+    return url_rejection(url) or "privada"
 
 
 async def web_fetch(
@@ -120,9 +146,9 @@ async def web_fetch(
     if not HTTPX_AVAILABLE:
         return {"error": "httpx not installed. Run: pip install httpx"}
     
-    if not url.startswith(("http://", "https://")):
+    if "://" not in url:
         url = "https://" + url
-    
+
     try:
         async with httpx.AsyncClient(
             timeout=timeout,
@@ -134,9 +160,18 @@ async def web_fetch(
             response = None
             
             while True:
-                if not is_safe_url(current_url):
+                motivo = motivo_de_bloqueo(current_url)
+                if motivo:
+                    if motivo == "dns":
+                        host = urlparse(current_url).hostname or current_url
+                        return {"error": f"No se pudo resolver el host: {host}",
+                                "reason": "dns", "url": current_url}
+                    if motivo == "url_invalida":
+                        return {"error": f"URL invalida: {current_url}",
+                                "reason": "url_invalida", "url": current_url}
                     return {
                         "error": "Access to private/local addresses is restricted.",
+                        "reason": "privada",
                         "url": current_url
                     }
                 
@@ -238,6 +273,28 @@ def _html_to_text(html: str) -> str:
     return text.strip()
 
 
+def _decode_web(raw: bytes, charset: str) -> str:
+    """Decodifica el cuerpo de una pagina con el charset declarado y, si miente, con otros.
+
+    Muchos servidores declaran `iso-8859-1`/`utf-8` y mandan cp1252, o no
+    declaran nada. Con `errors="replace"` cada acento fuera de lugar era un
+    U+FFFD en el texto que lee el modelo. `latin-1` decodifica cualquier byte,
+    asi que es el piso y nunca se pierde contenido.
+    """
+    candidatos = [charset or "utf-8", "utf-8", "cp1252", "latin-1"]
+    vistos: set[str] = set()
+    for enc in candidatos:
+        clave = (enc or "").lower()
+        if not clave or clave in vistos:
+            continue
+        vistos.add(clave)
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Anula el redirect automatico de urllib: lo hacemos a mano para validar SSRF."""
 
@@ -263,17 +320,27 @@ class HTTPFetcher:
     def fetch(self) -> Dict:
         """Fetch URL and return text. Nunca lanza: devuelve dict con `error`."""
         current_url = self.url
-        if not current_url.startswith(("http://", "https://")):
+        if "://" not in current_url:
             current_url = "https://" + current_url
         for _hop in range(MAX_REDIRECTS + 1):
-            if not is_safe_url(current_url):
-                return {"error": "Acceso a direcciones privadas/locales restringido.", "url": current_url}
+            motivo = motivo_de_bloqueo(current_url)
+            if motivo:
+                if motivo == "dns":
+                    host = urlparse(current_url).hostname or current_url
+                    return {"error": f"No se pudo resolver el host: {host} "
+                                     f"(revisa el nombre/la conexion).",
+                            "reason": "dns", "url": current_url}
+                if motivo == "url_invalida":
+                    return {"error": f"URL invalida: {current_url}",
+                            "reason": "url_invalida", "url": current_url}
+                return {"error": "Acceso a direcciones privadas/locales restringido.",
+                        "reason": "privada", "url": current_url}
             req = urllib.request.Request(current_url, headers={"User-Agent": USER_AGENT})
             try:
                 with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read(self.max_length * 8)
                     charset = response.headers.get_content_charset() or "utf-8"
-                    text = raw.decode(charset, errors="replace")
+                    text = _decode_web(raw, charset)
                     content_type = (response.headers.get("Content-Type") or "").lower()
                     title = ""
                     if "text/html" in content_type:
