@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Paperclip, Sparkles, Wrench, User, Bot, Copy, Check, ListTodo, Eye, X, Camera,
   FileText, Database, ChevronRight, Volume2, MoreHorizontal, ArrowUp, GitBranch, CheckCircle2,
-  Undo2,
+  Undo2, Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore, type ChatMessage } from '@/store/app-store'
@@ -122,6 +122,7 @@ export function ChatPanel() {
   const [reasoning, setReasoning] = useState('')
   const [showReasoning, setShowReasoning] = useState(false)
   const busyRef = useRef(false)  // guard anti doble-send (el state no es sincrónico)
+  const abortRef = useRef<AbortController | null>(null)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
   const [lastSteps, setLastSteps] = useState<any[]|null>(null)
@@ -374,10 +375,14 @@ export function ChatPanel() {
       if (uploads.length === 0) {
         try {
           if (stillActive()) setLastSteps([])
+          const ctrl = new AbortController()
+          abortRef.current = ctrl
           const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, agentId: (activeAgent && activeAgent !== 'default') ? activeAgent : undefined,
+            signal: ctrl.signal,
             onDelta: pushDelta,
             onStep: (s) => { if (stillActive()) setLastSteps(prev => [...(prev || []), s as any]) },
             onReasoning: (t) => { if (stillActive()) setReasoning(prev => prev + t) } })
+          abortRef.current = null
           const finalReply = (sres.success === false ? '⚠️ ' : '') + (sres.reply || acc || '[sin respuesta]')
           if (stillActive()) {
             if (sres.steps?.length) setLastSteps(sres.steps as any)
@@ -386,11 +391,21 @@ export function ChatPanel() {
           }
           streamed = true
         } catch (e) {
+          abortRef.current = null
           streamed = false
-          if (placed && stillActive()) {
+          const cortado = (e as Error).name === 'AbortError'
+          if (cortado) {
+            if (stillActive()) {
+              if (placed) updateMessage(msgId, `${acc}\n\n■ Detenido por el usuario.`)
+              else addMessage({ id: msgId, role: 'assistant', content: '■ Detenido por el usuario.', timestamp: now() })
+            }
+          } else if (placed && stillActive()) {
             acc += `\n\n⚠️ Respuesta interrumpida: ${(e as Error).message.slice(0, 160)}. Reintentá.`
             updateMessage(msgId, acc)
           }
+          // Detenido a propósito: lo que llegó ya está en el hilo y no se reintenta
+          // por POST (sería duplicar el turno que el usuario acaba de cortar).
+          if (cortado) streamed = true
         }
       }
       if (!streamed && !placed) {
@@ -457,8 +472,21 @@ export function ChatPanel() {
     }
   }, [activeSession, sessionMode, modeBusy, loadStatus, addMessage])
 
-  // Volver acá (como el revert de opencode): borra en el server todo lo posterior
-  // al mensaje ANTERIOR al elegido y devuelve el texto del usuario al composer.
+  const detener = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setIsStreaming(false)
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isStreaming) { e.preventDefault(); detener() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isStreaming, detener])
+
+  // Volver acá (como el revert de opencode): borra en el server todo lo posterior  // al mensaje ANTERIOR al elegido y devuelve el texto del usuario al composer.
   const volverAca = useCallback(async (m: ChatMessage) => {
     if (!activeSession || isStreaming) return
     const ok = confirm('¿Volver a este mensaje?\n\nSe descarta la respuesta y todo lo que vino después en esta sesión, y el texto vuelve al cuadro de escritura para editarlo.')
@@ -862,13 +890,18 @@ export function ChatPanel() {
               {isStreaming ? 'Enter encola · corriendo' : 'Enter envía · Shift+Enter salto'}
             </span>
             <button
-              onClick={send}
-              disabled={!input.trim() && pending.length === 0}
-              aria-label={isStreaming ? 'Dirigir el run en curso' : 'Enviar mensaje'}
-              title={isStreaming ? 'Dirigir el run en curso' : 'Enviar mensaje'}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#4C9DFF] text-[#0B1220] transition-colors hover:bg-[#6FB0FF] disabled:bg-[#2C3037] disabled:text-[#59616D]"
+              onClick={isStreaming ? detener : send}
+              disabled={!isStreaming && !input.trim() && pending.length === 0}
+              aria-label={isStreaming ? 'Detener la respuesta' : 'Enviar mensaje'}
+              title={isStreaming ? 'Detener (Esc)' : 'Enviar mensaje'}
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors disabled:bg-[#2C3037] disabled:text-[#59616D]',
+                isStreaming
+                  ? 'border border-[#FF6B6B]/50 bg-[#FF6B6B]/15 text-[#FFA8A8] hover:bg-[#FF6B6B]/25'
+                  : 'bg-[#4C9DFF] text-[#0B1220] hover:bg-[#6FB0FF]',
+              )}
             >
-              <ArrowUp className="h-4 w-4" />
+              {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}
             </button>
           </div>
         </div>

@@ -40,7 +40,7 @@ const viewLabels: Record<string, string> = {
 type SearchResult = { role: string; content: string; session_id?: string }
 
 export default function App() {
-  const { view, setView, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus, activeSession } = useAppStore()
+  const { view, setView, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus, activeSession, createSession, closeSessionTab } = useAppStore()
   const [showNotifications, setShowNotifications] = useState(false)
 
   useEffect(() => {
@@ -57,6 +57,21 @@ export default function App() {
     // Hidratar sesiones reales del server (SessionLog WAL+FTS) y garantizar una activa
     void (async () => { await loadSessions(); await ensureSession() })()
   }, [refreshProviders, loadSessions, ensureSession])
+
+  // Atajos globales, los mismos de opencode desktop: Ctrl+N sesión nueva,
+  // Ctrl+W cierra la pestaña activa (la sesión queda guardada), Ctrl+B pliega
+  // el sidebar a rail. Ctrl+K lo maneja la paleta.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      const k = e.key.toLowerCase()
+      if (k === 'n') { e.preventDefault(); setView('chat'); void createSession() }
+      else if (k === 'w' && activeSession) { e.preventDefault(); closeSessionTab(activeSession) }
+      else if (k === 'b') { e.preventDefault(); window.dispatchEvent(new Event('nexus:rail')) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setView, createSession, closeSessionTab, activeSession])
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-[#15171B] text-[#EDEEF0]">

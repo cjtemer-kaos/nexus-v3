@@ -8,7 +8,7 @@ type View = 'chat' | 'graph' | 'editor' | 'terminal' | 'agents' | 'review' | 'bo
 
 export type ChatMessage = { id: string; role: 'user' | 'assistant' | 'tool' | 'system'; content: string; toolName?: string; timestamp: string; images?: string[]; kind?: string; displayRole?: string }
 
-export type SessionMeta = { id: string; title: string; project?: string; summary?: string; source?: 'server' | 'local' }
+export type SessionMeta = { id: string; title: string; project?: string; summary?: string; source?: 'server' | 'local'; created_at?: string; last_active?: string }
 
 type FileTab = { path: string; content: string; dirty: boolean; language: string }
 
@@ -172,6 +172,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         project: s.project,
         summary: s.summary,
         source: 'server',
+        created_at: s.created_at,
+        last_active: s.last_active,
       }))
       const activa = get().activeSession || sessions[0]?.id || ''
       // Los ids guardados pueden haber sido borrados: descartarlos.
@@ -197,7 +199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const s = await createSessionApi()
         set((x) => ({
-          sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const }, ...x.sessions],
+          sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }, ...x.sessions],
           activeSession: s.id,
         }))
         get().openTab(s.id)
@@ -218,7 +220,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const s = await createSessionApi()
         const nuevoId = s.id
         set((st) => ({
-          sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const }],
+          sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }],
           activeSession: s.id,
           messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
         }))

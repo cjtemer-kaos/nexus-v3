@@ -112,11 +112,19 @@ export async function chatStreamApi(
     onDelta?: (t: string) => void;
     onReasoning?: (t: string) => void;
     onStep?: (s: ChatStreamStep) => void;
+    // Para el botón Detener: abortar el fetch hace que el server corte el run
+    // (el generador SSE cancela la tarea al ver la desconexión).
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ reply: string; success: boolean; error?: string; session_id?: string; steps?: ChatStreamStep[]; iterations?: number; model?: string }> {
   const base = await getBackendUrl();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 900000); // cap 15 min: alineado con el budget del server
+  const externo = opts.signal;
+  if (externo) {
+    if (externo.aborted) ctrl.abort();
+    else externo.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
   try {
     // POST con body: no expone el mensaje en la URL (logs/límite) y envía session_id.
     const res = await fetch(`${base}/api/chat/stream`, {
@@ -177,7 +185,16 @@ export async function chatStreamApi(
     if (buf.trim()) handleEvent(buf); // remanente sin \n\n final (último chunk)
     return { reply, success, error: errorMsg || undefined, session_id: sessionId || undefined, steps, iterations, model: modelUsed || undefined };
   } catch (e) {
-    if ((e as Error).name === "AbortError") throw new Error("stream timeout 900s — el modelo local tarda; reintenta");
+    if ((e as Error).name === "AbortError") {
+      // El botón Detener aborta este mismo fetch: si el abort vino de afuera NO
+      // es un timeout, y confundirlos mostraba "stream timeout 900s" tras parar.
+      if (opts.signal?.aborted) {
+        const err = new Error("detenido por el usuario");
+        err.name = "AbortError";
+        throw err;
+      }
+      throw new Error("stream timeout 900s — el modelo local tarda; reintenta");
+    }
     throw e;
   } finally {
     clearTimeout(timer);

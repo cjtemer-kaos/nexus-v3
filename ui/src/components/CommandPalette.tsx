@@ -47,13 +47,11 @@ export function CommandPalette({ onAjustes }: { onAjustes: () => void }) {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase()
       if ((e.metaKey || e.ctrlKey) && k === 'k') { e.preventDefault(); abierta ? cerrar() : abrir(); return }
-      if (abierta && (e.metaKey || e.ctrlKey) && k === 'n') { e.preventDefault(); createSession(); setView('chat'); cerrar(); return }
-      if (abierta && (e.metaKey || e.ctrlKey) && k === 'w' && activeSession) { e.preventDefault(); cerrar() }
       if (abierta && k === 'escape') { e.preventDefault(); cerrar() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [abierta, abrir, cerrar, createSession, setView, activeSession])
+  }, [abierta, abrir, cerrar])
 
   useEffect(() => {
     const abrirPaleta = () => abrir()
@@ -212,7 +210,7 @@ export function CommandPalette({ onAjustes }: { onAjustes: () => void }) {
         <div className="flex items-center gap-3 border-t border-[#2C3037] px-3 py-1.5 text-[10px] text-[#59616D]">
           <span className="flex items-center gap-1"><kbd className="rounded border border-[#2C3037] px-1">↑</kbd><kbd className="rounded border border-[#2C3037] px-1">↓</kbd> moverse</span>
           <span className="flex items-center gap-1"><CornerDownLeft className="h-3 w-3" /> abrir</span>
-          <span className="ml-auto">Ctrl+K abre y cierra</span>
+          <span className="ml-auto">Ctrl N sesión · Ctrl W cerrar · Ctrl B panel · Ctrl K buscar</span>
         </div>
       </div>
     </>

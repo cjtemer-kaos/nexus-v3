@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
@@ -25,6 +25,28 @@ const more = [
 ] as const
 
 type NavItem = { id: string; label: string; icon: typeof MessageSquare; desc: string }
+
+// Agrupado por fecha como la lista de opencode: con cientos de sesiones una
+// lista plana no se lee. Ordena por última actividad y corta en bloques.
+const agruparPorFecha = <T extends { last_active?: string; created_at?: string }>(items: T[]) => {
+  const orden = [...items].sort((a, b) =>
+    (b.last_active || b.created_at || '').localeCompare(a.last_active || a.created_at || ''))
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1)
+  const semana = new Date(hoy); semana.setDate(semana.getDate() - 7)
+  const bloques: { titulo: string; items: T[] }[] = [
+    { titulo: 'Hoy', items: [] },
+    { titulo: 'Ayer', items: [] },
+    { titulo: 'Últimos 7 días', items: [] },
+    { titulo: 'Más viejas', items: [] },
+  ]
+  for (const s of orden) {
+    const d = new Date(s.last_active || s.created_at || 0)
+    const i = d >= hoy ? 0 : d >= ayer ? 1 : d >= semana ? 2 : 3
+    bloques[i].items.push(s)
+  }
+  return bloques.filter((b) => b.items.length > 0)
+}
 
 function NavButton({ item, active, onClick, indented }: { item: NavItem; active: boolean; onClick: () => void; indented?: boolean }) {
   const Icon = item.icon
@@ -65,6 +87,23 @@ export function Sidebar() {
     try { localStorage.setItem('nexus.sidebarRail', n ? '1' : '0') } catch { /* modo privado */ }
     return n
   })
+  useEffect(() => {
+    const onRail = () => toggleRail()
+    window.addEventListener('nexus:rail', onRail)
+    return () => window.removeEventListener('nexus:rail', onRail)
+  })
+
+  const [filtro, setFiltro] = useState('')
+  const [visibles, setVisibles] = useState(12)
+  const filtradas = useMemo(() => {
+    const t = filtro.trim().toLowerCase()
+    const orden = [...sessions].sort((a, b) =>
+      (b.last_active || b.created_at || '').localeCompare(a.last_active || a.created_at || ''))
+    if (!t) return orden
+    return orden.filter((s) => `${s.title} ${s.id} ${s.project || ''}`.toLowerCase().includes(t))
+  }, [sessions, filtro])
+  const visiblesLista = useMemo(() => filtradas.slice(0, visibles), [filtradas, visibles])
+  const gruposSesiones = useMemo(() => agruparPorFecha(visiblesLista), [visiblesLista])
 
   if (rail) {
     return (
@@ -158,33 +197,58 @@ export function Sidebar() {
             <span className="text-[10px] text-[#6B7280]">WAL+FTS</span>
             <span className="ml-auto text-[10px] text-[#6B7280]">{sessions.length}</span>
           </div>
+          {sessions.length > 6 && (
+            <input
+              value={filtro}
+              onChange={(e) => { setFiltro(e.target.value); setVisibles(12) }}
+              placeholder="Filtrar sesiones…"
+              aria-label="Filtrar sesiones"
+              className="mb-2 w-full rounded-lg border border-[#2C3037] bg-[#1E2127] px-2.5 py-1.5 text-xs placeholder:text-[#6B7280] focus:border-[#4C9DFF]/50 focus:outline-none"
+            />
+          )}
           <div className="space-y-1">
             {sessions.length === 0 && (
               <div className={`px-2 py-1 text-xs ${sessionsError ? 'text-[#FFA8A8]' : 'text-[#6B7280]'}`}>
                 {sessionsError ? `No se pudieron cargar las sesiones: ${sessionsError}` : 'Sin sesiones todavía.'}
               </div>
             )}
-            {sessions.map(s => (
-              <div key={s.id} className="group relative">
-                <button
-                  onClick={() => { setActiveSession(s.id); setView('chat') }}
-                  className={cn('w-full text-left rounded-lg px-3 py-2 border text-sm cursor-pointer transition-colors',
-                    s.id === activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}
-                >
-                  <div className="font-medium truncate pr-6">{s.title}</div>
-                  <div className="text-[11px] text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id}</div>
-                </button>
-                <button
-                  aria-label={`Borrar sesión ${s.title}`}
-                  title="Borrar sesión"
-                  onClick={(e) => { e.stopPropagation(); if (confirm(`¿Borrar la sesión "${s.title}"? No se puede deshacer.`)) deleteSession(s.id) }}
-                  className="absolute right-1.5 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#FF6259] transition-opacity"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+            {sessions.length > 0 && visiblesLista.length === 0 && (
+              <div className="px-2 py-1 text-xs text-[#6B7280]">Sin sesiones que coincidan con “{filtro}”.</div>
+            )}
+            {gruposSesiones.map((g) => (
+              <div key={g.titulo} className="space-y-1">
+                <div className="px-2 pt-2 text-[10px] uppercase tracking-wider text-[#59616D]">{g.titulo}</div>
+                {g.items.map((s) => (
+                  <div key={s.id} className="group relative">
+                    <button
+                      onClick={() => { setActiveSession(s.id); setView('chat') }}
+                      className={cn('w-full text-left rounded-lg px-3 py-2 border text-sm cursor-pointer transition-colors',
+                        s.id === activeSession ? 'bg-[#22262D] border-[#2C3037] text-white' : 'border-transparent text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]')}
+                    >
+                      <div className="font-medium truncate pr-6">{s.title}</div>
+                      <div className="text-[11px] text-[#9BA1AA] truncate">{s.project || s.source || 'local'} · {s.id}</div>
+                    </button>
+                    <button
+                      aria-label={`Borrar sesión ${s.title}`}
+                      title="Borrar sesión"
+                      onClick={(e) => { e.stopPropagation(); if (confirm(`¿Borrar la sesión "${s.title}"? No se puede deshacer.`)) deleteSession(s.id) }}
+                      className="absolute right-1.5 top-2 rounded-lg p-1.5 text-[#9BA1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[#2C3037] hover:text-[#FF6259] transition-opacity"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
+          {filtradas.length > visibles && (
+            <button
+              onClick={() => setVisibles((v) => v + 25)}
+              className="mt-2 w-full rounded-lg border border-[#2C3037] px-3 py-1.5 text-xs text-[#9BA1AA] hover:bg-[#1E2127] hover:text-[#EDEEF0]"
+            >
+              Mostrar más ({filtradas.length - visibles})
+            </button>
+          )}
           <button onClick={() => { createSession(); setView('chat') }} className="mt-3 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-sm text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">+ Nueva sesión</button>
           {activeSession && (
             <button onClick={() => forkSession(activeSession)} className="mt-1.5 w-full rounded-lg border border-dashed border-[#3A4049] px-3 py-2 text-xs text-[#9BA1AA] hover:text-[#EDEEF0] hover:border-[#4C9DFF]/40 transition-colors">Bifurcar la sesión activa (copia el historial)</button>
