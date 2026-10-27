@@ -2130,19 +2130,33 @@ async def sessions_catalog(limit: int = 200):
 @app.get("/api/sessions/{session_id}/export")
 async def export_session(session_id: str):
     """Exporta el log de la sesión como ZIP (JSON adentro)."""
-    import io as _io, zipfile as _zip, json as _json3
+    import io as _io, re as _re, zipfile as _zip, json as _json3
     slog = _session_log()
+    # Un id inexistente devolvia 200 con un ZIP vacio (`no-existe.json`): la UI
+    # descargaba un archivo que parece valido y no tiene nada. Mismo contrato que
+    # /messages y /tree -> 404.
+    try:
+        if slog.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo leer la sesion: {e}")
+    # El id viaja al nombre del archivo dentro del ZIP y al header
+    # Content-Disposition: sin sanear, un id con comillas rompe el header (500) y
+    # uno con barras nombra `../../x.zip` adentro del zip.
+    seguro = _re.sub(r"[^A-Za-z0-9._-]+", "_", session_id).strip("._") or "session"
     try:
         msgs = slog.get_messages(session_id, limit=100000)
         data = [{"role": getattr(m, "role", ""), "content": getattr(m, "content", ""),
                  "created_at": getattr(m, "created_at", "")} for m in msgs]
         buf = _io.BytesIO()
         with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
-            z.writestr(f"{session_id}.json",
+            z.writestr(f"{seguro}.json",
                        _json3.dumps({"session_id": session_id, "messages": data}, ensure_ascii=False, indent=2))
         buf.seek(0)
         return Response(content=buf.read(), media_type="application/zip",
-                        headers={"Content-Disposition": f'attachment; filename="{session_id}.zip"'})
+                        headers={"Content-Disposition": f'attachment; filename="{seguro}.zip"'})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3162,8 +3176,13 @@ async def skills_list(q: str = "", limit: int = 0, refresh: bool = False):
     total = skills_catalog.list_skills(cfg)
     if q:
         entries = skills_catalog.search(q, cfg, limit=limit or 20)
+    elif limit and int(limit) > 0:
+        # `limit` negativo (un cliente mandando -1 por "todas") devolvia 0 skills:
+        # total[:0]. El contrato del endpoint es 0 = sin recorte, asi que <= 0
+        # significa "todo".
+        entries = total[: int(limit)]
     else:
-        entries = total if not limit else total[: max(0, int(limit))]
+        entries = total
     out = [{"name": s.get("name"), "description": s.get("description") or "",
             "path": s.get("path")} for s in entries]
     return {

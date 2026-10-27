@@ -765,3 +765,23 @@ def test_mcp_client_config_endpoint():
     assert srv["args"] == ["-m", "src.mcp_server"]
     assert Path(srv["cwd"]) == _ROOT
     assert Path(srv["command"]).exists()
+
+
+def test_skills_limit_negativo_no_devuelve_vacio(monkeypatch):
+    """`?limit=-1` (un cliente pidiendo "todas") devolvia 0 skills: total[:0].
+
+    El contrato del endpoint es `limit=0` = sin recorte, asi que <= 0 significa
+    "todo"; un negativo no puede ser el caso peor.
+    """
+    from src.core import skills_catalog
+
+    fake = [{"name": f"s{i}", "description": "", "path": ""} for i in range(5)]
+    monkeypatch.setattr(skills_catalog, "list_skills", lambda cfg=None: fake)
+
+    for valor in ("", "?limit=0", "?limit=-1"):
+        r = client.get(f"/api/skills{valor}")
+        assert r.status_code == 200
+        assert r.json()["returned"] == 5, valor
+
+    r = client.get("/api/skills?limit=2")
+    assert [s["name"] for s in r.json()["skills"]] == ["s0", "s1"]
