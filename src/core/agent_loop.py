@@ -1145,9 +1145,13 @@ class AgentLoop:
                 "Si falta un especialista, creálo con agent_create (plantillas scout/builder/reviewer/"
                 "qa/researcher/ops y modo read_only/build). No invoques herramientas innecesarias. Sé conciso. "
                 "Si el pedido es una TAREA (analizar, crear, arreglar, escribir un programa), hacela "
-                "hasta el final con las herramientas y cerra con el estado real: qué hiciste, dónde "
-                "quedó y qué falta concreto. No devuelvas un plan ni preguntes si avanzar cuando ya "
-                "tenés con qué hacerlo."
+                "hasta el final con las herramientas. El entregable es lo que el usuario va a usar: si "
+                "construis algo, no lo des por terminado hasta que ese camino funcione de punta a punta "
+                "y lo hayas probado vos mismo — una pieza interna correcta (un modulo, una capa de "
+                "protocolo, un test) no reemplaza al programa andando. No devuelvas un plan ni preguntes "
+                "si avanzar cuando ya tenes con que hacerlo, y no cierres con una lista de pendientes: "
+                "segui trabajando hasta que ande. Solo si quedas bloqueado por algo externo (credencial, "
+                "permiso, servicio caido) deci exactamente que y por que."
             )))
 
         # Inyectar ENTORNO (SO/shell) para que el modelo use comandos NATIVOS.

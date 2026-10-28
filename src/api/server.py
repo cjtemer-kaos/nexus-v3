@@ -7607,8 +7607,8 @@ async def chat(request: Request):
             result = await loop.run(
                 task=("Segui con la tarea desde donde quedo. No repitas el resumen ni "
                       "preguntes si continuar: usa las herramientas y deja el trabajo "
-                      "hecho y comprobado. Si ya esta terminado y verificado, "
-                      "responde unicamente: LISTO: <que quedo funcionando>."),
+                      "hecho y comprobado. Si ya esta terminado y probado tal como lo "
+                      "usaria el usuario, responde unicamente: LISTO: <que quedo funcionando>."),
                 session_id=session_id, hint=hint,
                 force_tools=bool(body.get("force_tools", False)),
                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
