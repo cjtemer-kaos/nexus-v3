@@ -125,6 +125,36 @@ def test_hint_block_sin_skills_es_vacio(proyecto):
     assert sk.hint_block("cualquier cosa", _cfg()) == ""
 
 
+def test_hint_block_suma_ui_cuando_la_tarea_es_construir(proyecto):
+    """Si el pedido es construir algo, tienen que aparecer skills de interfaz.
+
+    El pedido real no dice "frontend" (es un cliente P2P, un script, un juego),
+    asi que la busqueda por texto no las trae y el modelo cierra el backend sin
+    pantalla. El bloque tiene que empujar la capa visual igual.
+    """
+    base = proyecto / "data" / "skills"
+    _write(base / "p2p-protocolo" / "SKILL.md",
+           _skill_md("p2p-protocolo", "protocolo ed2k y red p2p para clientes"))
+    _write(base / "diseno-interfaz" / "SKILL.md",
+           _skill_md("diseno-interfaz", "diseño de interfaz de usuario y componentes ui"))
+    hint = sk.hint_block("analiza el binario y hace una version mejorada del cliente p2p",
+                         _cfg(str(base)))
+    assert "p2p-protocolo" in hint
+    assert "diseno-interfaz" in hint
+    assert "interfaz" in hint.lower()
+
+
+def test_hint_block_no_fuerza_ui_si_la_tarea_no_construye(proyecto):
+    base = proyecto / "data" / "skills"
+    _write(base / "p2p-protocolo" / "SKILL.md",
+           _skill_md("p2p-protocolo", "protocolo ed2k y red p2p para clientes"))
+    _write(base / "diseno-interfaz" / "SKILL.md",
+           _skill_md("diseno-interfaz", "diseño de interfaz de usuario y componentes ui"))
+    hint = sk.hint_block("explica como funciona el protocolo ed2k", _cfg(str(base)))
+    assert "p2p-protocolo" in hint
+    assert "diseno-interfaz" not in hint
+
+
 def test_invalidate_ve_skills_nuevas(proyecto):
     base = proyecto / "data" / "skills"
     _write(base / "una" / "SKILL.md", _skill_md("una", "primera"))

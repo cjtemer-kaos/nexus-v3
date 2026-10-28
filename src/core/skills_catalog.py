@@ -28,6 +28,11 @@ CACHE_TTL_S = 300.0
 MAX_BODY_CHARS = 24000
 MAX_HINT_CHARS = 1400
 HINT_DESC_CHARS = 60
+# Verbo/noun de "construir un programa": dispara el refuerzo de skills de UI.
+_ES_CONSTRUIR = re.compile(
+    r"(?i)\b(crear|crea|creá|escribir|escribí|escribi|hacer|hacé|hace|programa|aplicaci[oó]n|"
+    r"app|cliente|servidor|web|interfaz|frontend|ui|ux|versi[oó]n mejorada|implementar|"
+    r"desarrollar|construir|armar|juego|jugar|dashboard|panel)\b")
 
 _lock = threading.Lock()
 _cache: dict[tuple[str, ...], tuple[float, list[dict[str, Any]]]] = {}
@@ -365,6 +370,11 @@ def hint_block(task: str = "", cfg: dict | None = None, limit: int = 6) -> str:
 
     Con 1.700+ skills no entra la lista completa (ni de lejos): se muestran solo
     las que se parecen a la tarea y se le enseña al modelo a buscar el resto.
+
+    Si la tarea es construir algo se suman skills de interfaz: el catálogo tiene
+    cientos de diseño/UI y la búsqueda por el texto del pedido no las trae (pedir
+    un cliente P2P no dice "frontend"), así que el modelo cerraba el backend y
+    nunca abría la capa visual.
     """
     try:
         total = len(_entries(cfg))
@@ -374,11 +384,28 @@ def hint_block(task: str = "", cfg: dict | None = None, limit: int = 6) -> str:
         return ""
     lines: list[str] = []
     if task:
-        hits = search(task, cfg, limit=limit)
-        if hits:
+        hits = list(search(task, cfg, limit=limit) or [])
+        usados = {h["name"] for h in hits}
+        extra: list[dict] = []
+        if _ES_CONSTRUIR.search(task or ""):
+            try:
+                for h in search("diseño de interfaz de usuario frontend componentes ui",
+                                cfg, limit=limit or 6) or []:
+                    if h["name"] in usados:
+                        continue
+                    extra.append(h)
+                    usados.add(h["name"])
+                    if len(extra) >= 3:
+                        break
+            except Exception:
+                extra = []
+        if hits or extra:
             lines.append("SKILLS QUE PUEDEN SERVIR PARA ESTA TAREA (cargalas con skill(name=...)):")
-            for h in hits:
+            for h in hits + extra:
                 lines.append(f"- {h['name']}: {_short(h['description'] or '', HINT_DESC_CHARS)}")
+            if extra:
+                lines.append("Si el entregable se usa desde una pantalla, la interfaz también "
+                             "es parte del pedido: no alcanza con la lógica funcionando.")
     if not lines:
         lines.append(
             f"SKILLS: hay {total} skills instaladas. Antes de resolver algo especializado "
