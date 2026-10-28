@@ -20,6 +20,9 @@ SCHEMA_PATH = Path(__file__).parents[2] / "config" / "config.schema.json"
 
 _ENV_VAR_RE = re.compile(r"\$\{([^:}]+)(?::-(.*?))?\}")
 _SIMPLE_ENV_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+# Un valor con estos caracteres es una regex (o al menos no es una ruta): no se
+# le expanden los `$VAR` sueltos. Ver _expand_env.
+_REGEXISH_RE = re.compile(r"[\\()\[\]|?^*+]")
 
 
 def _expand_env(value: str) -> str:
@@ -31,8 +34,12 @@ def _expand_env(value: str) -> str:
         default = m.group(2) if m.group(2) is not None else ""
         return os.environ.get(var, default)
     value = _ENV_VAR_RE.sub(repl, value)
-    # $VAR
-    value = _SIMPLE_ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
+    # $VAR suelto: comodo para rutas, pero NUNCA dentro de una regex. La regla
+    # deny-rm-root tiene `\$home`; con HOME definido (Windows lo define) se
+    # expandia a `\C:\Users\...`, el re.compile fallaba y el guard se quedaba
+    # sin el deny de `rm -rf ~` sin que nadie se enterara.
+    if "$" in value and not _REGEXISH_RE.search(value):
+        value = _SIMPLE_ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
     return value
 
 
