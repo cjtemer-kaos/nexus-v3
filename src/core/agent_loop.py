@@ -1485,6 +1485,27 @@ class AgentLoop:
                                           content="recordatorio: falta guardar en el grafo"))
                     await _flush_steps()
                     continue
+                # Un steer que llega mientras el modelo redacta la respuesta no
+                # puede perderse: la UI lo manda cuando el run esta en curso y, si
+                # el turno cierra aca, el mensaje queda en el historial sin que
+                # nadie lo conteste (paso con "debes hacer funcionar rea, solucionalo":
+                # se guardo como [124] y el turno siguio hablando de otra cosa).
+                if callable(steer):
+                    try:
+                        _tarde = [s for s in (steer() or []) if s]
+                    except Exception:
+                        _tarde = []
+                    if _tarde:
+                        for _s in _tarde:
+                            messages.append(LLMMessage(role="user", content=f"[steer del usuario] {_s}"))
+                            try:
+                                await self._emit_cycle_async(trajectory, "steer", iteration, content=str(_s)[:500])
+                            except Exception:
+                                pass
+                        steps.append(LoopStep(iteration=iteration, phase="decide",
+                                              content="steer tardio: se responde antes de cerrar el turno"))
+                        await _flush_steps()
+                        continue
                 # Final answer
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta final ({len(assistant_content)} caracteres)"))
                 final_output = assistant_content

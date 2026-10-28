@@ -3068,10 +3068,16 @@ def _cmd_shell_hint(cmd: str, out: str) -> str:
     cmd.exe contesta "La sintaxis del comando no es correcta." sin explicar
     nada: el agente concluia que estaba bloqueado por permisos y reintentaba.
     """
+    cmd = (cmd or "").strip()
+    # `dir workspace/x` no es sintaxis rota: cmd lee "/x" como modificador.
+    # Sin decirlo, el agente repite el mismo comando y culpa a los permisos.
+    if _CMD_SWITCH_ERR.search(out or "") and "/" in cmd:
+        return ("cmd.exe leyo la parte de la ruta que empieza con `/` como si fuera un "
+                "modificador. En cmd las rutas van con barra invertida: `dir "
+                "workspace\\emule-next-gen`. Para listar tambien sirve list_dir")
     if not _CMD_SYNTAX_ERR.search(out or ""):
         return ""
     partes: list[str] = []
-    cmd = (cmd or "").strip()
     flags_unix = re.search(r"(?:^|\s)-[A-Za-z]\b", cmd) or re.search(
         r"(?:^|\s)/[A-Za-z]\b", cmd)
     if flags_unix:
@@ -3086,6 +3092,11 @@ def _cmd_shell_hint(cmd: str, out: str) -> str:
             "sin `&&` con parentesis y sin `/dev/null`")
     return " ".join(partes)
 
+
+# cmd.exe contesta esto cuando una ruta con `/` se interpreta como modificador.
+_CMD_SWITCH_ERR = re.compile(
+    r"El modificador no es v[aá]lido|Invalid switch|Par[aá]metro incorrecto",
+    re.I)
 
 _CMD_SYNTAX_ERR = re.compile(
     r"La sintaxis del comando no es correcta"
@@ -4617,11 +4628,20 @@ async def _helper_run(task: str, *, gema: str = "", agent_id: str | None = None,
         approval=_appr,
     )
     res = await loop.run(task=task, session_id=sid, hint=hint, model=model, system_prompt=sys_prompt or None, images=images or None)
-    return _j.dumps({
+    salida = res.final_output or ""
+    payload: dict = {}
+    # Un sub-loop que fallo NO es una tarea hecha: el agente leia "success": false
+    # y contestaba "listo" igual (le paso con la gema trainer).
+    if not res.success:
+        payload["advertencia"] = ("el ayudante NO completo la tarea: mira 'output'. No la des "
+                                  "por hecha ni la repitas igual; resolvela vos o cambia de enfoque")
+        salida = "[NO COMPLETADO] " + salida
+    payload.update({
         "gema": use_gema, "agent": (agent or {}).get("id"),
         "model": model, "provider": assign.get("provider"), "assign_reason": assign.get("reason"),
-        "success": res.success, "output": res.final_output,
-    }, ensure_ascii=False)
+        "success": res.success, "output": salida,
+    })
+    return _j.dumps(payload, ensure_ascii=False)
 
 
 _SUB_SPAWNERS: dict = {}
@@ -4961,6 +4981,25 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {"text": {"type": "string"}},
                     "required": ["text"], "additionalProperties": False})
 
+    def _mcp_bundle_entry(nombre: str) -> dict | None:
+        """Entrada del bundle MCP con ese nombre, si existe.
+
+        Un servidor MCP NO es una skill: buscarlo con `skill(name=...)` da
+        "no encontrada" y el agente concluye que no esta disponible, aunque
+        arranque en segundos. Este helper permite decirlo con el nombre exacto.
+        """
+        try:
+            from src.core.mcp_client import load_manifest
+            want = (nombre or "").strip().lower()
+            if not want:
+                return None
+            for entrada in load_manifest(_PROJECT_ROOT):
+                if str(entrada.get("name") or "").strip().lower() == want:
+                    return entrada
+        except Exception:
+            pass
+        return None
+
     async def skill_tool(query: str = "", name: str = "", limit: int = 10) -> str:
         """Descubre y carga skills instaladas en las carpetas convencionales.
 
@@ -4977,11 +5016,25 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             got = _sk.get_skill(name, cfg_live)
             if got is None:
                 sug = _sk.search(name, cfg_live, limit=5)
-                return _js.dumps({
+                salida = {
                     "error": f"skill no encontrada: {name}",
                     "suggestions": [s["name"] for s in sug],
                     "hint": 'usa skill(query="...") para buscar',
-                }, ensure_ascii=False)
+                }
+                # Si el nombre coincide con un MCP del bundle, el error real es
+                # de categoria: no es una skill, es un servidor MCP.
+                mcp = _mcp_bundle_entry(name)
+                if mcp is not None:
+                    server = str(mcp.get("name"))
+                    como = (f'mcp_list(server="{server}") lista sus tools y comprueba que '
+                            f'responde; mcp_call(server="{server}", tool="<tool>", '
+                            f'arguments={{...}}) las ejecuta')
+                    salida["error"] = f"{name!r} NO es una skill: es un servidor MCP del bundle"
+                    salida["mcp"] = {"server": server, "como_usar": como,
+                                     "nota": ("que no exista una skill con ese nombre NO significa "
+                                              "que el servidor no este disponible")}
+                    salida["hint"] = como
+                return _js.dumps(salida, ensure_ascii=False)
             return _js.dumps({
                 "skill": {
                     "name": got["name"],
@@ -6335,6 +6388,24 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "required": ["action"], "additionalProperties": False},
     )
 
+    def _mcp_bundle_status() -> dict:
+        """Estado cacheado del bundle (binario + env), por nombre de servidor.
+
+        `enabled_default` del manifest dice solo que viene en el bundle. Sin este
+        estado el agente lo leia como "ya conectado" y, cuando algo no arrancaba,
+        lo daba por inexistente en vez de mirar el motivo.
+        """
+        import json as _j2
+        try:
+            from src.core.mcp_setup import status_path
+            p = status_path()
+            if not p.exists():
+                return {}
+            data = _j2.loads(p.read_text(encoding="utf-8"))
+            return {str(e.get("name")): e for e in (data.get("entries") or []) if e.get("name")}
+        except Exception:
+            return {}
+
     def _mcp_server_names(cli) -> list[str]:
         try:
             return [str(s.get("name")) for s in cli.list_servers() if s.get("name")]
@@ -6347,7 +6418,21 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         from src.core.mcp_client import get_mcp_client
         cli = get_mcp_client(_PROJECT_ROOT)
         if not server:
-            return _j.dumps({"servers": await asyncio.to_thread(cli.list_servers)}, ensure_ascii=False)
+            servidores = await asyncio.to_thread(cli.list_servers)
+            estado = _mcp_bundle_status()
+            for s in servidores:
+                e = estado.get(str(s.get("name"))) or {}
+                s["estado"] = e.get("status") or "sin_verificar"
+                s["detalle"] = e.get("detail") or ""
+            return _j.dumps({
+                "servers": servidores,
+                "como_usar": ("se usan con mcp_call(server=\"<nombre>\", tool=\"<tool>\", "
+                              "arguments={...}). Arrancan just-in-time: la primera llamada tarda "
+                              "unos segundos. mcp_list(server=\"<nombre>\") lista sus tools y "
+                              "prueba que responde. 'enabled_default' solo dice que viene en el "
+                              "bundle, NO que este conectado; y que algo no sea una skill de la "
+                              "app NO significa que no este disponible."),
+            }, ensure_ascii=False)
         nombres = await asyncio.to_thread(_mcp_server_names, cli)
         if nombres and server not in nombres:
             raise ValueError(f"servidor MCP desconocido: {server}. "
