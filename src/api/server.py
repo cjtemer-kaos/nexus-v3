@@ -642,6 +642,21 @@ async def _startup():
         _spawn_bg(_distill_orphan_sessions())
     except Exception:
         pass
+    # El indice de skills se escanea al primer uso (~2 s con 2.100 skills) y ese
+    # costo caia en el setup del primer turno despues de cada reinicio. Se calienta
+    # en background: cuando el usuario escribe, ya esta en cache.
+    try:
+        from src.core import skills_catalog as _sc_boot
+
+        def _calentar_skills():
+            t = __import__("time").monotonic()
+            n = len(_sc_boot.list_skills(_state.get("config")))
+            logger.info("indice de skills caliente: %d en %.0f ms", n,
+                        (__import__("time").monotonic() - t) * 1000)
+
+        _spawn_bg(asyncio.to_thread(_calentar_skills))
+    except Exception as e:
+        logger.debug("calentado del indice de skills omitido: %s", e)
     # Auto-update: se aplica al abrir la app; mientras corre, solo avisa.
     try:
         _spawn_bg(_self_update_watcher())

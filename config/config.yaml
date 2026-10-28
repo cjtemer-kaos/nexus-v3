@@ -168,6 +168,9 @@ compaction:
     persist_dir: ./data/spill
   summary:
     model_hint: simple
+    # Si el turno no corre en el modelo local, el resumen se hace con el modelo
+    # del turno (ya cargado, ~3 s) en vez de recargar/esperar el local (~30 s).
+    follow_run_model: true
     # Presupuesto dinamico: max(min_tokens, limit*ratio), techo max_tokens.
     min_tokens: 2000
     ratio: 0.20

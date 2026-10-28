@@ -399,6 +399,9 @@
             "model_hint": {
               "type": "string"
             },
+            "follow_run_model": {
+              "type": "boolean"
+            },
             "min_tokens": {
               "type": "integer",
               "minimum": 128

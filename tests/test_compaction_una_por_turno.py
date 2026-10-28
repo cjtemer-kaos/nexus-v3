@@ -55,7 +55,7 @@ class PipelineQueSiempreQuiere:
         return msgs
 
     async def summarize_with_llm(self, msgs, limit, router, previous_summary=None,
-                                 progress_messages=0, session_id=""):
+                                 progress_messages=0, session_id="", run_model=""):
         self.llamadas += 1
         return msgs, None
 

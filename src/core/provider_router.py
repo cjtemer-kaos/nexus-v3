@@ -25,6 +25,15 @@ from typing import Optional, Any
 from .provider_base import BaseProvider, LLMMessage, LLMResponse
 
 
+def _es_timeout(e: Exception) -> bool:
+    """Timeout del transporte (httpx ReadTimeout/ConnectTimeout, asyncio, builtin).
+
+    Sin importar httpx: el router tambien corre con otros clientes.
+    """
+    nombre = type(e).__name__
+    return "Timeout" in nombre or isinstance(e, (TimeoutError, asyncio.TimeoutError))
+
+
 def _get_adaptive():
     """AdaptiveRouter compartido (Thompson persistido). None si no está disponible."""
     try:
@@ -380,6 +389,7 @@ class ProviderRouter:
         attempts = self._attempts(model, hint, kw.pop("prefer_speed", False))
 
         last_err: Exception | None = None
+        _timeouts_vistos: set[tuple[str, str]] = set()
         for pname, m_id in attempts:
             provider = self._providers.get(pname)
             if not provider:
@@ -428,6 +438,28 @@ class ProviderRouter:
                     f"fallo chat enrutador {pname}/{m_id}: "
                     f"{type(e).__name__}: {e or repr(e)}"
                 )
+                # Timeout de transporte: igual que en stream, el problema es el
+                # upstream, no el modelo. Probar el siguiente cuesta otro minuto
+                # entero; se reintenta una vez el mismo y, si repite, se corta.
+                if _es_timeout(e):
+                    if (pname, m_id) not in _timeouts_vistos:
+                        _timeouts_vistos.add((pname, m_id))
+                        logger.warning(
+                            f"chat {pname}/{m_id} sin respuesta ({type(e).__name__}); "
+                            f"reintento en el mismo modelo")
+                        await asyncio.sleep(1.5)
+                        try:
+                            _t0 = time.monotonic()
+                            resp = await provider.chat(messages, tools=tools, model=m_id, **kw)
+                            self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
+                            return resp
+                        except Exception as e2:
+                            last_err = e2
+                            logger.warning(
+                                f"chat {pname}/{m_id} otra vez sin respuesta "
+                                f"({type(e2).__name__}); no se prueba otro modelo")
+                            raise
+                    raise
 
                 continue
         # Ultimo recurso: si el turno requeria tools pero ningun modelo las soporta,
@@ -521,26 +553,46 @@ class ProviderRouter:
                     except Exception:
                         pass
             started = False
-            try:
-                _t0 = time.monotonic()
-                async for ev in provider.stream(messages, tools=tools, model=m_id, **kw):
-                    started = True
-                    yield ev
-                self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
-                return
-            except Exception as e:
-                self._record_fail(pname, m_id)
-                if started:
-                    # Ya emitimos tokens de este provider: NO caer a otro (mezclaria salidas).
-                    logger.warning(f"stream {pname}/{m_id} falló a mitad: {e}")
-                    raise
-                last_err = e
-                logger.warning(
-                    f"fallo stream enrutador {pname}/{m_id}: "
-                    f"{type(e).__name__}: {e or repr(e)}"
-                )
-
-                continue
+            _reintentos_timeout = 0
+            while True:
+                try:
+                    _t0 = time.monotonic()
+                    async for ev in provider.stream(messages, tools=tools, model=m_id, **kw):
+                        started = True
+                        yield ev
+                    self._record_success(pname, m_id, (time.monotonic() - _t0) * 1000)
+                    return
+                except Exception as e:
+                    self._record_fail(pname, m_id)
+                    if started:
+                        # Ya emitimos tokens de este provider: NO caer a otro (mezclaria salidas).
+                        logger.warning(f"stream {pname}/{m_id} falló a mitad: {e}")
+                        raise
+                    last_err = e
+                    # Timeout SIN primer token = el upstream está saturado, no el modelo
+                    # elegido. Recorrer la cadena de fallback costaba 60 s por modelo
+                    # (medido 2026-10-28: deepseek → pro → glm, 3 minutos perdidos en
+                    # un solo turno y el siguiente intento del mismo modelo andaba).
+                    # Se reintenta UNA vez el mismo modelo y, si vuelve a estancarse,
+                    # se corta: cambiar de modelo no arregla un upstream caído.
+                    if _es_timeout(e) and not started:
+                        if _reintentos_timeout == 0:
+                            _reintentos_timeout += 1
+                            logger.warning(
+                                f"stream {pname}/{m_id} estancado sin primer token "
+                                f"({type(e).__name__}); reintento en el mismo modelo")
+                            await asyncio.sleep(1.5)
+                            continue
+                        logger.warning(
+                            f"stream {pname}/{m_id} estancado otra vez "
+                            f"({type(e).__name__}); no se prueba otro modelo: "
+                            f"el upstream no entrega ni el primer token")
+                        raise
+                    logger.warning(
+                        f"fallo stream enrutador {pname}/{m_id}: "
+                        f"{type(e).__name__}: {e or repr(e)}"
+                    )
+                    break
         # Degradado: reintentar el principal SIN tools (para que al menos responda).
         if tools and attempts:
             pname, m_id = attempts[0]

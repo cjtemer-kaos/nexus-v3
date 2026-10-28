@@ -147,6 +147,14 @@ class CompactionPipeline:
         self.max_tool_result_chars: int = int(budget_cfg.get("max_tool_result_chars", 2000))
         self.micro_placeholder: str = micro_cfg.get("placeholder", "[resultado_herramienta colapsado — ver ./data/spill/]")
         self.summary_model_hint: str = summary_cfg.get("model_hint", "simple")
+        # El resumen de compactacion es el paso mas caro del setup (medido: 31,9 s
+        # resumiendo con el modelo local mientras el turno corria en la nube). Si
+        # el turno NO usa el modelo local, no hay recarga de Ollama que cuidar y
+        # conviene resumir con el mismo modelo del turno: mismo contexto ya
+        # cargado, ~10x mas rapido. Los turnos locales siguen usando el modelo
+        # cargado (aux_model) para no desalojarlo.
+        self.summary_follow_run_model: bool = bool(
+            summary_cfg.get("follow_run_model", True))
         # Presupuesto dinamico del resumen (P1): min 2k, 20% del limite, techo 12k.
         self.summary_min_tokens: int = int(summary_cfg.get("min_tokens", 2000))
         self.summary_max_tokens: int = int(summary_cfg.get("max_tokens", 12000))
@@ -262,6 +270,7 @@ class CompactionPipeline:
         previous_summary: str = "",
         progress_messages: int = 0,
         session_id: str = "",
+        run_model: str = "",
     ) -> tuple[list[dict], CompactionMetrics]:
         """L4 con LLM barato. Presupuesto dinamico, reuso y cooldown.
 
@@ -328,11 +337,20 @@ class CompactionPipeline:
 
             routed = None
             if router is not None:
+                # Si el turno corre en un modelo que NO es el local, resumir con
+                # ESE modelo: ya esta caliente, no desaloja nada y tarda ~3 s en
+                # vez de ~30 s (medido en data/backend.log el 2026-10-28).
+                _run = (run_model or "").strip()
+                if _run and self.summary_follow_run_model and _run != getattr(router, "aux_model", ""):
+                    try:
+                        routed = router.resolve(preferred_model=_run)
+                    except Exception:
+                        routed = None
                 # El resumen de compactacion debe usar el modelo ya cargado
                 # (router.aux_model); otro modelo desaloja el del chat en Ollama y el
                 # turno siguiente paga la recarga.
                 _aux = getattr(router, "aux_model", "") or ""
-                if _aux:
+                if routed is None and _aux:
                     try:
                         routed = router.resolve(preferred_model=_aux)
                     except TypeError:

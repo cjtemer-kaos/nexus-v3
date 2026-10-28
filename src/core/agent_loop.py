@@ -41,6 +41,10 @@ _READONLY_TOOLS = {
     "web_fetch", "web_search", "fetch", "mcp_list", "gema_list", "agent_list",
     "get_system_info", "system_resources", "status", "graph", "knowledge_graph",
     "fts_search", "find_related", "get_entities", "latest_topic", "find_path",
+    # Solo leen estado: pueden ir en paralelo sin reordenar efectos.
+    "git_status", "git_diff", "git_log", "harness", "skill", "todo_read",
+    "job_read", "job_list", "checkpoint_list", "checkpoint_diff", "sub_agent_list",
+    "team_list",
 }
 
 
@@ -1273,6 +1277,25 @@ class AgentLoop:
         except Exception as e:
             logger.debug(f"digest del harness falló: {e}")
 
+        # Economia de vueltas: cada mensaje al modelo cuesta ~1,5 s de ida y vuelta
+        # (medido 2026-10-28 contra opencode-zen), y una tarea real hacia 65 llamadas
+        # de a UNA tool. El arnes YA ejecuta en paralelo las tools de solo lectura que
+        # vienen en el mismo mensaje, pero el modelo no lo sabia y las mandaba de a una.
+        # Decirselo es documentar una capacidad, no recetarle una solucion.
+        try:
+            _eco = (
+                "\n\nECONOMIA DE VUELTAS (capacidad del arnes): podes devolver VARIAS tool_calls "
+                "en un mismo mensaje. Si son de solo lectura (read_file, grep, glob, list_dir, "
+                "code_search, repo_map, git_status/diff/log, recall, harness, mcp_list, skill) se "
+                "ejecutan EN PARALELO; las mutantes se respetan en orden. Agrupa en un mensaje "
+                "todo lo que no dependa del resultado anterior, y usa UNA sola celda de repl o UN "
+                "solo exec para varias consultas cortas en vez de una llamada por pregunta."
+            )
+            if messages and messages[0].role == "system" and _eco.strip() not in (messages[0].content or ""):
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _eco)
+        except Exception:
+            pass
+
         # Load history from session_log if available
         history_limit = 20
         if self.session_log is not None:
@@ -1349,7 +1372,8 @@ class AgentLoop:
                         dict_msgs, cmetrics = await self.compaction.summarize_with_llm(
                             dict_msgs, _limit, self.router,
                             previous_summary=_prev, progress_messages=_progress,
-                            session_id=session_id)
+                            session_id=session_id,
+                            run_model=str(getattr(self, "_req_model", "") or ""))
                     else:
                         dict_msgs, cmetrics = await self.compaction.compact(
                             dict_msgs, _limit, session_id=session_id)
@@ -1390,6 +1414,11 @@ class AgentLoop:
 
         # Main loop
         iteration = 0
+        # Contador real de vueltas: varios cortes hacen `iteration = max_iters`
+        # para forzar la salida, y el log terminaba diciendo "iter=200" en turnos
+        # que dieron 5 vueltas. Se medía mal y se culpaba al modelo de ser lento.
+        _iter_reales = 0
+        _motivo_salida = "fin"
         _persistio_final = False
         max_iters = self.budget.max_iterations
         # Config error policy
@@ -1404,9 +1433,11 @@ class AgentLoop:
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado: {self.budget.reason}"))
                 final_output = f"[presupuesto agotado: {self.budget.reason}]"
+                _motivo_salida = "presupuesto"
                 break
 
             iteration += 1
+            _iter_reales += 1
             self.budget.tick()
             _turn_t0 = time.monotonic()
 
@@ -1776,6 +1807,7 @@ class AgentLoop:
                     elif _n >= self.anti_loop_repeat_stop:
                         final_output = f"[doom-loop: {tool_name} repetido {_n} veces con mismos args — bucle detenido; sin respuesta final]"
                         success = False
+                        _motivo_salida = "doom-loop"
                         iteration = max_iters  # force exit
                         break
                 except Exception:
@@ -1840,6 +1872,7 @@ class AgentLoop:
                             f"[bucle de herramienta: '{tool_name}' llamada {_tn} veces sin llegar a una "
                             "respuesta final — turno detenido para no agotar el presupuesto]")
                         success = False
+                        _motivo_salida = "bucle-herramienta"
                         iteration = max_iters  # force exit
                         break
                 except Exception:
@@ -1915,6 +1948,7 @@ class AgentLoop:
                         final_output = f"[abortado: {tool_name} -> {err_str}]"
                         success = False
                         # Break outer loop
+                        _motivo_salida = "abortado"
                         iteration = max_iters  # force exit
                         break
                     elif action == ErrorAction.RETRY:
@@ -1949,6 +1983,7 @@ class AgentLoop:
                             f"[abortado: {_cf} fallos consecutivos de herramientas; "
                             f"último: {tool_name} -> {tool_result_str[:300]}]")
                         success = False
+                        _motivo_salida = "fallos-consecutivos"
                         iteration = max_iters
                         break
                     if _cf == self.anti_loop_failures_warn:
@@ -2015,6 +2050,7 @@ class AgentLoop:
                                 f"[bucle de herramienta: '{tool_name}' devolvió el mismo resultado "
                                 f"{_rn} veces sin avanzar — turno detenido]")
                             success = False
+                            _motivo_salida = "resultado-repetido"
                             iteration = max_iters  # force exit
                             break
                 except Exception:
@@ -2053,7 +2089,8 @@ class AgentLoop:
                             dict_msgs, _cmetrics = await self.compaction.summarize_with_llm(
                                 dict_msgs, _limit, self.router,
                                 previous_summary=_prev, progress_messages=_progress,
-                                session_id=session_id)
+                                session_id=session_id,
+                                run_model=str(getattr(self, "_req_model", "") or ""))
                         else:
                             dict_msgs, _cmetrics = await self.compaction.compact(
                                 dict_msgs, _limit, session_id=session_id)
@@ -2076,8 +2113,9 @@ class AgentLoop:
         try:
             _final_ms = (time.monotonic() - _perf_final_start) * 1000.0
             logger.info(
-                "loop perf: iter=%d llm=%dms tools=%dms prep=%dms setup=%dms final=%dms hooks=%dms resto=%dms total=%dms",
-                iteration, int(_perf_llm_ms), int(_perf_tool_ms), int(_perf_prep_ms),
+                "loop perf: iter=%d (reales=%d salida=%s cap=%d) llm=%dms tools=%dms prep=%dms setup=%dms final=%dms hooks=%dms resto=%dms total=%dms",
+                iteration, _iter_reales, _motivo_salida, max_iters,
+                int(_perf_llm_ms), int(_perf_tool_ms), int(_perf_prep_ms),
                 int(_perf_setup_ms), int(_final_ms), int(getattr(self, "_perf_hooks_ms", 0.0)),
                 int(max(0.0, duration_ms - _perf_llm_ms - _perf_tool_ms - _perf_prep_ms - _perf_setup_ms - _final_ms - getattr(self, "_perf_hooks_ms", 0.0))),
                 int(duration_ms),
