@@ -453,6 +453,19 @@ class AgentLoop:
             return base
         return max(1024, int(base / factor))
 
+    def _limite_de_mensajes(self, max_tokens: int) -> int:
+        """Tope de compactación en tokens de MENSAJES (sin los schemas de tools).
+
+        `_should_compact` dispara con mensajes + schemas, pero el pipeline de
+        compactación mide solo mensajes. Pasarle el tope completo lo dejaba sin
+        nada que hacer: en la corrida 19 compactó "11786 -> 11786, capas []"
+        porque el disparo fue por los ~7k de schemas. Con el descuento, el tope
+        de mensajes es el mismo que usa el disparo y el total vuelve al budget.
+        """
+        threshold = max(0.05, float(self.compact_threshold or 0.75))
+        tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
+        return max(1024, int(round(max_tokens * threshold)) - tools_n)
+
     def _should_compact(self, session_id: str, dict_msgs: list[dict], max_tokens: int,
                         est_tokens: int | None = None) -> bool:
         """Compactar sólo si se pasó el umbral Y se superó el piso de histéresis."""
@@ -1069,6 +1082,8 @@ class AgentLoop:
         _perf_llm_ms = 0.0
         _perf_tool_ms = 0.0
         _perf_prep_ms = 0.0
+        _perf_flush_ms = 0.0
+        _perf_compact_ms = 0.0
         self._perf_hooks_ms = 0.0
         steps: list[LoopStep] = []
         _emitted = 0
@@ -1086,11 +1101,12 @@ class AgentLoop:
 
         async def _flush_steps() -> None:
             """Reenvía al cliente los pasos nuevos (streaming en vivo de la trayectoria)."""
-            nonlocal _emitted
+            nonlocal _emitted, _perf_flush_ms
             cb = getattr(self, "_on_step", None)
             if cb is None or _emitted >= len(steps):
                 _emitted = len(steps)
                 return
+            _t_flush = time.monotonic()
             for _s in steps[_emitted:]:
                 try:
                     await cb({
@@ -1103,6 +1119,7 @@ class AgentLoop:
                 except Exception:
                     pass
             _emitted = len(steps)
+            _perf_flush_ms += (time.monotonic() - _t_flush) * 1000.0
         trajectory = trajectory or Trajectory(session_id=session_id, task=task)
         # Resume: cerrar turnos interrumpidos antes de emitir nada nuevo.
         try:
@@ -1416,8 +1433,9 @@ class AgentLoop:
                 max_tokens = self._effective_context_max_tokens(session_id)
                 if self._should_compact(session_id, dict_msgs, max_tokens):
                     _compactaciones += 1
+                    _t_compact = time.monotonic()
                     await self._distill(session_id)
-                    _limit = int(max_tokens * self.compact_threshold)
+                    _limit = self._limite_de_mensajes(max_tokens)
                     _prev, _progress = self._summary_state(session_id)
                     if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
                         dict_msgs, cmetrics = await self.compaction.summarize_with_llm(
@@ -1434,6 +1452,7 @@ class AgentLoop:
                     await self._emit_compact_hook(
                         session_id, cmetrics, self._compaction_summary(dict_msgs))
                     messages = self._rebuild_messages(dict_msgs)
+                    _perf_compact_ms += (time.monotonic() - _t_compact) * 1000.0
             except Exception as e:
                 logger.debug(f"compaction pre-check falló: {e}")
 
@@ -2149,9 +2168,10 @@ class AgentLoop:
                     # reales en vez de resumir en cascada.
                     if _compactaciones == 0 and self._should_compact(session_id, dict_msgs, max_tokens):
                         _compactaciones += 1
+                        _t_compact = time.monotonic()
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
-                        _limit = int(max_tokens * self.compact_threshold)
+                        _limit = self._limite_de_mensajes(max_tokens)
                         _prev, _progress = self._summary_state(session_id)
                         if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
                             dict_msgs, _cmetrics = await self.compaction.summarize_with_llm(
@@ -2168,6 +2188,7 @@ class AgentLoop:
                         await self._emit_compact_hook(
                             session_id, _cmetrics, self._compaction_summary(dict_msgs))
                         messages = self._rebuild_messages(dict_msgs)
+                        _perf_compact_ms += (time.monotonic() - _t_compact) * 1000.0
                         steps.append(LoopStep(iteration=iteration, phase="observe", content=f"contexto compactado ({len(dict_msgs)} mensajes)"))
                 except Exception as e:
                     logger.debug(f"observe compaction falló: {e}")
@@ -2181,11 +2202,15 @@ class AgentLoop:
         try:
             _final_ms = (time.monotonic() - _perf_final_start) * 1000.0
             logger.info(
-                "loop perf: iter=%d (reales=%d salida=%s cap=%d) llm=%dms tools=%dms prep=%dms setup=%dms final=%dms hooks=%dms resto=%dms total=%dms",
+                "loop perf: iter=%d (reales=%d salida=%s cap=%d) llm=%dms tools=%dms "
+                "prep=%dms setup=%dms final=%dms hooks=%dms flush=%dms compact=%dms resto=%dms total=%dms",
                 iteration, _iter_reales, _motivo_salida, max_iters,
                 int(_perf_llm_ms), int(_perf_tool_ms), int(_perf_prep_ms),
                 int(_perf_setup_ms), int(_final_ms), int(getattr(self, "_perf_hooks_ms", 0.0)),
-                int(max(0.0, duration_ms - _perf_llm_ms - _perf_tool_ms - _perf_prep_ms - _perf_setup_ms - _final_ms - getattr(self, "_perf_hooks_ms", 0.0))),
+                int(_perf_flush_ms), int(_perf_compact_ms),
+                int(max(0.0, duration_ms - _perf_llm_ms - _perf_tool_ms - _perf_prep_ms
+                        - _perf_setup_ms - _final_ms - getattr(self, "_perf_hooks_ms", 0.0)
+                        - _perf_flush_ms - _perf_compact_ms)),
                 int(duration_ms),
             )
         except Exception:

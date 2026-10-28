@@ -36,3 +36,17 @@ def test_sin_original_tokens_descuenta_los_schemas_del_estimado():
     loop._note_compaction("s2", {"compressed_tokens": 8288, "layers": []}, [])
 
     assert loop._no_recompact_below["s2"] == int((8288 + 7000) * 1.2)
+
+
+def test_el_tope_de_compactacion_descuenta_los_schemas():
+    """El disparo cuenta mensajes + schemas; el pipeline mide solo mensajes."""
+    loop = _loop()
+    loop.compact_threshold = 0.75
+
+    # Corrida 19: compactó "11786 -> 11786, capas []" porque el tope era 18432
+    # (mensajes + tools) y los mensajes solos eran 11786.
+    assert loop._limite_de_mensajes(24576) == int(round(24576 * 0.75)) - 7000
+    assert loop._limite_de_mensajes(24576) < 24576 * 0.75
+    # Nunca deja un tope absurdo si los schemas se comen el budget.
+    assert loop._limite_de_mensajes(1000) == 1024
+
