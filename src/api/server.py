@@ -6527,6 +6527,31 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                                           await asyncio.to_thread(cli.list_tools, server)]
             except Exception:
                 pass
+        # Error de validacion de argumentos: el modelo adivinaba ("path" en
+        # list_procedures, "category" en inspect_native_data_type) y gastaba un
+        # turno por intento. Con las claves reales del schema, corrige y sigue.
+        _bajo = texto.lower()
+        if isinstance(res, dict) and res.get("isError") and any(
+                k in _bajo for k in ("invalid argument", "unrecognized key",
+                                     "input validation", "required property")):
+            try:
+                _tools = await asyncio.to_thread(cli.list_tools, server)
+                _t = next((t for t in _tools if t.get("name") == tool), None)
+                _esq = (_t or {}).get("input_schema") or {}
+                _props = _esq.get("properties") or {}
+                res["input_schema"] = {
+                    "required": _esq.get("required") or [],
+                    "properties": {
+                        str(k): {"type": (v or {}).get("type") or "any"}
+                        for k, v in _props.items()
+                    },
+                }
+                res["como_usar"] = (
+                    f"repeti mcp_call(server=\"{server}\", tool=\"{tool}\", "
+                    f"arguments={{...}}) usando SOLO claves de input_schema; "
+                    f"las que no figuran no existen.")
+            except Exception:
+                pass
         return _j.dumps(res, ensure_ascii=False)
     registry.register_function(
         mcp_call, name="mcp_call",

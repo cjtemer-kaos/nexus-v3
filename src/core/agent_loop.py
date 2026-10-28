@@ -372,11 +372,11 @@ class AgentLoop:
                 continue
             filas.append(f"- {titulo} (nodo {h.get('id')}): {snip}")
         if filas:
-            return ("\n\nMEMORIA DEL GRAFO (consultada automaticamente para este pedido; "
-                    "si un dato contradice lo que ves ahora, comprobalo y corregi el nodo):\n"
-                    + "\n".join(filas)
+            return ("\n\nCONOCIMIENTO PREVIO DEL GRAFO (recuperado automaticamente para este "
+                    "pedido; si un dato contradice lo que ves ahora, comprobalo y corregi el "
+                    "nodo):\n" + "\n".join(filas)
                     + "\nSi al resolver aparecen datos nuevos o corregidos, guardalos con learn.")
-        return ("\n\nMEMORIA DEL GRAFO: no hay entradas para este pedido. Si la tarea depende "
+        return ("\n\nCONOCIMIENTO PREVIO DEL GRAFO: no hay entradas para este pedido. Si la tarea depende "
                 "de como funciona una herramienta, un protocolo o una API que no esta en el "
                 "grafo, buscala en internet (web_search/web_fetch), verifica el dato y guardalo "
                 "con learn (una entrada por tema, con la fuente) antes de cerrar el turno.")

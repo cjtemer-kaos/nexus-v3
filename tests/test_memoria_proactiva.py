@@ -91,7 +91,7 @@ def test_memoria_proactiva_inyecta_el_nodo_util(tmp_path, monkeypatch):
     bloque = asyncio.run(loop._prior_knowledge_block(PEDIDO))
     reset_knowledge_memory()
 
-    assert "MEMORIA DEL GRAFO" in bloque
+    assert "CONOCIMIENTO PREVIO DEL GRAFO" in bloque
     assert "REA: como analizar un binario PE" in bloque
     assert "Sesion xyz" not in bloque
 
