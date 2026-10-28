@@ -106,3 +106,64 @@ def test_el_corte_queda_persistido_en_la_sesion():
 def test_salida_distinta_no_dispara_el_corte_por_resultado():
     res, _ = _correr(Salida(fija=False), iteraciones=4)
     assert "mismo resultado" not in res.final_output
+
+
+class EditYExecProvider(BaseProvider):
+    """Alterna verificación (`exec`) con escritura (`edit`), como un turno real."""
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        if tools is None:
+            return LLMResponse(content="listo", model="m")
+        n = len([m for m in messages if getattr(m, "role", "") == "tool"])
+        if n % 2 == 0:
+            return LLMResponse(
+                content="", tool_calls=(
+                    ToolCall(id=f"e{n}", name="edit",
+                             arguments={"path": "x.py", "old": "a", "new": "b"}),),
+                finish_reason="tool_calls", model="m")
+        return LLMResponse(
+            content="", tool_calls=(
+                ToolCall(id=f"x{n}", name="exec",
+                         arguments={"command": "pytest -q"}),),
+            finish_reason="tool_calls", model="m")
+
+    async def health(self):
+        return True
+
+    async def list_models(self):
+        return ["m"]
+
+
+def test_verificar_despues_de_escribir_no_es_bucle():
+    """La misma salida de `pytest` tras una edición es regresión, no bucle.
+
+    Medido en la corrida de eMule: 122 vueltas útiles cortadas por el tercer
+    `pytest` idéntico, con ediciones entre las tres corridas.
+    """
+
+    async def run():
+        slog = SessionLog(":memory:")
+        try:
+            sess = slog.create_session(project="anti-loop-edit-exec")
+            reg = ToolRegistry()
+            reg.register_function(lambda command="": SALIDA_FIJA, name="exec")
+            reg.register_function(
+                lambda path="", old="", new="": f"editado {path}", name="edit")
+            router = ProviderRouter()
+            router.register_provider("mock", EditYExecProvider())
+            router.register_model(ModelRoute(id="mock-1", provider_name="mock"))
+            loop = AgentLoop(
+                provider_router=router, tool_registry=reg, session_log=slog,
+                budget=IterationBudget(max_iterations=12),
+                config={"agent_loop": {"anti_loop": {
+                    "repeat_stop": 99, "repeat_warn": [99], "tool_warn": 99, "tool_stop": 99}}},
+            )
+            res = await loop.run(task="arreglá y verificá", session_id=sess.id, hint="coding")
+            return res, slog.get_messages(sess.id)
+        finally:
+            slog.close()
+
+    res, msgs = asyncio.run(run())
+    assert "bucle de herramienta" not in (res.final_output or "")
+    ejecuciones = [m for m in msgs if m.role == "tool" and m.tool_name == "exec"]
+    assert len(ejecuciones) >= 3, "el test no llegó a repetir la verificación"

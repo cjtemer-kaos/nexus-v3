@@ -48,6 +48,14 @@ _READONLY_TOOLS = {
 }
 
 
+# Tools que cambian archivos. Una escritura entre dos resultados iguales no es
+# un bucle: es "edite y volvi a verificar".
+_TOOLS_QUE_MUTAN = {
+    "write", "write_file", "create_file", "edit", "multi_edit", "patch",
+    "apply_patch", "str_replace", "append_file", "delete_file", "move_file",
+}
+
+
 def _parallel_tools_on() -> bool:
     return _os.environ.get("NEXUS_PARALLEL_TOOLS", "1").lower() not in ("0", "false", "no")
 
@@ -1490,6 +1498,10 @@ class AgentLoop:
         _iter_reales = 0
         _motivo_salida = "fin"
         _persistio_final = False
+        # Anti-bucle por resultado: se cuenta por turno, y una escritura lo
+        # reinicia (ver el bloque de `_res_repeat`).
+        self._res_repeat = {}  # type: ignore[attr-defined]
+        self._mut_seq = 0  # type: ignore[attr-defined]
         max_iters = self.budget.max_iterations
         # Config error policy
         error_retry_limit = 3
@@ -2112,7 +2124,15 @@ class AgentLoop:
                 # la salida es idéntica no hay progreso: el caso real fue
                 # `systeminfo | findstr`, que devolvía la misma línea y el modelo
                 # la pidió 10 veces hasta el corte por herramienta.
+                #
+                # El conteo se reinicia cuando el turno escribió algo: correr la
+                # suite tres veces con la misma salida, con ediciones en el medio,
+                # es regresión y no bucle. Medido en la corrida de eMule: el turno
+                # hizo 122 vueltas útiles y lo cortó el tercer `pytest` idéntico
+                # (las tres corridas tenían ediciones entre medio).
                 try:
+                    if tool_success and tool_name in _TOOLS_QUE_MUTAN:
+                        self._mut_seq = getattr(self, "_mut_seq", 0) + 1
                     _txt = (tool_result_str or "").strip()
                     _firma = ""
                     if len(_txt) >= 40:
@@ -2124,8 +2144,13 @@ class AgentLoop:
                         if _rep is None:
                             _rep = {}
                             self._res_repeat = _rep  # type: ignore[attr-defined]
-                        _rn = _rep.get(_firma, 0) + 1
-                        _rep[_firma] = _rn
+                        _mut = getattr(self, "_mut_seq", 0)
+                        _prev = _rep.get(_firma)
+                        if _prev and _prev[1] == _mut:
+                            _rn = _prev[0] + 1
+                        else:
+                            _rn = 1
+                        _rep[_firma] = (_rn, _mut)
                         if _rn == 2:
                             messages.append(LLMMessage(role="user", content=(
                                 f"[recordatorio del sistema] '{tool_name}' devolvió EXACTAMENTE el mismo "
