@@ -891,14 +891,19 @@ def _build_router_from_config(cfg: dict):
             router.register_provider("cloud", CloudProvider(base_url=cc.get("base_url"), api_key=cc.get("api_key"), auth_style=cc.get("auth_style", "bearer"), strict_tools=cc.get("strict_tools", False)))
             for m in cc.get("models", []) or []:
                 router.register_model(ModelRoute(id=m, provider_name="cloud"))
-    # DECK: proveedores BYOK del catalogo — se registran solo con key en env/.env.
-    # CloudProvider anade /v1/chat/completions al base_url, asi que se recorta el
-    # sufijo /v1 del catalogo. Solo auth bearer (compat OpenAI); cohere/gemini/
-    # anthropic tienen formatos distintos -> no se registran aqui.
+    # DECK: proveedores BYOK del catalogo. Se registran SOLO si el usuario los
+    # habilita con `providers.cloud.enabled`. Antes alcanzaba con que la key
+    # estuviera en el entorno: con OPENCODE_API_KEY presente entraban los 28
+    # modelos de pago al router como fallback aunque cloud estuviera en false
+    # (medido 2026-10-28: /v1/models listaba 40 modelos con el presupuesto
+    # agotado, y un fallback silencioso volvia a pegarle a la nube).
+    _byok_on = bool((prov_cfg.get("cloud") or {}).get("enabled"))
+    if not _byok_on:
+        logger.info("catalogo BYOK apagado: el router solo ofrece modelos locales")
     try:
         from src.core.provider_catalog import PROVIDER_CATALOG
         from src.core import provider_models as _pm
-        for pc in PROVIDER_CATALOG:
+        for pc in (PROVIDER_CATALOG if _byok_on else []):
             env_name = pc.get("api_key_env") or ""
             if not env_name or pc.get("auth_style") != "bearer":
                 continue
@@ -8587,7 +8592,7 @@ def _escalada_de_modelos(cfg: dict | None, body: dict | None) -> tuple[int, list
     desde = _entero(body.get("escalate_after"),
                     _entero(_d.get("escalate_after"), 2))
     crudos = body.get("escalate_models") or _d.get("escalate_models") or [
-        "deepseek-v4-pro", "kimi-k2.7-code"]
+        "gemma4", "ornith-9b"]
     if isinstance(crudos, str):
         crudos = [m.strip() for m in crudos.split(",")]
     modelos = [str(m).strip() for m in crudos if str(m).strip()]
