@@ -1039,7 +1039,11 @@ class AgentLoop:
                 "usa gema_list/agent_list para descubrirlos y gema_run/agent_run para delegar "
                 "(el LLM de cada ayudante se asigna automáticamente según lo disponible en la PC). "
                 "Si falta un especialista, creálo con agent_create (plantillas scout/builder/reviewer/"
-                "qa/researcher/ops y modo read_only/build). No invoques herramientas innecesarias. Sé conciso."
+                "qa/researcher/ops y modo read_only/build). No invoques herramientas innecesarias. Sé conciso. "
+                "Si el pedido es una TAREA (analizar, crear, arreglar, escribir un programa), hacela "
+                "hasta el final con las herramientas y cerra con el estado real: qué hiciste, dónde "
+                "quedó y qué falta concreto. No devuelvas un plan ni preguntes si avanzar cuando ya "
+                "tenés con qué hacerlo."
             )))
 
         # Inyectar ENTORNO (SO/shell) para que el modelo use comandos NATIVOS.
@@ -1100,7 +1104,10 @@ class AgentLoop:
             # ACP, agent_run). Sin la guarda el prompt llevaba dos bloques de
             # memoria con el mismo titulo y el modelo no sabia cual mandaba.
             _sys_actual = (messages[0].content or "") if messages and messages[0].role == "system" else ""
-            if "MEMORIA DEL GRAFO (recuperada" not in _sys_actual:
+            # extra_system (la memoria del server) se concatena mas abajo: hay que
+            # mirarlo tambien o el prompt termina con los dos bloques igual.
+            _ya_hay_memoria = "MEMORIA DEL GRAFO (recuperada" in (_sys_actual + str(extra_system or ""))
+            if not _ya_hay_memoria:
                 _pk = await self._prior_knowledge_block(task)
                 if _pk and messages and messages[0].role == "system":
                     messages[0] = LLMMessage(role="system", content=_sys_actual + _pk)
@@ -1683,8 +1690,17 @@ class AgentLoop:
                         _clave = f"mcp_call:{tool_args.get('server') or ''}"
                     _tn = _tot.get(_clave, 0) + 1
                     _tot[_clave] = _tn
-                    _warn = 40 if tool_name == "mcp_call" else self.anti_loop_tool_warn
-                    _stop = 80 if tool_name == "mcp_call" else self.anti_loop_tool_stop
+                    # Transportes genericos: `mcp_call` lleva a 100+ tools y `repl`/`exec`
+                    # llevan cualquier codigo. Contarlos como "la misma herramienta"
+                    # corta trabajo real (una sesion de depuracion hace 10-20 repl
+                    # seguidos, cada uno con codigo distinto). El bucle de verdad
+                    # -mismos args- ya lo detecta `_fp`. Limites altos y aviso claro.
+                    _transportes = {"mcp_call": (40, 80), "repl": (40, 120),
+                                    "exec": (40, 120), "run_command": (40, 120)}
+                    if tool_name in _transportes:
+                        _warn, _stop = _transportes[tool_name]
+                    else:
+                        _warn, _stop = self.anti_loop_tool_warn, self.anti_loop_tool_stop
                     if _tn == _warn:
                         if tool_name in ("job_read", "job_wait"):
                             # Polling en incrementos minimos fue el bucle real

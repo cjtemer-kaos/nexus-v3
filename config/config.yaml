@@ -33,7 +33,7 @@ session:
   compact_threshold: 0.75
   keep_recent: 4
 agent_loop:
-  max_iterations: 80
+  max_iterations: 200
   max_tokens_per_turn: 8192   # reservado: cap por turno (el cap real es agent_loop.budget)
   error_policy:
     retry: 3
@@ -53,10 +53,10 @@ agent_loop:
   auto_apply: assisted
   # Presupuesto del run (IterationBudget). Si falta, se usan estos mismos valores.
   budget:
-    max_iterations: 80
+    max_iterations: 200
     max_tokens: 32000
-    max_wall_ms: 3600000
-    max_tool_calls: 240
+    max_wall_ms: 7200000
+    max_tool_calls: 600
 approval:
   # auto     = no pide humano (solo hard-deny de secretos/comandos catastroficos)
   # assisted = pide por acciones sensibles + MCP sin allowlist (default)
