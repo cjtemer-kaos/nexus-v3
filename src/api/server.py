@@ -7216,6 +7216,7 @@ def _build_budget(cfg: dict | None = None):
         max_tokens=int(b.get("max_tokens", 32000)),
         max_wall_ms=float(b.get("max_wall_ms", 900_000)),
         max_tool_calls=int(b.get("max_tool_calls", 60)),
+        max_prompt_tokens=int(b.get("max_prompt_tokens", 0) or 0),
     )
 
 

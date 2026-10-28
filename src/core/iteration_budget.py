@@ -16,11 +16,16 @@ class IterationBudget:
     max_tokens: int = 32000  # alineado con la compactacion (32000*0.75) para no cortar antes
     max_wall_ms: float = 300_000  # 5 min per turn
     max_tool_calls: int = 50
+    # Guardia de fuga: tokens TOTALES del run (prompt reenviado + completion).
+    # `max_tokens` cuenta solo la generacion (contar el prompt ahi cortaba el run
+    # en 2-4 turnos); esto es aparte y solo frena un loop patologico. 0 = sin tope.
+    max_prompt_tokens: int = 0
 
     # runtime counters
     iterations: int = 0
     tokens: int = 0
     tool_calls: int = 0
+    prompt_tokens: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
     def tick(self, tokens: int = 0, tool_calls: int = 0) -> bool:
@@ -32,6 +37,9 @@ class IterationBudget:
 
     def add_tokens(self, n: int) -> None:
         self.tokens += n
+
+    def add_prompt_tokens(self, n: int) -> None:
+        self.prompt_tokens += max(0, int(n))
 
     def add_tool_calls(self, n: int = 1) -> None:
         self.tool_calls += n
@@ -46,6 +54,8 @@ class IterationBudget:
             return True
         if self.tokens >= self.max_tokens:
             return True
+        if self.max_prompt_tokens and self.prompt_tokens >= self.max_prompt_tokens:
+            return True
         if self.tool_calls >= self.max_tool_calls:
             return True
         if self.wall_ms >= self.max_wall_ms:
@@ -58,6 +68,9 @@ class IterationBudget:
             return f"máx_iteraciones {self.max_iterations} alcanzado"
         if self.tokens >= self.max_tokens:
             return f"máx_tokens {self.max_tokens} alcanzado"
+        if self.max_prompt_tokens and self.prompt_tokens >= self.max_prompt_tokens:
+            return (f"máx_tokens_del_run {self.max_prompt_tokens} alcanzado "
+                    f"({self.prompt_tokens} enviados)")
         if self.tool_calls >= self.max_tool_calls:
             return f"máx_llamadas_herramienta {self.max_tool_calls} alcanzado"
         if self.wall_ms >= self.max_wall_ms:
@@ -74,9 +87,11 @@ class IterationBudget:
             "max_tokens": self.max_tokens,
             "max_wall_ms": self.max_wall_ms,
             "max_tool_calls": self.max_tool_calls,
+            "max_prompt_tokens": self.max_prompt_tokens,
             "iterations": self.iterations,
             "tokens": self.tokens,
             "tool_calls": self.tool_calls,
+            "prompt_tokens": self.prompt_tokens,
             "wall_ms": round(self.wall_ms, 1),
             "exhausted": self.exhausted,
             "reason": self.reason,
@@ -86,4 +101,5 @@ class IterationBudget:
         self.iterations = 0
         self.tokens = 0
         self.tool_calls = 0
+        self.prompt_tokens = 0
         self.started_at = time.monotonic()

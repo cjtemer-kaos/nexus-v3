@@ -57,6 +57,11 @@ agent_loop:
     max_tokens: 32000
     max_wall_ms: 7200000
     max_tool_calls: 600
+    # Guardia de fuga por tokens REALES del run (prompt reenviado + completion).
+    # Sin esto un turno podia quemar millones: medido el 2026-10-28, 2.301
+    # llamadas costaron 87,2 M de tokens en 15 h (98 pedidos del usuario).
+    # ~110 iteraciones a 18k; no limita trabajo normal, frena el loop patologico.
+    max_prompt_tokens: 2000000
 approval:
   # auto     = no pide humano (solo hard-deny de secretos/comandos catastroficos)
   # assisted = pide por acciones sensibles + MCP sin allowlist (default)

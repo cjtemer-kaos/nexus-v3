@@ -92,6 +92,17 @@ def _estimate_messages_tokens(messages: list[dict]) -> int:
     return sum(_estimate_one(m) for m in messages)
 
 
+def _estimate_any(messages: list[Any]) -> int:
+    """Igual que `_estimate_messages_tokens` pero acepta dicts y LLMMessage."""
+    total = 0
+    for m in messages:
+        total += estimate_tokens(_msg_content(m)) + 4
+        tc = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+        if tc:
+            total += len(str(tc)) // 4
+    return total
+
+
 def _content_str(m: dict) -> str:
     c = m.get("content")
     if c is None:
@@ -642,11 +653,18 @@ class CompactionPipeline:
         messages: list[Any],
         keep_recent: int | None = None,
         max_chars: int | None = None,
+        target_tokens: int = 0,
     ) -> list[Any]:
-        """Poda cabeza+cola de resultados de tools viejos SOLO para el payload LLM.
+        """Poda el payload LLM sin tocar el historial persistido.
 
-        No muta el historial persistido. Los ultimos ``keep_recent`` resultados
-        quedan intactos porque son el contexto vivo del turno.
+        Con ``target_tokens`` el tope de cada resultado viejo se aprieta por
+        escalones hasta que el payload entra en el presupuesto. Sin eso, un turno
+        de 100 iteraciones reenviaba el historial entero en cada llamada: medido
+        en la sesion c7e998050fb7, la misma corrida paso de 19k a 68k tokens por
+        llamada y 2.301 llamadas costaron 87,2 M de tokens.
+
+        Los ultimos ``keep_recent`` resultados quedan intactos: son el contexto
+        vivo del turno.
         """
         if not self.prune_enabled:
             return list(messages)
@@ -654,22 +672,69 @@ class CompactionPipeline:
         limit = self.prune_max_chars if max_chars is None else int(max_chars)
         if limit <= 0:
             return list(messages)
+
         tool_idx = [i for i, m in enumerate(messages) if _msg_role(m) == "tool"]
-        keep = set(tool_idx[-keep_n:]) if keep_n > 0 else set()
-        out: list[Any] = []
+
+        # Salidas identicas repetidas: la segunda copia no aporta nada y en la
+        # corrida de eMule hubo 123 `exec`, 48 `read_file` y 20 `mcp_call`
+        # devolviendo exactamente lo mismo.
+        vistos: dict[str, int] = {}
+        dedup: dict[int, int] = {}
         for i, m in enumerate(messages):
-            c = _msg_content(m)
-            if i in keep or _msg_role(m) != "tool" or len(c) <= limit:
-                out.append(m)
+            if _msg_role(m) != "tool":
                 continue
-            head = limit // 2
-            tail = limit - head
-            pruned = (
-                c[:head]
-                + f"\n[...podado {len(c) - limit} caracteres — cola:]"
-                + c[-tail:]
-            )
-            out.append(_replace_msg_content(m, pruned))
+            c = _msg_content(m)
+            if len(c) < 400:
+                continue
+            h = hashlib.md5(c.encode("utf-8", "replace")).hexdigest()
+            if h in vistos:
+                dedup[i] = vistos[h]
+            else:
+                vistos[h] = i
+
+        def _aplicar(cap: int, protegidos: int) -> list[Any]:
+            keep_set = set(tool_idx[-protegidos:]) if protegidos > 0 else set()
+            out: list[Any] = []
+            for i, m in enumerate(messages):
+                if _msg_role(m) != "tool" or i in keep_set:
+                    out.append(m)
+                    continue
+                if i in dedup:
+                    out.append(_replace_msg_content(
+                        m, f"[salida identica a la del mensaje {dedup[i]} — "
+                           f"omitida para no repetir contexto]"))
+                    continue
+                c = _msg_content(m)
+                if len(c) <= cap:
+                    out.append(m)
+                    continue
+                head = max(1, cap // 2)
+                tail = max(0, cap - head)
+                pruned = (
+                    c[:head]
+                    + f"\n[...podado {len(c) - cap} caracteres — cola:]"
+                    + (c[-tail:] if tail else "")
+                )
+                out.append(_replace_msg_content(m, pruned))
+            return out
+
+        if target_tokens <= 0:
+            return _aplicar(limit, keep_n)
+
+        # Escalera: primero el tope configurado, despues cada vez mas chico y al
+        # final un resumen de una linea. Corta en cuanto entra en el presupuesto.
+        caps = sorted({c for c in (limit, 2000, 800, 300, 120) if 0 < c <= limit},
+                      reverse=True)
+        # Si con todos los topes todavia no entra, se suelta la proteccion de los
+        # resultados recientes (3 -> 2 -> 1). El ULTIMO nunca se toca: es lo que
+        # la tool acaba de devolver.
+        niveles = sorted({keep_n, 2, 1}, reverse=True)
+        out = _aplicar(caps[0], keep_n)
+        for protegidos in niveles:
+            for cap in caps:
+                out = _aplicar(cap, protegidos)
+                if _estimate_any(out) <= target_tokens:
+                    return out
         return out
 
     def maybe_compact(self, messages: list[dict], max_tokens: int, threshold: float = 0.75) -> bool:

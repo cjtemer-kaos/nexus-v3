@@ -211,6 +211,10 @@
             "max_tool_calls": {
               "type": "integer",
               "minimum": 1
+            },
+            "max_prompt_tokens": {
+              "type": "integer",
+              "minimum": 0
             }
           },
           "additionalProperties": false

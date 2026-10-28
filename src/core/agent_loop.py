@@ -528,6 +528,8 @@ class AgentLoop:
         # turno volvia a compactar con 48 s de resumen (medido en la corrida 18).
         base = (after + tools_n) if after > 0 else 0
         self._no_recompact_below[session_id] = int(base * 1.2) if base > 0 else 0
+        # Lo medido de verdad, para que `compaction_state` no guarde ceros.
+        self._last_compact_sizes = (int(before), int(after))  # type: ignore[attr-defined]
         _capas = md.get("layers", [])
         logger.info(
             "compact sesión %s: %d -> %d tokens est. (piso %d, budget %d, umbral %.2f, capas %s%s)",
@@ -569,11 +571,24 @@ class AgentLoop:
             except Exception:
                 prev = None
             layers = md.get("layers_applied") or []
+            _before = int(md.get("original_tokens", 0) or 0)
+            _after = int(md.get("compressed_tokens", 0) or 0)
+            # Si el metric vino vacio (resumen que no corrio, historial corto),
+            # se guarda lo medido por `_note_compaction`: antes quedaba
+            # tokens_before=0/tokens_after=0/saved=0 y no habia forma de saber
+            # si la compactacion habia servido.
+            _medido = getattr(self, "_last_compact_sizes", None)
+            if _medido and (_before <= 0 or _after <= 0):
+                _before = _before or int(_medido[0])
+                _after = _after or int(_medido[1])
+            _saved = int(md.get("tokens_saved", 0) or 0)
+            if _saved <= 0 and _before > _after > 0:
+                _saved = _before - _after
             self.session_log.save_compaction_state(
                 session_id,
-                tokens_before=int(md.get("original_tokens", 0) or 0),
-                tokens_after=int(md.get("compressed_tokens", 0) or 0),
-                saved=int(md.get("tokens_saved", 0) or 0),
+                tokens_before=_before,
+                tokens_after=_after,
+                saved=_saved,
                 layers=list(layers) if isinstance(layers, list) else [],
                 actions=len(layers) if isinstance(layers, list) else 0,
                 summary=self._compaction_summary(dict_msgs),
@@ -646,10 +661,29 @@ class AgentLoop:
         if self.compaction is None or not hasattr(self.compaction, "prune_for_llm"):
             return messages
         try:
-            return self.compaction.prune_for_llm(messages)  # type: ignore[arg-type]
+            return self.compaction.prune_for_llm(
+                messages, target_tokens=self._payload_token_budget())  # type: ignore[arg-type]
         except Exception as e:
             logger.debug("prune_for_llm falló: %s", e)
             return messages
+
+    def _payload_token_budget(self) -> int:
+        """Tokens que pueden ocupar los MENSAJES en cada request.
+
+        Es el mismo umbral que dispara la compactacion, menos los schemas de
+        tools. Con esto el payload queda plano durante todo el turno en vez de
+        crecer con cada iteracion (el turno de 113 llamadas llego a 68k tokens
+        por request). 0 = sin presupuesto (comportamiento viejo).
+        """
+        try:
+            base = int(getattr(self, "context_max_tokens", 0) or 0)
+            if base <= 0:
+                return 0
+            thr = max(0.05, float(getattr(self, "compact_threshold", 0.75) or 0.75))
+            tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
+            return max(2048, int(round(base * thr)) - tools_n)
+        except Exception:
+            return 0
 
     def _extract_text_tool_calls(self, content: str) -> list:
         """Respaldo para modelos que escriben JSON en texto en vez de tool_calls.
@@ -1648,6 +1682,10 @@ class AgentLoop:
             prompt_tokens_total += _prompt_tokens
             completion_tokens_total += _completion
             self.budget.add_tokens(_completion)
+            # Los tokens del prompt son los que de verdad se pagan (y se
+            # reenvian en cada iteracion). Van a un contador aparte para no
+            # cortar el run por generacion: esto solo frena una fuga.
+            self.budget.add_prompt_tokens(turn_tokens or _prompt_tokens)
 
             # Append assistant message to history
             assistant_content = llm_resp.content or ""
