@@ -1931,9 +1931,19 @@ class AgentLoop:
         msg = str(e)
         low = msg.lower()
         if isinstance(e, PermissionError):
-            hint = ("la herramienta fue bloqueada por permisos/scope: verificá que la ruta esté "
-                    "dentro de las raíces permitidas, que el modo no sea plan (solo lectura) o "
-                    "pedí confirmación explícita.")
+            # "secuencia MEDIUM" / "requiere aprobacion" NO son el scope: son el
+            # gate de aprobaciones. Decirle "revisá las raíces permitidas" al
+            # modelo lo mandaba a investigar permisos en bucle mientras el
+            # problema era otro.
+            if "secuencia" in low or "aprobacion" in low or "approval" in low:
+                hint = ("no es el scope: lo frenó el gate de aprobaciones (o no hay canal "
+                        "para aprobar). No repitas la misma llamada; si el contenido "
+                        "menciona secretos (.env, keys, credentials), escribilo sin esas "
+                        "menciones o pedile al usuario que lo apruebe en Aprobaciones.")
+            else:
+                hint = ("la herramienta fue bloqueada por permisos/scope: verificá que la ruta esté "
+                        "dentro de las raíces permitidas, que el modo no sea plan (solo lectura) o "
+                        "pedí confirmación explícita.")
         elif isinstance(e, TimeoutError) or "timeout" in low or "timed out" in low:
             hint = ("el comando excedió el tiempo: reducí el alcance (un archivo, un test) o "
                     "usá una tarea en background y consultá su salida.")

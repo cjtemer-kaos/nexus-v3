@@ -565,7 +565,8 @@ class ToolRegistry:
             if _risk == "MEDIUM":
                 if approval is None:
                     raise PermissionError(
-                        f"secuencia MEDIUM sin canal de aprobacion para {name}: {_reason}")
+                        f"secuencia MEDIUM sin canal de aprobacion para {name}: {_reason}"
+                        " (gate de aprobaciones, no es el scope)")
                 try:
                     from src.core.approval_policy import ApprovalCheck, authorize
                     from src.core.approvals import fingerprint
@@ -581,7 +582,9 @@ class ToolRegistry:
                     if not _seq_out.allowed:
                         raise PermissionError(
                             f"secuencia MEDIUM no aprobada para {name}: "
-                            f"{_seq_out.reason or _seq_out.decision}")
+                            f"{_seq_out.reason or _seq_out.decision}"
+                            f" (gate de aprobaciones, no es el scope; motivo del "
+                            f"guard: {_reason or 'patron sospechoso'})")
                 except PermissionError:
                     if call_log is not None:
                         try:

@@ -106,12 +106,11 @@ class PolicyRule:
         if not any(fnmatch.fnmatchcase(tool, t) for t in self.tools):
             return False
         text = _command_text(args)
-        haystack = text or json.dumps(args or {}, sort_keys=True, default=str)
+        haystack = text or _scan_haystack(args)
         if self.pattern is not None and not self.pattern.search(haystack):
             return False
         if self.path_pattern is not None:
-            raw = json.dumps(args or {}, sort_keys=True, default=str)
-            if not self.path_pattern.search(raw):
+            if not self.path_pattern.search(_scan_haystack(args)):
                 return False
         return True
 
@@ -197,7 +196,7 @@ def _fingerprint(tool: str, args: dict | None) -> str:
 def _command_text(args: dict | None) -> str:
     if not isinstance(args, dict):
         return ""
-    for key in ("command", "cmd", "shell", "script", "patch"):
+    for key in ("command", "cmd", "shell", "script"):
         v = args.get(key)
         if isinstance(v, str) and v.strip():
             return v
@@ -206,12 +205,45 @@ def _command_text(args: dict | None) -> str:
     return ""
 
 
+# Lo que un archivo DICE no es lo que la accion HACE. Un backend con
+# `load_dotenv()` y `SECRET_KEY` en el codigo menciona ".env" y "secret": el
+# guard miraba `json.dumps(args)` entero, marcaba MEDIUM "toca secretos" y sin
+# canal interactivo (gemas, sub-agentes) el write_file quedaba bloqueado para
+# siempre. La ruta (`path`) SI se sigue mirando: escribir en `.env` es MEDIUM.
+_BODY_KEYS = frozenset({
+    "content", "new", "old", "patch", "diff", "text", "body", "value", "data",
+    "preview", "code",
+})
+
+_PATCH_FILE = re.compile(
+    r"^\*\*\*\s*(?:Update|Add|Delete) File:\s*(.+)$|^\*\*\*\s*Move to:\s*(.+)$",
+    re.M,
+)
+
+
+def _scan_haystack(args: dict | None) -> str:
+    """Args sin el cuerpo del archivo: rutas, comandos y nombres, nada mas."""
+    if not isinstance(args, dict):
+        return str(args or "")
+    limpio = {k: v for k, v in args.items() if k not in _BODY_KEYS}
+    parche = args.get("patch")
+    if isinstance(parche, str) and parche:
+        # De un parche solo interesan las rutas que toca, no el codigo.
+        limpio["patch_archivos"] = [
+            (a or b) for a, b in _PATCH_FILE.findall(parche)
+        ][:50]
+    try:
+        return json.dumps(limpio, sort_keys=True, default=str)
+    except Exception:
+        return str(limpio)
+
+
 def _preview(tool: str, args: dict | None, limit: int = 240) -> str:
     text = _command_text(args)
     if text:
         return text[:limit]
     try:
-        return json.dumps(args or {}, ensure_ascii=False, default=str)[:limit]
+        return _scan_haystack(args)[:limit]
     except Exception:
         return str(args)[:limit]
 
@@ -333,7 +365,9 @@ class SequenceGuard:
 
     def _heuristic(self, tool: str, args: dict) -> RiskVerdict:
         text = _command_text(args)
-        raw_args = json.dumps(args or {}, sort_keys=True, default=str)
+        # Solo lo que la accion TOCA (rutas/argumentos), nunca el cuerpo del
+        # archivo: ver _BODY_KEYS.
+        raw_args = _scan_haystack(args)
         for pat in _HIGH_PATTERNS:
             if pat.search(text):
                 return RiskVerdict(

@@ -92,7 +92,7 @@ const SLASH_FALLBACK: SlashCommand[] = [
   { name: 'skill', args: '<name>', description: 'invoca una skill por nombre' },
   { name: 'session', args: '[new|list]', description: 'operaciones de sesión' },
   { name: 'plan', args: '[on|off]', description: 'activa/desactiva modo plan' },
-  { name: 'permission', args: '<read_only|workspace_write|full>', description: 'cambia permiso' },
+  { name: 'permission', args: '<#0..#4 | read_only|workspace_write|full>', description: 'peldaño de permisos de la sesión' },
   { name: 'compact', description: 'info compactación 4 capas' },
   { name: 'goal', args: '<objetivo|status|clear>', description: 'gestiona objetivo largo' },
   { name: 'export', description: 'exporta log de sesión ZIP' },

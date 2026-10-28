@@ -3061,6 +3061,42 @@ def _decode_process_bytes(raw) -> str:
     return raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 
+def _cmd_shell_hint(cmd: str, out: str) -> str:
+    """Pista accionable cuando el comando falla por sintaxis de cmd.exe.
+
+    El modelo escribe shell de Unix (`mkdir -p a/b/c`, `cmd /c mkdir ...`) y
+    cmd.exe contesta "La sintaxis del comando no es correcta." sin explicar
+    nada: el agente concluia que estaba bloqueado por permisos y reintentaba.
+    """
+    if not _CMD_SYNTAX_ERR.search(out or ""):
+        return ""
+    partes: list[str] = []
+    cmd = (cmd or "").strip()
+    flags_unix = re.search(r"(?:^|\s)-[A-Za-z]\b", cmd) or re.search(
+        r"(?:^|\s)/[A-Za-z]\b", cmd)
+    if flags_unix:
+        partes.append(
+            "el shell es cmd.exe, no bash: no lleva `-p` ni flags con `/`. "
+            "Para crear carpetas: `mkdir a\\b\\c` (crea toda la ruta)")
+    if re.match(r"(?:if\s+not\s+exist\b.*?)?\s*(?:mkdir|md)\b", cmd, re.I):
+        partes.append("o mas simple: `write_file` crea los directorios intermedios solo")
+    if not partes:
+        partes.append(
+            "revisa la sintaxis para cmd.exe (no es bash): sin comillas simples, "
+            "sin `&&` con parentesis y sin `/dev/null`")
+    return " ".join(partes)
+
+
+_CMD_SYNTAX_ERR = re.compile(
+    r"La sintaxis del comando no es correcta"
+    r"|The syntax of the command is incorrect"
+    r"|no se reconoce como un comando interno o externo"
+    r"|is not recognized as an internal or external command"
+    r"|El sistema no puede encontrar la ruta especificada"
+    r"|The system cannot find the path specified",
+    re.I)
+
+
 def _exec_permission_error(cmd: str, cwd_p, scope) -> str | None:
     """Motivo de bloqueo completo de un comando: jail + archivos protegidos.
 
@@ -3181,6 +3217,25 @@ async def slash_exec(request: Request):
     raw = body.get("command") or body.get("raw") or ""
     ctx = body.get("ctx") or {}
     res = await slash_reg.execute(raw, ctx)
+    _sid_cmd = str(body.get("session_id") or ctx.get("session_id") or "")
+    if res.data.get("action") == "permission_list":
+        # `/permiso` sin argumentos devolvia la escalera pero no en que peldaño
+        # corre ESTA sesion: era la pregunta real de quien lo escribe cuando
+        # "los permisos no funcionan".
+        try:
+            from src.core.scope import level_from_permission, level_name
+
+            _cfg = _load_config_safe()
+            _preset = str((_cfg.get("scope") or {}).get("permission", "workspace_write"))
+            _cur = _SESSION_LEVELS.get(_sid_cmd)
+            _eff = _cur if _cur is not None else level_from_permission(_preset)
+            res.message += (
+                f"\nahora: #{_eff} {level_name(_eff)}"
+                f" (preset {_preset}"
+                + (f", sesion #{_cur}" if _cur is not None else "")
+                + f") · auto_apply={_auto_apply_mode(_cfg)}")
+        except Exception as e:
+            logger.debug("no se pudo describir el permiso actual: %s", e)
     if res.data.get("action") == "set_permission":
         perm = res.data.get("permission")
         # El peldaño (#0..#4) queda pegado a la sesión; el preset se persiste
@@ -3197,6 +3252,7 @@ async def slash_exec(request: Request):
             cfg = load_raw_config()
             cfg.setdefault("scope", {})["permission"] = perm
             save_config(cfg)
+            res.message += f" · guardado como default de la app: {perm}"
         except Exception as e:
             res.message += f" (persist failed: {e})"
     if res.data.get("action") == "set_plan_mode":
@@ -5112,7 +5168,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             if _ctx is not None and (not getattr(_ctx, "interactive", False)
                                      or getattr(_ctx, "policy", "") == "never"):
                 raise PermissionError(
-                    "write_file requiere aprobacion y no hay canal interactivo (fail-closed)")
+                    "write_file requiere aprobacion y no hay canal interactivo (fail-closed; "
+                    "gate de aprobaciones, no es el scope)")
             from src.core.approvals import fingerprint, get_approvals
             _act = f"write_file:{path}"
             pr = get_approvals().propose(
@@ -5191,7 +5248,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             if _ctx is not None and (not getattr(_ctx, "interactive", False)
                                      or getattr(_ctx, "policy", "") == "never"):
                 raise PermissionError(
-                    "edit requiere aprobacion y no hay canal interactivo (fail-closed)")
+                    "edit requiere aprobacion y no hay canal interactivo (fail-closed; "
+                    "gate de aprobaciones, no es el scope)")
             from src.core.approvals import fingerprint, get_approvals
             from src.core.diffutil import unified
             _new = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
@@ -5365,7 +5423,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         # imprimiendo algo (lo normal: `git status` fuera de un repo, un script
         # que loguea y devuelve 1) llegaba al modelo como si hubiera funcionado.
         if rc != 0:
-            return (out.rstrip() + f"\n[exit {rc}]") if out.strip() else f"[exit {rc}]"
+            cuerpo = (out.rstrip() + f"\n[exit {rc}]") if out.strip() else f"[exit {rc}]"
+            _hint = _cmd_shell_hint(cmd, out)
+            return f"{cuerpo}\n[acción sugerida] {_hint}" if _hint else cuerpo
         return out or f"[exit {rc} sin salida]"
 
     registry.register_function(read_file_tool, name="read_file",
