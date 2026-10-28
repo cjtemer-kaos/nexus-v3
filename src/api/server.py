@@ -7432,6 +7432,12 @@ async def _run_agent_once(message: str, session_id: str, hint: str | None = None
     return result
 
 
+def _turno_hizo_trabajo(result) -> bool:
+    from src.core.agent_loop import turno_hizo_trabajo
+
+    return turno_hizo_trabajo(result)
+
+
 @app.post("/api/chat")
 
 async def chat(request: Request):
@@ -7568,6 +7574,30 @@ async def chat(request: Request):
                                 images=images or None,
                                 system_prompt=_sys or None,
                                 extra_system=(_extra or None))
+        # Continuacion por rondas: una tarea de ingenieria no entra en un turno y
+        # el modelo tiende a cerrar con "que falta" en vez de seguir trabajando.
+        # Con continue_rounds el harness vuelve a entrar mientras la ronda
+        # anterior haya usado herramientas (senal de trabajo real), hasta que el
+        # modelo cierre sin tools o marque LISTO:.
+        _rondas = max(0, min(12, int(body.get("continue_rounds") or 0)))
+        _ronda = 0
+        while _ronda < _rondas:
+            if not _turno_hizo_trabajo(result):
+                break
+            _ronda += 1
+            logger.info("continuacion %d/%d sesion %s: el turno uso %d tools",
+                        _ronda, _rondas, session_id,
+                        sum(1 for s in result.steps if getattr(s, "phase", "") == "act"))
+            result = await loop.run(
+                task=("Segui con la tarea desde donde quedo. No repitas el resumen ni "
+                      "preguntes si continuar: usa las herramientas y deja el trabajo "
+                      "hecho y comprobado. Si ya esta terminado y verificado, "
+                      "responde unicamente: LISTO: <que quedo funcionando>."),
+                session_id=session_id, hint=hint,
+                force_tools=bool(body.get("force_tools", False)),
+                model=body.get("model") or (_agent_cfg or {}).get("model") or None,
+                system_prompt=_sys or None,
+            )
         _perf["loop"] = _time.monotonic()
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)

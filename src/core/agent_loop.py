@@ -237,6 +237,24 @@ class LoopStep:
         )
 
 
+def turno_hizo_trabajo(result) -> bool:
+    """True si el turno uso herramientas y no se declaro terminado.
+
+    Lo usa la continuacion por rondas del servidor: un turno que solo respondio
+    (sin fase act) es la senal de que el modelo cerro, y `LISTO:` es la senal
+    explicita que se le pide en la continuacion. Una tarea grande nunca entra
+    en un solo turno y el modelo tiende a cerrar con "que falta" en vez de
+    seguir trabajando; esto permite que el harness siga solo.
+    """
+    try:
+        if "LISTO:" in (getattr(result, "final_output", "") or "").upper():
+            return False
+        return any((getattr(s, "phase", "") == "act") and getattr(s, "tool_used", "")
+                   for s in getattr(result, "steps", []) or [])
+    except Exception:
+        return False
+
+
 @dataclass
 class LoopResult:
     task: str
