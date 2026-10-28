@@ -87,7 +87,7 @@ export default function App() {
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm">
-              <span className="text-[#9BA1AA]">Arnés</span>
+              <span className="text-[#9BA1AA]">Nexus v3</span>
               <span className="text-[#3A3F47]">/</span>
               <span className="font-medium">{viewLabels[view]}</span>
               <span className="ml-2 hidden rounded-full border border-[#3DDC84]/20 bg-[#3DDC84]/15 px-2 py-0.5 text-xs text-[#3DDC84] lg:inline">WAL+FTS · {activeSession}</span>
@@ -145,7 +145,7 @@ export default function App() {
                               (liveStatus.approvals_pending ?? 0) > 0 ? `${liveStatus.approvals_pending} aprobación(es) pendiente(s)` : '',
                               (liveStatus.questions_pending ?? 0) > 0 ? `${liveStatus.questions_pending} pregunta(s) esperando tu respuesta` : '',
                             ].filter(Boolean).join(' · ')
-                          : 'Sin notificaciones nuevas. El arnés está listo.'}
+                          : 'Sin notificaciones nuevas.'}
                     </div>
                     <div className={`mt-3 rounded-lg p-2 text-xs ${liveStatus ? 'bg-[#1E2127] text-[#9BA1AA]' : 'bg-[#FF6B6B]/10 text-[#FFA8A8]'}`}>
                       {liveStatus ? `WAL+FTS activo · sesión ${activeSession}` : 'Revisá data/backend.log'}
@@ -201,7 +201,7 @@ export default function App() {
           <span className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${live ? (live.running ? 'bg-[#4C9DFF] animate-pulse' : 'bg-[#3DDC84]') : 'bg-[#FF6B6B]'}`} />{' '}
             <span className={live ? '' : 'text-[#FFA8A8]'}>
-              {live ? (live.running ? `${live.running} run activo` : 'arnés listo') : 'sin conexión'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}
+              {live ? (live.running ? `${live.running} run activo` : 'listo') : 'sin conexión'}{live?.subs ? ` · ${live.subs} con subagentes` : ''}
             </span>
           </span>
           <span className="hidden md:inline">·</span>

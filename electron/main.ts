@@ -339,7 +339,7 @@ function createTray() {
     { type: "separator" },
     { label: "Salir", click: () => { isQuitting = true; app.quit(); } },
   ]);
-  tray.setToolTip("Nexus v3 — Arnes");
+  tray.setToolTip("Nexus v3");
   tray.setContextMenu(menu);
   tray.on("double-click", () => { mainWindow?.show(); mainWindow?.focus(); });
 }
@@ -382,7 +382,7 @@ function createWindow() {
     minHeight: 600,
     show: false,
     backgroundColor: "#15171B",
-    title: "Nexus v3 — Arnes",
+    title: "Nexus v3",
     icon: iconPath,
     webPreferences: {
       preload: existsSync(preloadPath) ? preloadPath : undefined,
@@ -406,7 +406,7 @@ function createWindow() {
       code{background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:6px;font-size:12px}
     </style></head><body>
       <div class="dot"></div>
-      <div>Iniciando arnes Nexus v3...</div>
+      <div>Iniciando Nexus v3...</div>
       <div class="muted">Backend: <code id="u">${backendUrl || ""}</code></div>
       <div class="muted">Si tarda, revisa que Python 3.13+ y dependencias esten instaladas.</div>
       <script>try{window.nexus?.getBackendUrl().then(u=>{const e=document.getElementById('u');if(e) e.textContent=u;});}catch{}</script>

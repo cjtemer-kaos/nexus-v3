@@ -167,7 +167,7 @@ export function Sidebar() {
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#0B62D6] text-white font-bold text-xs shadow-lg">N³</div>
           <div className="min-w-0">
             <div className="text-sm font-semibold tracking-tight truncate">Nexus v3</div>
-            <div className="text-[11px] text-[#9BA1AA] truncate">Arnés · 2026</div>
+            <div className="text-[11px] text-[#9BA1AA] truncate">2026</div>
           </div>
           <button
             onClick={toggleRail}

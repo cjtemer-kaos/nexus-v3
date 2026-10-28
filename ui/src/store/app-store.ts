@@ -514,7 +514,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return { tabs, activeTab }
   }),
   saveTab: (i) => set((s) => { const tabs = [...s.tabs]; tabs[i] = { ...tabs[i], dirty: false }; return { tabs } }),
-  terminalLines: ['Nexus v3 — Harnés listo. Probá "dir" o "help".'],
+  terminalLines: ['Nexus v3 listo. Probá "dir" o "help".'],
   appendTerminal: (line) => set((s) => ({ terminalLines: [...s.terminalLines, line] })),
   clearTerminal: () => set({ terminalLines: [] }),
 }))

@@ -38,7 +38,7 @@ function ModelOptions({ models, providerHealth }: { models: ModelOption[]; provi
   }, [models, providerHealth])
   return (
     <>
-      <option value="">Auto (router) — el arnés elige</option>
+      <option value="">Auto (router) — Nexus elige</option>
       {Object.entries(grouped).map(([provider, list]) => (
         <optgroup key={provider} label={provider}>
           {list.map((m) => <option key={m.id} value={m.id}>{m.label} · {m.ctx.toLocaleString()} ctx</option>)}
@@ -316,8 +316,8 @@ export function AgentsPanel() {
                     : assignErr
                       ? `No se pudo calcular el modelo automático: ${assignErr}`
                       : autoModel
-                        ? `Auto: el arnés le asignaría ${autoModel} (según lo disponible en la PC).`
-                        : 'Auto: el arnés elige el LLM según lo disponible en la PC.'}
+                        ? `Auto: Nexus le asignaría ${autoModel} (según lo disponible en la PC).`
+                        : 'Auto: Nexus elige el LLM según lo disponible en la PC.'}
                 </div>
               </div>
 

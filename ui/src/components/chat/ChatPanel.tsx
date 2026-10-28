@@ -801,7 +801,7 @@ export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
             <div>
               <div className="text-sm font-semibold text-[#EDEEF0]">Bienvenido a Nexus v3</div>
               <div className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-[#9BA1AA]">
-                Arnés TDAO conectado al backend. Escribe / para comandos · Ctrl+V pega archivos · el micrófono transcribe con el STT local.
+                Nexus v3 conectado al backend. Escribe / para comandos · Ctrl+V pega archivos · el micrófono transcribe con el STT local.
               </div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
