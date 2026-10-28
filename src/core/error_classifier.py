@@ -23,9 +23,18 @@ _TRANSIENT_PATTERNS = [
 ]
 
 _FATAL_PATTERNS = [
-    r"permission denied", r"not found", r"no such file", r"invalid state",
+    r"permission denied", r"model\b[^\n]{0,40}\bnot found", r"no such model", r"invalid state",
     r"scope denied", r"forbidden", r"unauthorized", r"authentication", r"api key",
     r"quota exceeded", r"billing", r"invalid api",
+]
+
+# Una ruta inexistente es el error MAS recuperable que existe: se equivoca el
+# nombre y se sigue. Estaba cayendo en `_FATAL_PATTERNS` por el "not found" y el
+# turno entero abortaba (medido: `grep` sobre una carpeta que no existia corto un
+# turno de 68 vueltas con el trabajo ya hecho).
+_PATH_RECOVERABLE = [
+    r"path not found", r"no such file", r"file not found", r"directory not found",
+    r"no existe (la |el )?(ruta|archivo|carpeta|directorio)", r"ruta no encontrada",
 ]
 
 _SKIP_PATTERNS = [
@@ -70,6 +79,8 @@ def classify_error(tool: str, err: str, *, context: dict | None = None) -> Error
     # nombre (paso con mcp_call -> "Tool analyze not found" en REA).
     if re.search(r"tool\b[^\n]{0,80}\bnot found|unknown tool|herramienta\b[^\n]{0,80}\bno encontrada",
                  err.lower()):
+        return ErrorAction.REPLAN
+    if _matches(err, _PATH_RECOVERABLE):
         return ErrorAction.REPLAN
     if _matches(err, _FATAL_PATTERNS):
         # Some fatals are SKIP if tool is optional

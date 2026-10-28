@@ -168,5 +168,9 @@ def test_tool_not_found_no_es_error_fatal():
     from src.core.error_classifier import ErrorAction, classify_error
     assert classify_error("mcp_call", "Tool analyze not found") == ErrorAction.REPLAN
     assert classify_error("mcp_call", "Unknown tool: analyze") == ErrorAction.REPLAN
-    # Un archivo inexistente sigue siendo fatal: no se reintenta a ciegas.
-    assert classify_error("read_file", "no such file: C:\\x") == ErrorAction.ABORT
+    # Un archivo o ruta inexistente tampoco es fatal: ABORT no significa "no
+    # reintentar", significa matar el turno entero. Medido en la corrida de
+    # eMule: `grep` sobre `backend\tests` (carpeta que no existia) corto un turno
+    # de 68 vueltas con el trabajo ya hecho. REPLAN le devuelve el error al
+    # agente para que corrija la ruta.
+    assert classify_error("read_file", "no such file: C:\\x") == ErrorAction.REPLAN

@@ -52,6 +52,50 @@ def test_escritura_concurrente_no_pierde_entradas(tmp_path):
     assert json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["schema"] == hs.SCHEMA
 
 
+def test_escritura_lenta_no_hace_fallar_al_otro_escritor(tmp_path, monkeypatch):
+    """Un fsync lento no puede convertirse en "lock ocupado".
+
+    Antes el lock esperaba 50 × 20 ms = 1 s como máximo. Cuando la suite corre
+    completa el disco está ocupado y un `fsync` pasa de ese segundo; el segundo
+    escritor tiraba `HarnessError` en vez de esperar, y el test de concurrencia
+    fallaba de forma intermitente. El presupuesto ahora es por tiempo (20 s).
+    """
+    real_fsync = os.fsync
+    estado_fsync = {"n": 0}
+
+    def fsync_lento(fd):
+        estado_fsync["n"] += 1
+        if estado_fsync["n"] <= 6:
+            time.sleep(0.35)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(hs.os, "fsync", fsync_lento)
+    uno = _estado(tmp_path)
+    dos = _estado(tmp_path)
+    uno.cargar()
+    dos.cargar()
+    errores: list[BaseException] = []
+
+    def trabajar(estado, prefijo):
+        try:
+            for i in range(3):
+                estado.create("memory", f"{prefijo}{i}", f"t{i}", f"c{i}")
+        except BaseException as e:  # pragma: no cover - solo si falla
+            errores.append(e)
+
+    hilos = [threading.Thread(target=trabajar, args=(uno, "a")),
+             threading.Thread(target=trabajar, args=(dos, "b"))]
+    for h in hilos:
+        h.start()
+    for h in hilos:
+        h.join()
+
+    assert not errores
+    final = _estado(tmp_path)
+    final.cargar()
+    assert len({f["id"] for f in final.entries("memory")}) == 6
+
+
 def test_archivo_corrupto_se_trata_como_vacio_y_se_regenera(tmp_path):
     ruta = tmp_path / "state.json"
     ruta.write_text("{esto no es json", encoding="utf-8")
@@ -93,13 +137,13 @@ def test_lock_vivo_no_se_roba(tmp_path):
 
     estado = _estado(tmp_path)
     estado.cargar()
-    original = hs._LOCK_TRIES
-    hs._LOCK_TRIES = 3
+    original = hs._LOCK_ESPERA_TOTAL
+    hs._LOCK_ESPERA_TOTAL = 0.05
     try:
         with pytest.raises(hs.HarnessError, match="lock ocupado"):
             estado.create("memory", "x", "t", "c")
     finally:
-        hs._LOCK_TRIES = original
+        hs._LOCK_ESPERA_TOTAL = original
         (lock / "owner").unlink(missing_ok=True)
         lock.rmdir()
 

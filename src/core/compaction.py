@@ -12,6 +12,7 @@ Pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -171,6 +172,11 @@ class CompactionPipeline:
             summary_cfg.get("minimum_progress_messages", 2))
         self.summary_failure_cooldown_s: float = float(
             summary_cfg.get("failure_cooldown_s", 600))
+        # Techo del resumen: un LLM lento no puede comerse el arranque del turno.
+        # Medido en la corrida de eMule: el resumen pidio turno al modelo escalado
+        # y el `ReadTimeout` del provider costo 65 s de `setup` antes de la
+        # primera vuelta. Con techo, cae a L1-L3 y sigue.
+        self.summary_timeout_s: float = float(summary_cfg.get("timeout_s", 30))
         self.handoff_prefix: str = str(summary_cfg.get(
             "handoff_prefix",
             "[handoff] Contexto compactado: el resumen siguiente reemplaza el "
@@ -431,7 +437,17 @@ class CompactionPipeline:
                 LLMMessage(role="user", content=prev_block + middle_text),
             ]
             _t_summary = time.monotonic()
-            resp = await routed.provider.chat(llm_messages, model=routed.model)
+            if self.summary_timeout_s > 0:
+                try:
+                    resp = await asyncio.wait_for(
+                        routed.provider.chat(llm_messages, model=routed.model),
+                        timeout=self.summary_timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    raise TimeoutError(
+                        f"resumen sin respuesta en {self.summary_timeout_s:.1f} s")
+            else:
+                resp = await routed.provider.chat(llm_messages, model=routed.model)
             summary_text = (resp.content or "")[: budget * 4]
             m_tag = re.search(r"<summary>(.*?)</summary>", summary_text, re.S)
             if m_tag:

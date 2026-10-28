@@ -37,7 +37,12 @@ SCOPES = ("local", "global")
 TOPES = {"prompt": 3, "memory": 10, "skill": 6, "subagent": 4, "factory": 3}
 
 _LOCK_STALE_AFTER = 10.0
-_LOCK_TRIES = 50
+# El presupuesto de espera del lock es por TIEMPO, no por cantidad de intentos:
+# con 50 intentos de 20 ms el techo era 1 s y un `fsync` lento (antivirus,
+# disco ocupado) hacía que el segundo escritor fallara con "lock ocupado" en
+# vez de esperar. Medido: la suite completa fallaba de forma intermitente en
+# `test_escritura_concurrente_no_pierde_entradas` con 80 escrituras.
+_LOCK_ESPERA_TOTAL = 20.0
 _LOCK_WAIT = 0.02
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _RESERVADOS = {"base-system-prompt", "system", "system-prompt"}
@@ -189,7 +194,8 @@ class _Lock:
             self.dir.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise HarnessError(f"no se pudo crear el directorio del estado: {e}")
-        for _ in range(_LOCK_TRIES):
+        limite = time.monotonic() + _LOCK_ESPERA_TOTAL
+        while time.monotonic() < limite:
             try:
                 self.dir.mkdir()
             except FileExistsError:
