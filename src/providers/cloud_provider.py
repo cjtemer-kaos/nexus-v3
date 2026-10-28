@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+import asyncio
 import logging
 import httpx
 from pathlib import Path
@@ -11,6 +12,23 @@ from src.core.provider_base import BaseProvider, LLMMessage, LLMResponse, ToolCa
 
 logger = logging.getLogger("nexus-cloud")
 _FREE_RE = re.compile(r"free", re.I)
+
+# El upstream rechaza turnos por saturacion, no por request invalido: opencode-go
+# contesta "Upstream request failed: [ttft_admission_refused] the cell is at
+# capacity; retry shortly (after 49 s)". Reintentar aca (con la espera que pide)
+# evita que el loop lo tome como caida y cierre el turno antes de tiempo.
+_TRANSITORIOS = {408, 409, 425, 429, 500, 502, 503, 504}
+_CAPACIDAD = re.compile(
+    r"(ttft_admission_refused|admission_refused|at capacity|over capacity|overloaded|"
+    r"rate.?limit|too many requests|try again later)", re.I)
+_ESPERA_SUGERIDA = re.compile(r"(?:after|in|dentro de)\s*(\d{1,3})\s*s", re.I)
+
+
+def espera_sugerida(texto: str) -> float:
+    """Espera que pide el upstream ("after 49 s"), 0 si no dice nada."""
+    m = _ESPERA_SUGERIDA.search(texto or "")
+    return float(m.group(1)) if m else 0.0
+
 
 
 class CloudProvider(BaseProvider):
@@ -36,6 +54,11 @@ class CloudProvider(BaseProvider):
         # Prefijos de modelos a OCULTAR (no van por /v1/chat/completions: p.ej. en opencode-go
         # los de /messages o /responses dan 400 -> mejor no listarlos en la UI).
         self.model_exclude = [e.lower() for e in (model_exclude or [])]
+        # Reintentos propios ante saturacion del upstream (ver _post_chat).
+        try:
+            self.chat_retries = max(1, min(8, int(os.environ.get("NEXUS_CLOUD_RETRIES", "4"))))
+        except Exception:
+            self.chat_retries = 4
         self._client = httpx.AsyncClient(timeout=timeout_s)
         # Cache for free-model discovery (mem + file)
         self._free_cache: list[str] | None = None
@@ -106,6 +129,37 @@ class CloudProvider(BaseProvider):
             out.append(t2)
         return out
 
+    async def _post_chat(self, payload: dict, session_id: str | None = None):
+        """POST a /v1/chat/completions reintentando saturacion del upstream.
+
+        Un rechazo por capacidad ("ttft_admission_refused", "the cell is at capacity")
+        no es un request mal formado: es el servidor lleno. Sin este reintento el
+        error subia como "[Error LLM: ...]" y la ronda se contaba como caida, con lo
+        que un pedido largo se cortaba por algo que se resuelve esperando.
+        """
+        url = f"{self.base_url}/v1/chat/completions"
+        intentos = max(1, int(self.chat_retries))
+        ultimo = ""
+        for i in range(intentos):
+            r = await self._client.post(url, json=payload, headers=self._headers(session_id))
+            if r.status_code < 400:
+                return r
+            cuerpo = ""
+            try:
+                cuerpo = (r.text or "")[:800]
+            except Exception:
+                pass
+            ultimo = f"HTTP {r.status_code} en {url}: {cuerpo}"
+            transitorio = r.status_code in _TRANSITORIOS or bool(_CAPACIDAD.search(cuerpo))
+            if not transitorio or i >= intentos - 1:
+                break
+            pedida = espera_sugerida(cuerpo)
+            espera = max(pedida + 2.0, min(90.0, 5.0 * (2 ** i)))
+            logger.warning("cloud: %s %s; reintento %d/%d en %.0fs",
+                           r.status_code, (cuerpo or "")[:120], i + 1, intentos, espera)
+            await asyncio.sleep(espera)
+        raise RuntimeError(ultimo or "sin respuesta del proveedor")
+
     async def chat(self, messages, tools=None, model=None, **kw) -> LLMResponse:
         if not self.api_key:
             # Still try; server may allow anonymous
@@ -152,8 +206,7 @@ class CloudProvider(BaseProvider):
         if tools:
             payload["tools"] = self._strict_tools(tools) if self.strict_tools else tools
             payload["tool_choice"] = "required" if kw.get("force_tools") else kw.get("tool_choice", "auto")
-        r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers(kw.get("session_id")))
-        self._raise_http(r)
+        r = await self._post_chat(payload, kw.get("session_id"))
         data = r.json()
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}

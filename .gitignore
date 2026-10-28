@@ -96,5 +96,11 @@ INSTALAR-LOG.txt
 # Backups del brain (incluye exports de tareas): nunca se versionan
 brain/backups/
 
+# Memoria runtime del brain (se reescribe sola; no es conocimiento curado)
+brain/memories.json
+
+# Carpetas que el agente crea en la raiz al trabajar (workspace de tareas/vendors)
+/emule-next-gen/
+
 # Marca de seed ya importado en ESTA instalacion (no es conocimiento)
 brain/.seed-imported
