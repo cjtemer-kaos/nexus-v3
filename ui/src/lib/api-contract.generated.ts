@@ -4,7 +4,7 @@
 
 
 /** Versión del contrato: hash del contenido. Cambia si cambia una ruta. */
-export const API_CONTRACT_VERSION = "aae53420902e"
+export const API_CONTRACT_VERSION = "c872cb38107d"
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -41,7 +41,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "POST", path: "/api/board/{task_id}/claim", handler: "board_claim", pathParams: ['task_id'], query: [], body: ['agent', 'lease_s'], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/board/{task_id}/update", handler: "board_update", pathParams: ['task_id'], query: [], body: ['assignee', 'notes', 'status'], bodyOpen: false, response: [], stream: false },
   { method: "GET", path: "/api/brain/stats", handler: "brain_stats_compat", pathParams: [], query: [], body: [], bodyOpen: false, response: [], stream: false },
-  { method: "POST", path: "/api/chat", handler: "chat", pathParams: [], query: [], body: ['agent_id', 'attachments', 'content', 'continue_rounds', 'force_tools', 'hint', 'message', 'model', 'permission_approved', 'permission_level', 'session_id'], bodyOpen: false, response: ['agent', 'error', 'iterations', 'mode', 'model', 'permission', 'permission_level', 'permission_level_name', 'permission_level_note', 'reply', 'session_id', 'steps', 'success', 'todos'], stream: false },
+  { method: "POST", path: "/api/chat", handler: "chat", pathParams: [], query: [], body: ['agent_id', 'attachments', 'content', 'continue_rounds', 'delivery_check', 'delivery_cwd', 'delivery_timeout', 'force_tools', 'hint', 'message', 'model', 'permission_approved', 'permission_level', 'session_id'], bodyOpen: false, response: ['agent', 'delivery', 'error', 'iterations', 'mode', 'model', 'permission', 'permission_level', 'permission_level_name', 'permission_level_note', 'reply', 'session_id', 'steps', 'success', 'todos'], stream: false },
   { method: "GET", path: "/api/chat/stream", handler: "sse_chat_get", pathParams: [], query: ['message', 'model', 'session_id', 'agent_id', 'permission_level'], body: [], bodyOpen: false, response: [], stream: true },
   { method: "POST", path: "/api/chat/stream", handler: "sse_chat_post", pathParams: [], query: [], body: ['agent_id', 'message', 'model', 'permission_approved', 'permission_level', 'session_id'], bodyOpen: false, response: [], stream: true },
   { method: "GET", path: "/api/checkpoints", handler: "checkpoints_list", pathParams: [], query: ['session_id'], body: [], bodyOpen: false, response: ['checkpoints'], stream: false },

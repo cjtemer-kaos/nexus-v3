@@ -7600,12 +7600,44 @@ async def chat(request: Request):
         _ronda = 0
         _reintentos_llm = 0
         _rondas_por_plan = 0
+        # Gate de entrega: el pedido se cierra por comportamiento, no por relato.
+        # Si el comando de comprobacion falla, se vuelve a entrar con su salida real
+        # como evidencia, aunque la ronda haya cerrado con "LISTO:".
+        _check_cmd = str(body.get("delivery_check") or "").strip()
+        _check_cwd = str(body.get("delivery_cwd") or "").strip() or None
+        try:
+            _check_timeout = max(30.0, min(1800.0, float(body.get("delivery_timeout") or 600)))
+        except Exception:
+            _check_timeout = 600.0
+        _check_ok: bool | None = None
+        _check_salida = ""
+        _check_evidencia = ""
+        _check_forzadas = 0
         while _ronda < _rondas:
             # Un fallo del proveedor (timeout, 400 del wire, 429) no es "termine":
             # es un corte externo en mitad del trabajo. Se reintenta la ronda con
             # espera creciente en vez de dar la corrida por cerrada.
             _cayo_el_llm = str(getattr(result, "final_output", "") or "").lower().startswith(
                 "[error llm")
+            # La ronda puede haber dicho LISTO: con el programa sin andar: la
+            # comprobacion de entrega manda antes de decidir si el turno cerro.
+            if _check_cmd and not _cayo_el_llm:
+                _permitido = True
+                try:
+                    scope.check_tool("exec", {"command": _check_cmd})
+                except Exception as _e:
+                    _permitido = False
+                    logger.info("gate de entrega: el alcance no permite correrlo (%s)", _e)
+                if _permitido:
+                    _check_ok, _check_salida = await asyncio.to_thread(
+                        _check_entrega_sync, _check_cmd, _check_cwd, _check_timeout)
+                    logger.info("gate de entrega: %s (sesion %s)",
+                                "pasa" if _check_ok else "falla", session_id)
+                    _publicar_sesion(session_id, type="check", ok=bool(_check_ok),
+                                     cmd=_check_cmd, output=_check_salida[-1500:])
+                    if _check_ok:
+                        break  # entrega verificada: no hay nada mas que empujar
+                    _check_evidencia = _texto_evidencia(_check_cmd, _check_salida)
             if _cayo_el_llm:
                 if _reintentos_llm >= 3:
                     logger.warning("continuacion: el proveedor fallo %d veces, se corta la sesion %s",
@@ -7629,10 +7661,17 @@ async def chat(request: Request):
                 except Exception:
                     _abiertos = 0
                 if _abiertos <= 0 or _rondas_por_plan >= 3:
-                    break
-                _rondas_por_plan += 1
-                logger.info("continuacion: cerro con %d tareas abiertas en su plan, sigue (sesion %s)",
-                            _abiertos, session_id)
+                    # Sin plan abierto: cerraria. Solo se permite si hay una
+                    # comprobacion de entrega y pasa (o no se pidio ninguna).
+                    if not _check_evidencia or _check_forzadas >= 3:
+                        break
+                    _check_forzadas += 1
+                    logger.info("gate de entrega: la ronda cerro y la comprobacion falla; "
+                                "se fuerza otra (sesion %s)", session_id)
+                else:
+                    _rondas_por_plan += 1
+                    logger.info("continuacion: cerro con %d tareas abiertas en su plan, sigue (sesion %s)",
+                                _abiertos, session_id)
             _ronda += 1
             logger.info("continuacion %d/%d sesion %s: el turno uso %d tools",
                         _ronda, _rondas, session_id,
@@ -7645,7 +7684,8 @@ async def chat(request: Request):
                 # pasaba a ser el modulo en el que estaba trabajando (declaro
                 # LISTO: al terminar el arbol AICH sin que el programa exista).
                 # Repetir el pedido del usuario es lo que haria un supervisor.
-                task=("Segui con la tarea desde donde quedo. El pedido original del usuario fue:\n"
+                task=(_check_evidencia +
+                      "Segui con la tarea desde donde quedo. El pedido original del usuario fue:\n"
                       f"\"\"\"\n{(message or '')[:1500]}\n\"\"\"\n\n"
                       "No repitas el resumen ni preguntes si continuar: usa las herramientas y "
                       "deja el trabajo hecho y comprobado. Terminar una pieza no termina el "
@@ -7659,6 +7699,20 @@ async def chat(request: Request):
                 on_step=_publicar_paso, on_delta=_publicar_delta,
             )
         _perf["loop"] = _time.monotonic()
+
+        # Sin rondas de continuacion la comprobacion se corre igual: el pedido se
+        # mide por comportamiento aunque haya entrado en un solo turno.
+        if _check_cmd and _check_ok is None:
+            try:
+                scope.check_tool("exec", {"command": _check_cmd})
+                _check_ok, _check_salida = await asyncio.to_thread(
+                    _check_entrega_sync, _check_cmd, _check_cwd, _check_timeout)
+                logger.info("gate de entrega (turno unico): %s (sesion %s)",
+                            "pasa" if _check_ok else "falla", session_id)
+                _publicar_sesion(session_id, type="check", ok=bool(_check_ok),
+                                 cmd=_check_cmd, output=_check_salida[-1500:])
+            except Exception as _e:
+                logger.info("gate de entrega: no se pudo correr (%s)", _e)
 
         # Ciclo #113: telemetria + judge + Thompson por turno (nunca rompe chat)
         await _learning_record(message, session_id, result, hint=hint,
@@ -7697,6 +7751,8 @@ async def chat(request: Request):
             "permission_level_note": _level_note,
             "agent": (_agent_cfg or {}).get("id"),
             "success": result.success,
+            "delivery": ({"cmd": _check_cmd, "ok": _check_ok, "output": _check_salida[-4000:]}
+                         if _check_cmd else None),
             "model": result.model,
             "iterations": result.iterations,
             "steps": [
@@ -8404,6 +8460,45 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
+def _check_entrega_sync(cmd: str, cwd: str | None, timeout: float) -> tuple[bool, str]:
+    """Corre la comprobacion de entrega tal cual la usaria el usuario.
+
+    Devuelve (paso, salida). No interpreta la salida: lo que vale es el codigo
+    de salida del comando real, no lo que el modelo diga que hizo.
+    """
+    import subprocess as _sp
+
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        r = _sp.run(cmd, cwd=(cwd or None), shell=True, capture_output=True,
+                    timeout=timeout, env=env)
+    except _sp.TimeoutExpired:
+        return False, f"[la comprobacion no termino en {int(timeout)}s]"
+    except Exception as e:
+        return False, f"[no se pudo ejecutar la comprobacion: {e}]"
+    txt = ((r.stdout or b"") + (r.stderr or b"")).decode("utf-8", "replace")
+    return (r.returncode == 0), txt[-6000:]
+
+
+def _texto_evidencia(cmd: str, salida: str) -> str:
+    """Evidencia cruda para la ronda siguiente: el resultado real, sin pistas.
+
+    Se inyecta la salida del comando, no una lista de pasos: el modelo tiene que
+    leer el fallo como lo leeria el usuario y arreglarlo.
+    """
+    return (
+        "COMPROBACION DE ENTREGA (asi se usa lo que pediste, corrido por el arnes):\n"
+        f"comando: {cmd}\n"
+        "resultado: FALLA\n"
+        "--- salida real ---\n"
+        f"{salida}\n"
+        "--- fin de la salida ---\n"
+        "Eso es lo que devuelve la comprobacion ahora. Explicar el fallo no lo arregla: "
+        "dejalo pasando de verdad.\n\n"
+    )
+
+
 def _publicar_sesion(session_id: str, **event) -> None:
     """Publica un evento del turno en el bus de la sesion (nunca lanza).
 
