@@ -7621,10 +7621,17 @@ async def chat(request: Request):
                         _ronda, _rondas, session_id,
                         sum(1 for s in result.steps if getattr(s, "phase", "") == "act"))
             result = await loop.run(
-                task=("Segui con la tarea desde donde quedo. No repitas el resumen ni "
-                      "preguntes si continuar: usa las herramientas y deja el trabajo "
-                      "hecho y comprobado. Si ya esta terminado y probado tal como lo "
-                      "usaria el usuario, responde unicamente: LISTO: <que quedo funcionando>."),
+                # El pedido original va textual: la continuacion decia "segui con
+                # la tarea" sin objeto, y despues de una compactacion "la tarea"
+                # pasaba a ser el modulo en el que estaba trabajando (declaro
+                # LISTO: al terminar el arbol AICH sin que el programa exista).
+                # Repetir el pedido del usuario es lo que haria un supervisor.
+                task=("Segui con la tarea desde donde quedo. El pedido original del usuario fue:\n"
+                      f"\"\"\"\n{(message or '')[:1500]}\n\"\"\"\n\n"
+                      "No repitas el resumen ni preguntes si continuar: usa las herramientas y "
+                      "deja el trabajo hecho y comprobado. Terminar una pieza no termina el "
+                      "pedido: LISTO: va solo cuando lo que pidio el usuario ya funciona tal "
+                      "como el lo usaria."),
                 session_id=session_id, hint=hint,
                 force_tools=bool(body.get("force_tools", False)),
                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
