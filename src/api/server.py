@@ -5251,15 +5251,39 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         old_c = old.replace("\r\n", "\n")
         new_c = new.replace("\r\n", "\n")
         n = text_c.count(old_c)
+        _aplicado: str | None = None
+        _estrategia = ""
         if n == 0:
-            raise ValueError(
-                f"texto a reemplazar no encontrado en {path}. Leé el archivo con read_file y "
-                f"copiá el fragmento exacto (incluí contexto suficiente para que sea único).")
+            # Tolerancia acotada (portado de opencode): el modelo casi nunca
+            # falla por "no saber editar", falla porque copió el fragmento con la
+            # sangría corrida, con un espacio de más o con `\n` literales. Antes
+            # eso era un bucle de "leé de nuevo y copiá exacto"; ahora se aplica
+            # si hay UNA sola coincidencia, y si no, se devuelve el bloque real
+            # con números de línea para corregir en un intento.
+            from src.core.fuzzy_replace import bloque_mas_parecido, reemplazo_tolerante
+            _tol = reemplazo_tolerante(text_c, old_c, new_c)
+            if _tol is None:
+                _pista = bloque_mas_parecido(text_c, old_c) or (
+                    "El archivo no tiene ningún bloque parecido: el fragmento no "
+                    "está ahí (¿otro archivo?). Verificá con grep antes de reintentar.")
+                raise ValueError(
+                    f"texto a reemplazar no encontrado en {path}.\n{_pista}\n"
+                    f"Usá el texto exacto de arriba, o un fragmento más chico y único.")
+            _aplicado, _estrategia = _tol
+            n = 1
         if n > 1 and not replace_all:
-            raise ValueError(f"el texto aparece {n} veces en {path}; agregá más contexto o usá replace_all=true")
+            from src.core.fuzzy_replace import ocurrencias_lineas
+            _donde = ocurrencias_lineas(text_c, old_c)
+            _cual = (f" (líneas {', '.join(str(x) for x in _donde)})" if _donde else "")
+            raise ValueError(
+                f"el texto aparece {n} veces en {path}{_cual}; agregá más contexto para "
+                f"que sea único o usá replace_all=true")
+        _hechos = n if replace_all else 1
+        final_c = _aplicado if _aplicado is not None else (
+            text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1))
 
         def _do() -> str:
-            new_text = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
+            new_text = final_c
             if crlf:
                 new_text = new_text.replace("\n", "\r\n")
             # El chequeo de encoding va ANTES del snapshot: si el texto nuevo no
@@ -5273,7 +5297,10 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             write_bytes_file(p, datos)
             from src.core.diffutil import line_diff
             _diff = line_diff(text, new_text)
-            _res = f"editado {path} ({n if replace_all else 1} reemplazo/s)"
+            _res = f"editado {path} ({_hechos} reemplazo/s)"
+            if _estrategia:
+                _res += (f" [coincidencia aproximada: {_estrategia}; el `old` no era "
+                         f"idéntico pero el resultado quedó así]")
             if enc not in ("utf-8", "utf-8-sig"):
                 _res += f" [codificacion preservada: {enc}]"
             return f"{_res}\n{_diff}" if _diff else _res
@@ -5287,7 +5314,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     "gate de aprobaciones, no es el scope)")
             from src.core.approvals import fingerprint, get_approvals
             from src.core.diffutil import unified
-            _new = text_c.replace(old_c, new_c) if replace_all else text_c.replace(old_c, new_c, 1)
+            _new = final_c
             if crlf:
                 _new = _new.replace("\n", "\r\n")
             _act = f"edit:{path}"
@@ -5479,11 +5506,11 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "content": {"type": "string", "description": "Contenido completo del archivo"}},
             "required": ["path", "content"], "additionalProperties": False})
     registry.register_function(edit_file_tool, name="edit",
-        description="Reemplazo quirúrgico (str_replace) en un archivo: cambia `old` por `new`. `old` debe ser único (o usá replace_all=true).",
+        description="Reemplazo quirúrgico (str_replace) en un archivo: cambia `old` por `new`. `old` debe ser único (o usá replace_all=true). Tolera diferencias de espacios/indentación si la coincidencia es única; si no encuentra nada, devuelve el bloque más parecido con números de línea.",
         category="local",
         parameters={"type": "object", "properties": {
             "path": {"type": "string", "description": "Ruta del archivo"},
-            "old": {"type": "string", "description": "Texto exacto a reemplazar (debe existir en el archivo)"},
+            "old": {"type": "string", "description": "Texto a reemplazar; copialo del archivo (se tolera sangría/espacios si es único)"},
             "new": {"type": "string", "description": "Texto de reemplazo"},
             "replace_all": {"type": "boolean", "description": "Reemplazar TODAS las ocurrencias (default false)"}},
             "required": ["path", "old", "new"], "additionalProperties": False})
@@ -7613,6 +7640,12 @@ async def chat(request: Request):
         _check_salida = ""
         _check_evidencia = ""
         _check_forzadas = 0
+        # Escalado de modelo: si la comprobacion sigue fallando con el mismo
+        # modelo, insistir con mas rondas repite el mismo enfoque. Se sube a uno
+        # mas capaz y se sigue midiendo igual.
+        _esc_tras, _esc_modelos = _escalada_de_modelos(cfg, body)
+        _modelo_ronda = body.get("model") or (_agent_cfg or {}).get("model") or None
+        _fallas_gate = 0
         while _ronda < _rondas:
             # Un fallo del proveedor (timeout, 400 del wire, 429) no es "termine":
             # es un corte externo en mitad del trabajo. Se reintenta la ronda con
@@ -7638,6 +7671,17 @@ async def chat(request: Request):
                     if _check_ok:
                         break  # entrega verificada: no hay nada mas que empujar
                     _check_evidencia = _texto_evidencia(_check_cmd, _check_salida)
+                    _fallas_gate += 1
+                    if _esc_modelos and _fallas_gate >= _esc_tras:
+                        _i_esc = min(len(_esc_modelos) - 1, _fallas_gate - _esc_tras)
+                        _elegido = _esc_modelos[_i_esc]
+                        if _elegido != _modelo_ronda:
+                            logger.info(
+                                "gate: escalo el modelo a %s tras %d fallas (sesion %s)",
+                                _elegido, _fallas_gate, session_id)
+                            _modelo_ronda = _elegido
+                            _publicar_sesion(session_id, type="model", model=_elegido,
+                                             reason="gate de entrega")
             if _cayo_el_llm:
                 if _reintentos_llm >= 3:
                     logger.warning("continuacion: el proveedor fallo %d veces, se corta la sesion %s",
@@ -7693,7 +7737,7 @@ async def chat(request: Request):
                       "como el lo usaria."),
                 session_id=session_id, hint=hint,
                 force_tools=bool(body.get("force_tools", False)),
-                model=body.get("model") or (_agent_cfg or {}).get("model") or None,
+                model=_modelo_ronda,
                 system_prompt=_sys or None,
                 steer=(lambda: _steer_drain(session_id)) if session_id else None,
                 on_step=_publicar_paso, on_delta=_publicar_delta,
@@ -8460,6 +8504,35 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
+
+
+def _escalada_de_modelos(cfg: dict | None, body: dict | None) -> tuple[int, list[str]]:
+    """(fallas antes de escalar, modelos en orden) para el gate de entrega.
+
+    Un modelo chico tiende a repetir el mismo enfoque cuando la comprobacion
+    falla: mas rondas no lo destraban, un modelo mas capaz si. Config:
+    `delivery.escalate_after` y `delivery.escalate_models`; el body puede
+    pisarlas con `escalate_after` / `escalate_models`.
+    """
+    body = body or {}
+    _d = ((cfg or {}).get("delivery") or {}) if isinstance(cfg, dict) else {}
+
+    def _entero(valor, default: int) -> int:
+        try:
+            return int(valor)
+        except Exception:
+            return default
+
+    desde = _entero(body.get("escalate_after"),
+                    _entero(_d.get("escalate_after"), 2))
+    crudos = body.get("escalate_models") or _d.get("escalate_models") or [
+        "deepseek-v4-pro", "kimi-k2.7-code"]
+    if isinstance(crudos, str):
+        crudos = [m.strip() for m in crudos.split(",")]
+    modelos = [str(m).strip() for m in crudos if str(m).strip()]
+    return max(1, desde), modelos
+
+
 def _check_entrega_sync(cmd: str, cwd: str | None, timeout: float) -> tuple[bool, str]:
     """Corre la comprobacion de entrega tal cual la usaria el usuario.
 
