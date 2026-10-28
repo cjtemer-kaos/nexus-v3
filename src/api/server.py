@@ -7582,6 +7582,7 @@ async def chat(request: Request):
         _rondas = max(0, min(12, int(body.get("continue_rounds") or 0)))
         _ronda = 0
         _reintentos_llm = 0
+        _rondas_por_plan = 0
         while _ronda < _rondas:
             # Un fallo del proveedor (timeout, 400 del wire, 429) no es "termine":
             # es un corte externo en mitad del trabajo. Se reintenta la ronda con
@@ -7599,7 +7600,22 @@ async def chat(request: Request):
                             _reintentos_llm, _espera, session_id)
                 await asyncio.sleep(_espera)
             elif not _turno_hizo_trabajo(result):
-                break
+                # Cerro con texto (sin tools), pero su propia lista de tareas
+                # puede decir que quedan cosas: eso es un plan abierto, no un
+                # final. Se sigue mientras haya pendientes, con tope propio para
+                # que una lista vieja no arrastre la sesion para siempre.
+                _abiertos = 0
+                try:
+                    _tt = TodoStore(db_path=_session_db_path()).read(session_id)
+                    _cc = (_tt or {}).get("counts") or {}
+                    _abiertos = int(_cc.get("pending", 0) or 0) + int(_cc.get("inProgress", 0) or 0)
+                except Exception:
+                    _abiertos = 0
+                if _abiertos <= 0 or _rondas_por_plan >= 3:
+                    break
+                _rondas_por_plan += 1
+                logger.info("continuacion: cerro con %d tareas abiertas en su plan, sigue (sesion %s)",
+                            _abiertos, session_id)
             _ronda += 1
             logger.info("continuacion %d/%d sesion %s: el turno uso %d tools",
                         _ronda, _rondas, session_id,
