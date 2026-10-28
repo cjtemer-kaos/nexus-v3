@@ -487,9 +487,14 @@ class AgentLoop:
             md = metrics.to_dict() if hasattr(metrics, "to_dict") else dict(metrics or {})
         except Exception:
             md = {}
-        before = int(md.get("tokens_before", 0) or 0)
+        before = int(md.get("original_tokens", 0) or md.get("tokens_before", 0) or 0)
+        tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
         if before <= 0:
-            before = int(getattr(self, "_last_est_tokens", 0) or 0)
+            # `_should_compact` cuenta mensajes + schemas de tools; el metric de
+            # compactacion es solo mensajes. Sin descontar los schemas el log
+            # inventaba una reduccion (15685 -> 8288 con `capas []`) que en
+            # realidad era comparar dos bases distintas: no se compacto nada.
+            before = max(0, int(getattr(self, "_last_est_tokens", 0) or 0) - tools_n)
         after = int(md.get("tokens_after", md.get("compressed_tokens", 0)) or 0)
         if after <= 0:
             try:
@@ -497,11 +502,17 @@ class AgentLoop:
             except Exception:
                 after = 0
         # Tras compactar, dejar aire: no re-compactar hasta crecer 20% sobre lo que quedó.
-        self._no_recompact_below[session_id] = int(after * 1.2) if after > 0 else 0
+        # El piso se guarda en la MISMA base que `_should_compact` (mensajes + tools):
+        # guardarlo solo sobre mensajes lo dejaba siempre por debajo del check y el
+        # turno volvia a compactar con 48 s de resumen (medido en la corrida 18).
+        base = (after + tools_n) if after > 0 else 0
+        self._no_recompact_below[session_id] = int(base * 1.2) if base > 0 else 0
+        _capas = md.get("layers", [])
         logger.info(
-            "compact sesión %s: %d -> %d tokens est. (piso %d, budget %d, umbral %.2f, capas %s)",
+            "compact sesión %s: %d -> %d tokens est. (piso %d, budget %d, umbral %.2f, capas %s%s)",
             session_id, before, after, self._no_recompact_below.get(session_id, 0),
-            self.context_max_tokens, self.compact_threshold, md.get("layers", []),
+            self.context_max_tokens, self.compact_threshold, _capas,
+            "" if _capas else " — ya estaba bajo el límite, no hubo nada que compactar",
         )
 
     def _persist_compaction_summary(self, session_id: str, dict_msgs: list[dict]) -> None:
@@ -776,6 +787,46 @@ class AgentLoop:
             if len(out) >= 5:
                 break
         return out
+
+    def _cerrar_tool_calls_pendientes(self, messages: list, session_id: str = "") -> int:
+        """Cierra los tool_calls del último assistant que quedaron sin resultado.
+
+        El loop agrega el assistant con N tool_calls y después los ejecuta uno por
+        uno. Un corte a mitad (guard de bucle, error fatal, `break`) dejaba los
+        restantes sin respuesta, el historial quedaba inválido y en cada request
+        siguiente el saneador rellenaba esos huecos con "[sin resultado]": el
+        modelo perdía lo que sí había hecho y volvía a pedirlo. Medido en la
+        sesión de eMule: 6–12 huecos reparados en casi todos los requests.
+        """
+        ultimo = -1
+        for i, m in enumerate(messages or []):
+            if (str(getattr(m, "role", "")) == "assistant"
+                    and (getattr(m, "tool_calls", None) or ())):
+                ultimo = i
+        if ultimo < 0:
+            return 0
+        pendientes = [
+            str(getattr(tc, "id", "") or "") for tc in (messages[ultimo].tool_calls or ())
+        ]
+        for m in messages[ultimo + 1:]:
+            if str(getattr(m, "role", "")) == "tool":
+                _id = str(getattr(m, "tool_call_id", "") or "")
+                if _id in pendientes:
+                    pendientes.remove(_id)
+        if not pendientes:
+            return 0
+        for _id in pendientes:
+            content = "[no ejecutada: el turno se cortó antes de correr esta herramienta]"
+            messages.append(LLMMessage(role="tool", content=content, tool_call_id=_id))
+            if self.session_log is not None and session_id:
+                try:
+                    from .session_log import Message
+
+                    self.session_log.append(session_id, Message(
+                        role="tool", content=content, tool_call_id=_id))
+                except Exception:
+                    pass
+        return len(pendientes)
 
     def _sanear_historial(self, messages: list) -> list:
         """Deja el historial en la forma que el wire OpenAI acepta.
@@ -1837,8 +1888,24 @@ class AgentLoop:
                     # -mismos args- ya lo detecta `_fp`. Limites altos y aviso claro.
                     _transportes = {"mcp_call": (40, 80), "repl": (40, 120),
                                     "exec": (40, 120), "run_command": (40, 120)}
+                    # Herramientas que se repiten LEGITIMAMENTE con argumentos
+                    # distintos: leer 20 archivos para entender un programa, o
+                    # grepear 15 patrones, es trabajo real, no un bucle. Con el
+                    # limite generico (5/10) el turno se cortaba a mitad de la
+                    # tarea (visto: "read_file llamada 10 veces — turno detenido").
+                    # El bucle de verdad —mismos args o mismo resultado— lo cortan
+                    # `_fp` y el detector de resultados repetidos.
+                    _lectura_intensiva = {
+                        "read_file": (25, 80), "read": (25, 80), "grep": (25, 80),
+                        "glob": (25, 80), "list_dir": (25, 80), "code_search": (20, 60),
+                        "repo_map": (15, 40), "web_fetch": (15, 40), "web_search": (15, 40),
+                        "edit": (20, 60), "write_file": (20, 60), "apply_patch": (20, 60),
+                        "skill": (15, 40), "recall": (15, 40), "learn": (15, 40),
+                    }
                     if tool_name in _transportes:
                         _warn, _stop = _transportes[tool_name]
+                    elif tool_name in _lectura_intensiva:
+                        _warn, _stop = _lectura_intensiva[tool_name]
                     else:
                         _warn, _stop = self.anti_loop_tool_warn, self.anti_loop_tool_stop
                     if _tn == _warn:
@@ -2057,6 +2124,7 @@ class AgentLoop:
                     pass
 
             # ---- OBSERVE: budget check + compaction ----
+            self._cerrar_tool_calls_pendientes(messages, session_id)
             await _flush_steps()
             if self.budget.exhausted:
                 steps.append(LoopStep(iteration=iteration, phase="observe", content=f"presupuesto agotado tras iter {iteration}: {self.budget.reason}"))

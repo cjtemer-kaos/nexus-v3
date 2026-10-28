@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field, replace as _dc_replace
@@ -25,6 +26,8 @@ from .compaction_budget import (
     find_latest_typed_user_message_index,
     is_turn_start_message,
 )
+
+logger = logging.getLogger("nexus-compaction")
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -289,6 +292,7 @@ class CompactionPipeline:
         ]
         rest = [m for m in original if _msg_role(m) != "system"]
         if len(rest) <= self.keep_recent + 1:
+            logger.info("compact summary: sin LLM (historial muy corto: %d mensajes)", len(rest))
             return await self.compact(original, limit, session_id=session_id)
         middle = rest[: -self.keep_recent]
         recent = rest[-self.keep_recent:]
@@ -318,6 +322,7 @@ class CompactionPipeline:
             and (time.monotonic() - self._summary_failed_at)
             < self.summary_failure_cooldown_s
         ):
+            logger.info("compact summary: sin LLM (cooldown tras un resumen fallido)")
             return await self.compact(original, limit, session_id=session_id)
 
         # Poco progreso desde el resumen anterior: reusarlo sin otra llamada.
@@ -328,6 +333,7 @@ class CompactionPipeline:
             if out is not None:
                 self._record_summary_metric(metrics, original, out, "reuse")
                 return out, metrics
+            logger.info("compact summary: sin LLM (no se pudo reutilizar el resumen previo)")
             return await self.compact(original, limit, session_id=session_id)
 
         hint = model_hint or self.summary_model_hint
@@ -361,6 +367,7 @@ class CompactionPipeline:
                     except Exception:
                         routed = None
             if routed is None:
+                logger.info("compact summary: sin LLM (no se pudo resolver modelo)")
                 return await self.compact(original, limit, session_id=session_id)
 
             # El material de entrada debe ser mayor que el resumen objetivo.
@@ -423,6 +430,7 @@ class CompactionPipeline:
                 )),
                 LLMMessage(role="user", content=prev_block + middle_text),
             ]
+            _t_summary = time.monotonic()
             resp = await routed.provider.chat(llm_messages, model=routed.model)
             summary_text = (resp.content or "")[: budget * 4]
             m_tag = re.search(r"<summary>(.*?)</summary>", summary_text, re.S)
@@ -443,13 +451,21 @@ class CompactionPipeline:
                 system_msgs, summary_text, recent, reused=False, limit=limit,
                 omitted=middle_count, latest_prompt=latest_prompt)
             if out is None:
+                logger.info("compact summary: sin LLM (el resumen no entro en el presupuesto)")
                 return await self.compact(original, limit, session_id=session_id)
             self._summary_failed_at = 0.0
+            logger.info(
+                "compact summary: modelo=%s entrada~%d tok salida=%d chars en %.1f s",
+                routed.model, len(middle_text) // 4, len(summary_text),
+                time.monotonic() - _t_summary)
             self._record_summary_metric(metrics, original, out, f"llm={routed.model}")
             return out, metrics
-        except Exception:
+        except Exception as e:
             # LLM summary failed — cooldown y fallback L1-L3.
             self._summary_failed_at = time.monotonic()
+            logger.warning(
+                "compact summary: fallo el LLM (%s: %s); se usa L1-L3 y cooldown %.0f s",
+                type(e).__name__, str(e)[:160], self.summary_failure_cooldown_s)
             return await self.compact(original, limit, session_id=session_id)
 
     def _build_summary_output(
