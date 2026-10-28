@@ -123,6 +123,21 @@
       },
       "additionalProperties": false
     },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "max_tools": {"type": "integer", "minimum": 1, "maximum": 100},
+            "always": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
     "agent_loop": {
       "type": "object",
       "properties": {

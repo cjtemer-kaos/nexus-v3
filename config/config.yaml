@@ -32,6 +32,15 @@ session:
   max_tokens: 24576
   compact_threshold: 0.75
   keep_recent: 4
+# Seleccion de schemas de tools por turno. Los 47 schemas son ~6.600 tokens que
+# viajan en CADA request: medido el 2026-10-28, el prompt real de una sesion con
+# 53 tools fijadas era 17.029 tokens y ~40 % eran definiciones. Se manda un nucleo
+# fijo (tools/selection/always; vacio = el nucleo de src/core/tool_select.py) mas
+# las tools que matchean el pedido; `tool_search` cubre el resto a mitad del turno.
+tools:
+  selection:
+    enabled: true
+    max_tools: 16
 agent_loop:
   max_iterations: 200
   max_tokens_per_turn: 8192   # reservado: cap por turno (el cap real es agent_loop.budget)

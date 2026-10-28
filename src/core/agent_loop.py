@@ -32,6 +32,7 @@ from .iteration_budget import IterationBudget
 from .error_classifier import ErrorAction, classify_error
 from .trajectory import Trajectory, TrajectoryStep
 from . import token_anchor
+from . import tool_select
 
 import os as _os
 
@@ -424,6 +425,35 @@ class AgentLoop:
             int(getattr(self, "_tools_chars", 0) or 0),
             int(getattr(self, "_tools_tokens_n", 0) or 0),
         )
+
+    def _seleccionar_tools(self, task: str, tools: list[dict] | None) -> list[dict] | None:
+        """Recorta los schemas al nucleo + lo que pide el turno.
+
+        Los 47 schemas son ~6.600 tokens que viajan en CADA iteracion: con un
+        prompt real de 17k, ~40 % del request eran definiciones de tools. La
+        seleccion se hace una sola vez por turno para no romper el prefijo
+        cacheado (cambiarlo por iteracion invalida la cache en cada llamada).
+        """
+        cfg = ((self._cfg or {}).get("tools") or {}).get("selection") or {}
+        if not tools or not cfg.get("enabled", False):
+            return tools
+        try:
+            antes = self._count_tools_chars(tools)
+            out = tool_select.select(
+                task or "",
+                tools,
+                always=tuple(cfg.get("always") or tool_select.CORE),
+                max_tools=int(cfg.get("max_tools") or 16),
+            )
+            despues = self._count_tools_chars(out)
+            logger.info(
+                "tools: %d -> %d schemas (%d -> %d chars, ~%d tokens menos por request)",
+                len(tools), len(out), antes, despues, max(0, antes - despues) // 4,
+            )
+            return out
+        except Exception as e:
+            logger.debug("seleccion de tools fallo: %s", e)
+            return tools
 
     async def _prior_knowledge_block(self, task: str) -> str:
         """Lo que el grafo ya sabe de este pedido, listo para el system prompt.
@@ -1581,13 +1611,17 @@ class AgentLoop:
 
         if _use_pin:
             openai_tools = _tools_from_pin(openai_tools, _pin)
-        elif self.session_log is not None and session_id and messages:
-            try:
-                self.session_log.pin_request(
-                    session_id, messages[0].content or "", openai_tools or [],
-                    model=str(model or ""), force=True)
-            except Exception as e:
-                logger.debug(f"pin de la request falló: {e}")
+        else:
+            # Antes del pin: lo que se fija en la sesion tiene que ser el set
+            # recortado, si no un turno reanudado vuelve a mandar los 47 schemas.
+            openai_tools = self._seleccionar_tools(task, openai_tools)
+            if self.session_log is not None and session_id and messages:
+                try:
+                    self.session_log.pin_request(
+                        session_id, messages[0].content or "", openai_tools or [],
+                        model=str(model or ""), force=True)
+                except Exception as e:
+                    logger.debug(f"pin de la request falló: {e}")
 
         # Los schemas de las tools viajan en CADA request y no estaban contados:
         # con 53 tools son ~7.3k tokens, asi que el arnes se creia 4x mas holgado,

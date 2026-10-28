@@ -5026,6 +5026,38 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {"text": {"type": "string"}},
                     "required": ["text"], "additionalProperties": False})
 
+    async def tool_search_tool(query: str = "", limit: int = 5) -> str:
+        """Busca herramientas por texto y devuelve su schema completo.
+
+        El turno manda solo un nucleo de schemas (los 47 completos son ~6.600
+        tokens en cada request). Si falta una capacidad, se busca aca y despues
+        se llama normal: el dispatch ya conoce todas las tools del registro.
+        """
+        from src.core import tool_select
+        import json as _json
+        try:
+            catalogo = registry.to_openai_tools()
+        except Exception as e:
+            return f"[tool_search: no pude listar las tools ({e})]"
+        encontradas = tool_select.search(catalogo, query, limit)
+        if not encontradas:
+            nombres = [str((t.get("function") or {}).get("name") or "") for t in catalogo]
+            return ("sin coincidencias para " + repr(query) + ". Disponibles: "
+                    + ", ".join(sorted(nombres)))
+        return _json.dumps([tool_select.resumen(t) for t in encontradas],
+                           ensure_ascii=False, indent=1)
+
+    registry.register_function(
+        tool_search_tool, name="tool_search",
+        description=("Busca herramientas por texto y devuelve nombre, descripcion y "
+                     "parametros. Usala cuando necesites una capacidad que no esta en "
+                     "la lista de tools del turno."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "query": {"type": "string", "description": "que necesitas hacer"},
+            "limit": {"type": "integer", "description": "cuantas devolver (1-20)"},
+        }, "required": ["query"], "additionalProperties": False})
+
     def _mcp_bundle_entry(nombre: str) -> dict | None:
         """Entrada del bundle MCP con ese nombre, si existe.
 
