@@ -47,6 +47,12 @@ class Event:
     timestamp: float = field(default_factory=time.time)
     parent_id: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # `seq` es monotónico POR SESIÓN: el cliente reanuda desde la última que
+    # vio. `replay_epoch` cambia cuando el log se poda o se reconstruye, para
+    # que el cliente sepa que "no hay eventos nuevos" no significa "no perdí
+    # eventos".
+    seq: int = 0
+    replay_epoch: int = 0
 
     def __post_init__(self):
         # keep conversation_id and session_id in sync
@@ -65,6 +71,8 @@ class Event:
             "timestamp": self.timestamp,
             "parent_id": self.parent_id,
             "metadata": self.metadata,
+            "seq": self.seq,
+            "replay_epoch": self.replay_epoch,
         }
 
 
@@ -77,13 +85,19 @@ CREATE TABLE IF NOT EXISTS events (
     data TEXT DEFAULT '{}',
     timestamp REAL DEFAULT (strftime('%s', 'now')),
     parent_id TEXT DEFAULT '',
-    metadata TEXT DEFAULT '{}'
+    metadata TEXT DEFAULT '{}',
+    seq INTEGER DEFAULT 0,
+    replay_epoch INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
 CREATE INDEX IF NOT EXISTS idx_events_conv ON events(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_id);
+CREATE TABLE IF NOT EXISTS event_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT DEFAULT ''
+);
 """
 
 
@@ -92,9 +106,9 @@ class EventStore:
 
     def __init__(self, db_path: str | Path | None = None, wal: bool = True):
         if db_path is None:
-            # default relative to project root (two levels up from src/core)
-            default = Path(__file__).parents[2] / "data" / "event_store.db"
-            db_path = str(default)
+            # Dentro del data home (respeta NEXUS_V3_DATA), no relativo al CWD.
+            from src.core.environment import data_home
+            db_path = str(data_home() / "event_store.db")
         self.db_path = Path(db_path) if str(db_path) != ":memory:" else Path(":memory:")
         self._db_str = str(db_path)
         self._wal = wal
@@ -150,6 +164,30 @@ class EventStore:
                 if "session_id" not in cols:
                     conn.execute("ALTER TABLE events ADD COLUMN session_id TEXT DEFAULT ''")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")
+                if "seq" not in cols:
+                    conn.execute("ALTER TABLE events ADD COLUMN seq INTEGER DEFAULT 0")
+                if "replay_epoch" not in cols:
+                    conn.execute("ALTER TABLE events ADD COLUMN replay_epoch INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            conn.execute(
+                "INSERT OR IGNORE INTO event_meta(key, value) VALUES('replay_epoch', '1')")
+            # Una sola pasada para numerar lo que se escribió antes de existir
+            # `seq`: sin esto el primer append nuevo tomaría seq=1 y quedaría
+            # intercalado con todo el historial.
+            try:
+                hecho = conn.execute(
+                    "SELECT value FROM event_meta WHERE key='seq_backfilled'").fetchone()
+                if not hecho or hecho[0] != "1":
+                    conn.execute(
+                        "WITH numbered AS ("
+                        "  SELECT id, ROW_NUMBER() OVER ("
+                        "    PARTITION BY COALESCE(NULLIF(session_id,''), conversation_id)"
+                        "    ORDER BY timestamp, id) AS rn"
+                        "  FROM events) "
+                        "UPDATE events SET seq = (SELECT rn FROM numbered WHERE numbered.id = events.id)")
+                    conn.execute(
+                        "INSERT OR REPLACE INTO event_meta(key, value) VALUES('seq_backfilled','1')")
             except Exception:
                 pass
         finally:
@@ -158,6 +196,40 @@ class EventStore:
     # ------------------------------------------------------------------
     # Append
     # ------------------------------------------------------------------
+    def epoch(self) -> int:
+        """Epoch actual del log. Cambia cuando se poda o reconstruye."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT value FROM event_meta WHERE key='replay_epoch'").fetchone()
+            return int(row[0]) if row and str(row[0]).isdigit() else 1
+        except Exception:
+            return 1
+
+    def bump_epoch(self) -> int:
+        """Declara que el historial anterior ya no es recuperable.
+
+        Se llama al podar eventos (janitor) o al reconstruir el log. Un cliente
+        que reanude con el epoch viejo recibe `gap=true` y re-sincroniza en vez
+        de creer que no hubo nada nuevo.
+        """
+        conn = self._get_conn()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO event_meta(key, value) VALUES('replay_epoch','2') "
+                "ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER)+1 AS TEXT)")
+            return self.epoch()
+
+    def latest_seq(self, session_id: str) -> int:
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM events "
+                "WHERE conversation_id=? OR session_id=?", (session_id, session_id)).fetchone()
+            return int(row[0] or 0)
+        except Exception:
+            return 0
+
     def append(self, event: Event) -> str:
         # sync ids
         if event.session_id and not event.conversation_id:
@@ -167,9 +239,17 @@ class EventStore:
         conn = self._get_conn()
         try:
             with self._lock:
+                # `seq` se calcula dentro del lock: es el orden que el cliente
+                # usa para reanudar, no puede repetirse ni saltear.
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM events "
+                    "WHERE conversation_id=? OR session_id=?",
+                    (event.conversation_id, event.session_id)).fetchone()
+                event.seq = int(row[0] or 0) + 1
+                event.replay_epoch = self.epoch()
                 conn.execute(
-                    "INSERT INTO events (id, kind, conversation_id, session_id, data, timestamp, parent_id, metadata) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO events (id, kind, conversation_id, session_id, data, timestamp, parent_id, metadata, seq, replay_epoch) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         event.id,
                         event.kind,
@@ -179,6 +259,8 @@ class EventStore:
                         event.timestamp,
                         event.parent_id,
                         json.dumps(event.metadata, ensure_ascii=False),
+                        event.seq,
+                        event.replay_epoch,
                     ),
                 )
         finally:
@@ -219,6 +301,7 @@ class EventStore:
         kind: str | None = None,
         since: float = 0,
         limit: int | None = None,
+        since_seq: int = 0,
     ) -> List[Event]:
         cid = session_id or conversation_id
         conn = self._get_conn()
@@ -232,7 +315,10 @@ class EventStore:
             if kind:
                 q += " AND kind=?"
                 params.append(kind)
-            q += " ORDER BY timestamp ASC"
+            if since_seq:
+                q += " AND seq > ?"
+                params.append(int(since_seq))
+            q += " ORDER BY seq ASC, timestamp ASC"
             if limit is not None:
                 q += " LIMIT ?"
                 params.append(limit)
@@ -257,6 +343,8 @@ class EventStore:
                         timestamp=r["timestamp"],
                         parent_id=r["parent_id"] or "",
                         metadata=meta,
+                        seq=int(r["seq"] or 0) if "seq" in r.keys() else 0,
+                        replay_epoch=int(r["replay_epoch"] or 0) if "replay_epoch" in r.keys() else 0,
                     )
                 )
             return events
@@ -266,6 +354,43 @@ class EventStore:
             except Exception:
                 pass
             self._release_conn(conn)
+
+    def replay_window(
+        self,
+        session_id: str,
+        since_seq: int = 0,
+        client_epoch: int | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Reanudación con hueco explícito.
+
+        Devuelve los eventos posteriores a `since_seq` junto con el estado del
+        log. `gap=true` cuando el cliente no puede confiar en lo que tiene: su
+        epoch no coincide con el actual (el log se podó o reconstruyó) o pidió
+        desde una `seq` anterior a la primera que sigue existiendo. En ese caso
+        el cliente tiene que re-sincronizar la sesión completa, no sólo pegar
+        eventos.
+        """
+        eventos = self.get_events(session_id=session_id, since_seq=since_seq,
+                                  limit=limit)
+        epoch = self.epoch()
+        ultima = self.latest_seq(session_id)
+        primera = 0
+        if eventos:
+            primera = eventos[0].seq
+        gap = False
+        if client_epoch is not None and int(client_epoch) != epoch:
+            gap = True
+        if since_seq and primera and primera > int(since_seq) + 1:
+            gap = True
+        return {
+            "events": [e.to_dict() for e in eventos],
+            "latest_seq": ultima,
+            "replay_epoch": epoch,
+            "first_seq": primera,
+            "gap": gap,
+            "replayed": bool(since_seq or client_epoch is not None),
+        }
 
     def list_events(self, kind: str | None = None, limit: int = 100, offset: int = 0) -> List[Event]:
         conn = self._get_conn()

@@ -172,6 +172,23 @@ def _has_table(conn: sqlite3.Connection | None, name: str) -> bool:
     return row is not None
 
 
+def _bump_event_epoch(conn: sqlite3.Connection) -> None:
+    """Marca que el historial podado ya no se puede reproducir desde viejo.
+
+    El event-store usa `replay_epoch` para distinguir "no hubo eventos nuevos"
+    de "perdí eventos". Podar sin bumpear dejaría a la UI reanudando con una
+    `seq` que ya no existe, sin forma de notarlo.
+    """
+    if not _has_table(conn, "event_meta"):
+        return
+    try:
+        conn.execute(
+            "INSERT INTO event_meta(key, value) VALUES('replay_epoch','2') "
+            "ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER)+1 AS TEXT)")
+    except sqlite3.Error:
+        pass
+
+
 def _count(conn: sqlite3.Connection | None, sql: str, args: tuple = ()) -> int:
     if conn is None:
         return 0
@@ -558,6 +575,7 @@ def purge(*, apply: bool = False, db_path: str | Path | None = None,
     if ids:
         with _connect(p["events"], write=True) as conn:
             deleted["events"] = _delete_ids(conn, "events", ids)
+            _bump_event_epoch(conn)
 
     for store in ("checkpoints", "git_checkpoints", "spill"):
         n = 0
@@ -685,6 +703,7 @@ def delete_session(session_id: str, *, db_path: str | Path | None = None,
                     cur = conn.execute(
                         "DELETE FROM events WHERE session_id=?", (sid,))
                     deleted["events"] = cur.rowcount or 0
+                    _bump_event_epoch(conn)
         except Exception as e:
             errores.append(f"events: {e}")
 

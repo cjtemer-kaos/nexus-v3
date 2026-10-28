@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, Pencil, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ShieldAlert, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose } from 'lucide-react'
+import { MessageSquare, Share2, FileCode2, Terminal, Settings, Database, Cpu, Sparkles, Bot, Trash2, Pencil, GitCompare, KanbanSquare, Puzzle, Network, ShieldCheck, ShieldAlert, ListChecks, GitBranch, Coins, ChevronDown, ChevronRight, Brain, PanelLeftClose, FileInput } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { AuditDialog } from '@/components/AuditDialog'
+import { SessionImportDialog } from '@/components/SessionImportDialog'
 
 const primary = [
   { id: 'chat', label: 'Chat', icon: MessageSquare, desc: 'Bucle TDAO' },
@@ -70,6 +71,7 @@ export function Sidebar() {
   const { view, setView, sessions, sessionsError, activeSession, setActiveSession, createSession, forkSession, deleteSession, renameSession } = useAppStore()
   const [ajustesOpen, setAjustesOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   useEffect(() => {
     const abrir = () => setAjustesOpen(true)
     window.addEventListener('nexus:ajustes', abrir)
@@ -152,6 +154,7 @@ export function Sidebar() {
         </button>
         <SettingsDialog open={ajustesOpen} onOpenChange={setAjustesOpen} />
         <AuditDialog open={auditOpen} onOpenChange={setAuditOpen} />
+        <SessionImportDialog open={importOpen} onOpenChange={setImportOpen} />
       </aside>
     )
   }
@@ -208,6 +211,14 @@ export function Sidebar() {
             <span className="text-[11px] font-semibold tracking-widest text-[#9BA1AA]">SESIONES</span>
             <span className="text-[10px] text-[#6B7280]">WAL+FTS</span>
             <span className="ml-auto text-[10px] text-[#6B7280]">{sessions.length}</span>
+            <button
+              onClick={() => setImportOpen(true)}
+              title="Importar una sesión de otro agente (JSONL)"
+              aria-label="Importar sesión"
+              className="rounded p-1 text-[#6B7280] transition-colors hover:bg-[#2C3037] hover:text-[#8CC1FF]"
+            >
+              <FileInput className="h-3.5 w-3.5" />
+            </button>
             <button
               onClick={() => setAuditOpen(true)}
               title="Auditar sesiones y limpiar huérfanos"
@@ -319,6 +330,7 @@ export function Sidebar() {
         <button aria-label="Abrir ajustes" onClick={() => setAjustesOpen(true)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#9BA1AA] hover:bg-[#22262D] hover:text-[#EDEEF0]"><Settings className="h-4 w-4" /> Ajustes · config.yaml</button>
         <SettingsDialog open={ajustesOpen} onOpenChange={setAjustesOpen} />
         <AuditDialog open={auditOpen} onOpenChange={setAuditOpen} />
+        <SessionImportDialog open={importOpen} onOpenChange={setImportOpen} />
       </div>
     </aside>
   )

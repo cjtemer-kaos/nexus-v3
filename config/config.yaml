@@ -25,7 +25,11 @@ session:
   # 32000/8192 desalineados, el harness no compactaba hasta 24000 pero Ollama
   # rechazaba todo request >8192 con 400 "exceeds the available context size",
   # el router lo tomaba como modelo roto y recorria modelos (100-165 s por turno).
-  max_tokens: 16384
+  # Subido a 24576 el 2026-10-28: con 16384 el prompt base (system+60 tools) ya
+  # ocupaba ~9.500 tokens, asi que la conversacion solo tenia ~2.700 utiles y la
+  # compactacion resumia cada dos mensajes hasta perder el pedido original.
+  # Medido en la RTX 3060: qwen3-vl-8b Q4 con 24576 ocupa ~9 GB de VRAM.
+  max_tokens: 24576
   compact_threshold: 0.75
   keep_recent: 4
 agent_loop:
@@ -192,7 +196,7 @@ providers:
     # session.max_tokens, Ollama responde 400 "exceeds the available context size"
     # y el turno se cae. Medido el 2026-10-26 en la RTX 3060: 16384 -> 7,3 GB.
     options:
-      num_ctx: 16384
+      num_ctx: 24576
     embed_url: http://localhost:11434
     models:
     - nexus-director-v6

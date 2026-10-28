@@ -2479,6 +2479,205 @@ async def search_session(session_id: str, q: str, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sessions/{session_id}/pin")
+async def get_session_pin(session_id: str):
+    """Qué request quedó fijada: prompt y set de tools del turno pineado."""
+    slog = _session_log()
+    if slog.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    pin = slog.get_pin(session_id)
+    if not pin:
+        return {"session_id": session_id, "pinned": False}
+    return {
+        "session_id": session_id,
+        "pinned": True,
+        "system_prompt_len": len(pin.get("system_prompt") or ""),
+        "tools": pin.get("names") or [],
+        "hash": pin.get("hash", ""),
+        "model": pin.get("model", ""),
+        "pinned_at": pin.get("pinned_at", ""),
+    }
+
+
+@app.post("/api/sessions/{session_id}/pin")
+async def pin_session(session_id: str, request: Request):
+    """Fija el prompt y el set de tools con los que se reanuda la sesión."""
+    body = await _json_body(request)
+    prompt = str(body.get("system_prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="system_prompt required")
+    slog = _session_log()
+    if slog.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    nombres = [str(n) for n in (body.get("tools") or []) if str(n).strip()]
+    try:
+        cfg = _load_config_safe()
+        scope = _build_scope(cfg, body.get("agent_id"), permission_override=body.get("permission"))
+        reg = _build_registry(scope, session_id, cfg)
+        schemas = reg.to_openai_tools()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo armar el registry: {e}")
+    if nombres:
+        schemas = [s for s in schemas
+                   if str(((s or {}).get("function") or {}).get("name") or "") in nombres]
+        faltan = [n for n in nombres
+                  if n not in {str(((s or {}).get("function") or {}).get("name") or "") for s in schemas}]
+        if faltan:
+            raise HTTPException(status_code=400,
+                                detail=f"tools inexistentes en el registry: {', '.join(faltan)}")
+    pin = slog.pin_request(session_id, prompt, schemas,
+                           model=str(body.get("model") or ""),
+                           force=bool(body.get("force", True)))
+    if not pin:
+        raise HTTPException(status_code=400, detail="no se pudo fijar la request")
+    return {"session_id": session_id, "pinned": True,
+            "system_prompt_len": len(pin.get("system_prompt") or ""),
+            "tools": pin.get("names") or [], "hash": pin.get("hash", "")}
+
+
+@app.delete("/api/sessions/{session_id}/pin")
+async def unpin_session(session_id: str):
+    slog = _session_log()
+    if slog.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    return {"session_id": session_id, "cleared": slog.clear_pin(session_id)}
+
+
+@app.get("/api/sessions/{session_id}/context")
+async def session_context(session_id: str):
+    """Desglose de lo que ocupará el próximo request de esta sesión.
+
+    Se calcula con la MISMA forma que arma el loop: prompt pineado (si hay),
+    resumen durable, ventana de los últimos 20 mensajes y los schemas de tools.
+    Sin el desglose, el usuario sólo ve "compactó" sin saber qué lo llenó.
+    """
+    from src.core.compaction import estimate_tokens
+    import json as _json
+
+    slog = _session_log()
+    sess = slog.get_session(session_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
+    cfg = _load_config_safe()
+    se = cfg.get("session") or {}
+    limite = int(se.get("max_tokens", 32000) or 32000)
+    umbral = float(se.get("compact_threshold", 0.75) or 0.75)
+
+    pin = slog.get_pin(session_id)
+    total_msgs = slog.count_messages(session_id)
+    usa_pin = bool(pin and total_msgs > 1)
+
+    sistema = estimate_tokens(pin["system_prompt"]) if usa_pin else 0
+    notas = ""
+    if not usa_pin:
+        notas = ("sin pineo todavía: el próximo turno arma el prompt con el "
+                 "AGENTS.md y las skills del momento")
+
+    resumen_tok = 0
+    try:
+        res = slog.get_summary_message(session_id)
+        if res:
+            resumen_tok = estimate_tokens(str(res.get("content") or ""))
+    except Exception:
+        pass
+
+    tail = []
+    try:
+        if res:
+            desde = int(res["id"])
+            tail = slog.get_messages_from(session_id, desde, limit=10000)[-20:]
+        else:
+            off = max(0, total_msgs - 20)
+            tail = [m.to_dict() for m in slog.get_messages(session_id, limit=20, offset=off)]
+    except Exception:
+        tail = []
+
+    por_rol = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
+    pesados: list[dict] = []
+    for m in tail:
+        rol = str(m.get("role") or "")
+        tok = estimate_tokens(str(m.get("content") or ""))
+        if rol in por_rol:
+            por_rol[rol] += tok
+        if tok >= 200:
+            pesados.append({"role": rol, "tokens": tok,
+                            "preview": " ".join(str(m.get("content") or "").split())[:90]})
+    pesados.sort(key=lambda x: -x["tokens"])
+
+    schemas = pin.get("schemas") if usa_pin else []
+    tools_tok = estimate_tokens(_json.dumps(schemas, ensure_ascii=False)) if schemas else 0
+
+    usado = sistema + resumen_tok + tools_tok + sum(por_rol.values())
+    return {
+        "session_id": session_id,
+        "pinned": usa_pin,
+        "tools": (pin.get("names") if usa_pin else []) or [],
+        "limit": limite,
+        "threshold": umbral,
+        "compact_at": int(limite * umbral),
+        "used": usado,
+        "pct": round(usado / limite, 4) if limite else 0.0,
+        "breakdown": {
+            "system": sistema,
+            "summary": resumen_tok,
+            "tools": tools_tok,
+            "user": por_rol["user"],
+            "assistant": por_rol["assistant"],
+            "tool": por_rol["tool"],
+        },
+        "messages_total": total_msgs,
+        "messages_replayed": len(tail),
+        "window": 20,
+        "heaviest": pesados[:5],
+        "note": notas,
+    }
+
+
+@app.get("/api/sessions/import/list")
+async def session_import_list(source: str = "", limit: int = 50):
+    """Sesiones externas detectadas (JSONL de agentes CLI)."""
+    from src.core import session_import as _imp
+    if source and source not in _imp.FUENTES:
+        raise HTTPException(status_code=400,
+                            detail=f"fuente desconocida: {source}")
+    try:
+        return _imp.listar(source=source, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo listar: {e}")
+
+
+@app.get("/api/sessions/import/preview")
+async def session_import_preview(handle: str, limit: int = 30):
+    """Turnos que entrarían, con lo descartado y el conteo total."""
+    from src.core import session_import as _imp
+    try:
+        return _imp.preview(handle, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo previsualizar: {e}")
+
+
+@app.post("/api/sessions/import/apply")
+async def session_import_apply(request: Request):
+    """Importa la sesión externa como sesión propia (recién acá se escribe)."""
+    from src.core import session_import as _imp
+    body = await _json_body(request)
+    handle = str(body.get("handle") or "").strip()
+    if not handle:
+        raise HTTPException(status_code=400, detail="handle required")
+    try:
+        return _imp.aplicar(handle, _session_log(),
+                            project=str(body.get("project") or ""),
+                            limite=int(body.get("limit") or 0))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"no se pudo importar: {e}")
+
+
 # ---- Ciclo #113: autoaprendizaje (re-wiring P1, colmena #132) ----
 @app.get("/api/learning/stats")
 async def learning_stats():
@@ -3411,9 +3610,12 @@ async def graph_cite(node_id: int):
 
 
 @app.get("/api/sessions/{session_id}/replay")
-async def session_replay(session_id: str, limit: int = 500):
+async def session_replay(session_id: str, limit: int = 500, since_seq: int = 0,
+                         client_epoch: int | None = None):
+    store = _event_store()
     try:
-        evs = _event_store().get_events(session_id=session_id, limit=limit)
+        window = store.replay_window(session_id, since_seq=since_seq,
+                                     client_epoch=client_epoch, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"replay failed: {e}")
     # `{"events": []}` para un id que no existe hace creer al cliente que la
@@ -3421,14 +3623,14 @@ async def session_replay(session_id: str, limit: int = 500):
     # Pero los eventos viven en otro store: una sesion podada de `session_log`
     # puede conservarlos, y esos SI hay que devolverlos. Solo es 404 cuando no
     # hay eventos Y el id tampoco existe como sesion.
-    if not evs:
+    if not window["events"]:
         try:
             existe = _session_log().get_session(session_id) is not None
         except Exception:
             existe = True  # si el log no se puede leer, no se inventa un 404
         if not existe:
             raise HTTPException(status_code=404, detail=f"sesion inexistente: {session_id}")
-    return {"events": [e.to_dict() for e in evs]}
+    return window
 
 
 @app.get("/api/approvals")
@@ -5997,6 +6199,80 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "max_tokens": {"type": "integer",
                            "description": "Explicit token cap (overrides budget)."},
         }, "required": ["query"], "additionalProperties": False},
+    )
+
+    async def harness_tool(action: str = "list", id: str = "", kind: str = "",
+                           title: str = "", content: str = "", query: str = "",
+                           limit: int = 20, version: int = 0, scope: str = "local",
+                           path: str = "", reference: str = "", arguments: str = "",
+                           metadata: str = "") -> str:
+        """Memoria del agente: cinco tipos de entrada, con historial y rollback."""
+        import json as _j
+        from src.core import harness_state as _hs
+        estado = _hs.open_state(scope, session_id=session_id, project_root=_PROJECT_ROOT)
+        if action == "list":
+            filas = estado.entries(kind or None)
+            return _j.dumps({"scope": scope, "count": len(filas),
+                             "entries": [{k: f.get(k) for k in
+                                          ("id", "kind", "title", "path", "scope", "version", "updated_at")}
+                                         for f in filas[:max(1, limit)]]}, ensure_ascii=False)
+        if action == "get":
+            fila = estado.get(id)
+            if not fila:
+                raise ValueError(f"no existe la entrada {id!r}")
+            return _j.dumps(fila, ensure_ascii=False)
+        if action == "create":
+            fila = estado.create(kind, id, title, content, path=path, scope=scope,
+                                 reference=reference, arguments=arguments,
+                                 metadata=metadata, source="agent")
+            return _j.dumps({"created": fila}, ensure_ascii=False)
+        if action == "update":
+            campos = {}
+            for nombre, valor in (("title", title), ("content", content), ("path", path),
+                                  ("reference", reference), ("arguments", arguments),
+                                  ("metadata", metadata)):
+                if valor:
+                    campos[nombre] = valor
+            fila = estado.update(id, **campos)
+            return _j.dumps({"updated": fila}, ensure_ascii=False)
+        if action == "delete":
+            fila = estado.delete(id)
+            return _j.dumps({"deleted": fila.get("id"), "kind": fila.get("kind")},
+                            ensure_ascii=False)
+        if action == "search":
+            filas = estado.search(query, kind or None, limit=limit)
+            return _j.dumps({"query": query, "count": len(filas),
+                             "results": [{k: f.get(k) for k in ("id", "kind", "title", "content")}
+                                         for f in filas]}, ensure_ascii=False)
+        if action == "history":
+            return _j.dumps({"history": estado.history(id, limit=limit)}, ensure_ascii=False)
+        if action == "rollback":
+            fila = estado.rollback(id, version or None)
+            return _j.dumps({"rolled_back": fila}, ensure_ascii=False)
+        raise ValueError("action inválida: usa list|get|create|update|delete|search|history|rollback")
+    registry.register_function(
+        harness_tool, name="harness",
+        description=("Memoria del agente por entradas tipadas (prompt|memory|skill|subagent|factory) "
+                     "con historial y rollback. Acciones: list|get|create|update|delete|search|"
+                     "history|rollback. Creá la entrada más chica que sirva: hecho durable -> memory, "
+                     "procedimiento repetido -> skill, rol repetido -> subagent, política angosta -> prompt."),
+        category="local",
+        parameters={"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["list", "get", "create", "update", "delete", "search",
+                                "history", "rollback"]},
+            "id": {"type": "string", "description": "Identificador de la entrada (slug único)."},
+            "kind": {"type": "string", "enum": ["prompt", "memory", "skill", "subagent", "factory"]},
+            "title": {"type": "string"}, "content": {"type": "string"},
+            "path": {"type": "string", "description": "Agrupador libre (ej: tooling)."},
+            "query": {"type": "string", "description": "Texto a buscar (action=search)."},
+            "limit": {"type": "integer"},
+            "version": {"type": "integer", "description": "Versión a restaurar (rollback)."},
+            "scope": {"type": "string", "enum": ["local", "session", "project", "global"]},
+            "reference": {"type": "string", "description": "JSON con la referencia (skills)."},
+            "arguments": {"type": "string", "description": "JSON de argumentos (skills/factory)."},
+            "metadata": {"type": "string", "description": "JSON libre."},
+        }, "required": ["action"], "additionalProperties": False},
     )
 
     def _mcp_server_names(cli) -> list[str]:

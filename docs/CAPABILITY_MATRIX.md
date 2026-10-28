@@ -15,9 +15,9 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Autocompletado inline (Tab) | ❌ | Nexus es harness+UI propia, no plugin de editor |
 | Indexado semántico del código (RAG) | ✅ | `rag_engine`, `codebase_context`, `code_search`, `/api/rag/*` |
 | Búsqueda de símbolos/referencias | ⚠️ | `code_search` (regex) + `lsp_client` (pylsp) si está instalado; `codegraph_tool` NO sirve acá (su backend `src/codegraph/` no existe en v3) |
-| Gestión de contexto / compactación | ✅ | `compaction` (4 capas), `trajectory_compressor`, `session_distill` |
+| Gestión de contexto / compactación | ✅ | `compaction` (4 capas), `trajectory_compressor`, `session_distill`. Una sola compactación por turno (la cascada re-resumida degradaba el pedido) y el resumen copia textual el último pedido del usuario |
 | Plan mode | ✅ | `plan_mode`, `/api/plan` |
-| Iterar sobre errores (self-correct) | ✅ | `agent_loop` (replan, doom-loop guard) |
+| Iterar sobre errores (self-correct) | ✅ | `agent_loop` (replan, doom-loop guard). Anti-bucle en tres señales: misma llamada, misma herramienta con args distintos y **resultado idéntico** (corta a la tercera repetición y persiste el cierre con lo hecho) |
 | Test runner + parseo de fallos | ⚠️ | Vía tool `exec` (sin runner/parse dedicado) |
 | Git (status/diff/commit/branch/PR) | ⚠️ | Vía `exec` (sin tools git dedicadas) |
 | Diff review (UI) | ✅ | `ReviewPanel` (Cambios) + `/api/checkpoints/{id}/diff` |
@@ -40,6 +40,11 @@ Leyenda: ✅ implementado · ⚠️ parcial (vía otra tool/exec) · ❌ no exis
 | Sesiones: save/resume/fork/branch/compact | ✅ | `session_log` (`tree`/`fork`/`branch`), `/api/sessions/*` |
 | Rewind de conversación | ✅ | `POST /api/sessions/{id}/rewind` + `GET .../tree` |
 | Board de tareas con claims | ✅ | `board.py` claim-once (`UPDATE` + `rowcount`) + lease con vencimiento/heartbeat; `/api/board/*` |
+| Replay incremental de sesión | ✅ | `event_store` con `seq` monotónico por sesión + `replay_epoch`: `GET /api/sessions/{id}/replay?since_seq=&client_epoch=` responde `gap=true` si el cliente quedó atrás o la base se podó; `test_event_replay` |
+| Panel de contexto | ✅ | `GET /api/sessions/{id}/context`: desglose por rol (prompt fijado, resumen, tools, usuario, nexus, resultados), ventana de 20 mensajes, lo más pesado y aviso cuando no hay pin; UI `ContextMeter` |
+| Pinneo de la request | ✅ | `sessions.system_prompt`/`tools_pinned`: el primer turno fija el prompt final + los schemas y los siguientes los reusan; `GET/POST/DELETE /api/sessions/{id}/pin`; la UI muestra el pin y permite quitarlo |
+| Import de sesiones ajenas | ✅ | `session_import`: lista y previsualiza JSONL locales (`claude`, `codex`), importa solo turnos de texto con handle opaco validado contra las raíces; `GET /api/sessions/import/list`, `/preview`, `POST /apply`; UI `SessionImportDialog` |
+| Estado del harness | ✅ | `harness_state`: 5 tipos (`memory`, `lesson`, `decision`, `todo`, `note`) con alcance local/global/sesión/proyecto, lock con robo por pid muerto, escritura atómica, `history.jsonl`, `rollback`, `search` y `digest` inyectado en el prompt |
 
 ## 3. Modelos / infraestructura
 

@@ -17,7 +17,7 @@ import { WorktreesPanel } from '@/components/worktrees/WorktreesPanel'
 import { UsagePanel } from '@/components/usage/UsagePanel'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { useAppStore } from '@/store/app-store'
-import { Search, Bell, User } from 'lucide-react'
+import { Search, Bell, User, Columns2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState, useEffect } from 'react'
 
@@ -41,7 +41,7 @@ const viewLabels: Record<string, string> = {
 type SearchResult = { role: string; content: string; session_id?: string }
 
 export default function App() {
-  const { view, setView, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus, activeSession, createSession, closeSessionTab } = useAppStore()
+  const { view, setView, refreshProviders, loadSessions, ensureSession, liveStatus, loadStatus, activeSession, createSession, closeSessionTab, split, toggleSplit } = useAppStore()
   const [showNotifications, setShowNotifications] = useState(false)
 
   useEffect(() => {
@@ -95,6 +95,19 @@ export default function App() {
           )}
 
           <div className="flex shrink-0 items-center gap-2">
+            {view === 'chat' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={split ? 'Cerrar el segundo panel' : 'Abrir un segundo panel'}
+                aria-pressed={split}
+                title={split ? 'Cerrar el segundo panel' : 'Dos paneles: dos sesiones a la vez'}
+                onClick={toggleSplit}
+                className={split ? 'text-[#8CC1FF]' : undefined}
+              >
+                <Columns2 className="h-4 w-4" />
+              </Button>
+            )}
             <button
               onClick={() => window.dispatchEvent(new Event('nexus:palette'))}
               title="Buscar o ejecutar un comando (Ctrl+K)"
@@ -158,7 +171,16 @@ export default function App() {
 
         {/* content */}
         <main className="flex-1 min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_top,_rgba(76,157,255,0.06),_transparent_55%)]">
-          {view==='chat' && <ChatPanel />}
+          {view==='chat' && (split ? (
+            <div className="flex h-full min-h-0">
+              <div className="min-w-0 flex-1 border-r border-[#2C3037]">
+                <ChatPanel paneId={0} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <ChatPanel paneId={1} />
+              </div>
+            </div>
+          ) : <ChatPanel />)}
           {view==='graph' && <GraphView />}
           {view==='memory' && <MemoryPanel />}
           {view==='editor' && <FileEditor />}

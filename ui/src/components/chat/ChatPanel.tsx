@@ -15,6 +15,7 @@ import { InlineAsks } from '@/components/chat/InlineAsks'
 import { ToolOutput } from '@/components/chat/ToolOutput'
 import { AgentSelector } from '@/components/AgentSelector'
 import { ModelSelector } from '@/components/ModelSelector'
+import { ContextMeter } from '@/components/chat/ContextMeter'
 
 type Pending = { key: string; file: File; preview?: string }
 type Grupo =
@@ -103,8 +104,32 @@ const SLASH_FALLBACK: SlashCommand[] = [
   { name: 'doctor', description: 'abre el diagnóstico del sistema' },
 ]
 
-export function ChatPanel() {
-  const { messages, messagesError, addMessage, activeSession, loadMessages, liveStatus, loadStatus, sessions, forkSession } = useAppStore()
+type ChatPanelProps = { sessionId?: string; paneId?: 0 | 1 }
+
+export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
+  const {
+    messagesError, liveStatus, loadStatus, sessions, forkSession,
+    messagesBySession, paneSessions, activeSession: activaGlobal, split,
+    messages: mensajesActivos,
+    addMessage: addMessageStore, updateMessage: updateMessageStore,
+    setMessages: setMessagesStore, loadMessages: loadMessagesStore,
+  } = useAppStore()
+  // Con dos paneles abiertos cada uno muestra SU sesión; `activeSession` global
+  // queda para el panel que tiene el foco (atajos, envíos externos).
+  const activeSession = sessionId || paneSessions[paneId] || activaGlobal
+  const messages = messagesBySession[activeSession]
+    ?? (activeSession === activaGlobal ? mensajesActivos : [])
+
+  // La sesión se resuelve al momento de escribir, no al renderizar: un panel
+  // sin sesión puede crearla recién al enviar el primer mensaje.
+  const resolveSid = useCallback(
+    () => sessionId || useAppStore.getState().paneSessions[paneId] || useAppStore.getState().activeSession,
+    [sessionId, paneId],
+  )
+  const addMessage = useCallback((m: ChatMessage) => addMessageStore(m, resolveSid() || undefined), [addMessageStore, resolveSid])
+  const updateMessage = useCallback((id: string, content: string) => updateMessageStore(id, content, resolveSid() || undefined), [updateMessageStore, resolveSid])
+  const setMessages = useCallback((m: ChatMessage[]) => setMessagesStore(m, resolveSid() || undefined), [setMessagesStore, resolveSid])
+  const loadMessages = useCallback((sid: string) => loadMessagesStore(sid), [loadMessagesStore])
   const [usage, setUsage] = useState<Usage | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [input, setInput] = useState('')
@@ -262,7 +287,7 @@ export function ChatPanel() {
     // entre iteraciones). Antes el input quedaba bloqueado y /steer era inalcanzable.
     if (isStreaming && !busyRef.current && draft.trim()) {
       const text = draft.trim()
-      const sidNow = useAppStore.getState().activeSession
+      const sidNow = resolveSid()
       if (!sidNow) { toast('No hay sesión activa para dirigir el run'); return }
       setInput(''); setSlashOpen(false)
       try {
@@ -311,43 +336,43 @@ export function ChatPanel() {
     }
 
     if (text.startsWith('/')) {
-      const { activeSession } = useAppStore.getState()
-      const stillActive = () => useAppStore.getState().activeSession === activeSession
+      const sid = activeSession
+      const stillActive = () => resolveSid() === sid
       if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
       setInput(''); setSlashOpen(false)
       try {
-        const r = await apiFetch('/api/slash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: text, ctx: { session_id: activeSession } }) })
+        const r = await apiFetch('/api/slash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: text, ctx: { session_id: sid } }) })
         const j = await r.json()
         const reply = j.ok ? j.message : (text.slice(1).split(' ')[0] + ': ' + j.message)
         const sendsPrompt = j.data?.action === 'send_prompt'
         if (stillActive() && !sendsPrompt) addMessage({ id: uid(), role: 'assistant', content: reply, timestamp: now() })
-        if (j.data?.action === 'clear_local_only') useAppStore.setState({ messages: [] } as any)
+        if (j.data?.action === 'clear_local_only') setMessages([])
         if (j.data?.action === 'set_model') useAppStore.getState().setModel(j.data.model)
         if (j.data?.action === 'set_agent' && j.data.agent) useAppStore.getState().setActiveAgent(j.data.agent)
         if (j.data?.action === 'session_new') useAppStore.getState().createSession()
         if (j.data?.action === 'export_session') {
-          if (!activeSession) {
+          if (!sid) {
             if (stillActive()) addMessage({ id: uid(), role: 'tool', content: 'export: no hay sesión activa', toolName: 'export', timestamp: now() })
           } else {
             try {
-              const er = await apiFetch(`/api/sessions/${encodeURIComponent(activeSession)}/export`)
+              const er = await apiFetch(`/api/sessions/${encodeURIComponent(sid)}/export`)
               if (!er.ok) throw new Error(`HTTP ${er.status}`)
               const url = URL.createObjectURL(await er.blob())
               const a = document.createElement('a')
-              a.href = url; a.download = `${activeSession}.zip`; a.click()
+              a.href = url; a.download = `${sid}.zip`; a.click()
               window.setTimeout(() => URL.revokeObjectURL(url), 4000)
-              if (stillActive()) addMessage({ id: uid(), role: 'tool', content: `export: descargado ${activeSession}.zip`, toolName: 'export', timestamp: now() })
+              if (stillActive()) addMessage({ id: uid(), role: 'tool', content: `export: descargado ${sid}.zip`, toolName: 'export', timestamp: now() })
             } catch (e) {
               if (stillActive()) addMessage({ id: uid(), role: 'tool', content: `export falló: ${(e as Error).message.slice(0, 140)}`, toolName: 'export', timestamp: now() })
             }
           }
         }
         if (j.data?.action === 'todo_list') {
-          if (!activeSession) {
+          if (!sid) {
             if (stillActive()) addMessage({ id: uid(), role: 'tool', content: 'todos: no hay sesión activa', toolName: 'todo', timestamp: now() })
           } else {
             try {
-              const tr = await apiFetch(`/api/todos?session_id=${encodeURIComponent(activeSession)}`)
+              const tr = await apiFetch(`/api/todos?session_id=${encodeURIComponent(sid)}`)
               if (!tr.ok) throw new Error(`HTTP ${tr.status}`)
               const tj: any = await tr.json()
               const list: any[] = Array.isArray(tj) ? tj : (tj.todos || [])
@@ -388,17 +413,19 @@ export function ChatPanel() {
     }
 
     const state = useAppStore.getState()
-    let activeSession = state.activeSession
     const { selectedModel, activeAgent } = state
-    if (!activeSession) activeSession = await useAppStore.getState().ensureSession()
-    const stillActive = () => useAppStore.getState().activeSession === activeSession
+    let sid = activeSession
+    if (!sid) {
+      sid = await useAppStore.getState().ensureSession()
+      useAppStore.getState().setPaneSession(paneId, sid)
+    }
+    const stillActive = () => resolveSid() === sid
     if (!uploads.length) addMessage({ id: uid(), role: 'user', content: text, timestamp: now() })
     setInput(''); setSlashOpen(false)
     setReasoning('')
     setIsStreaming(true)
     try {
       const model = selectedModel && selectedModel !== 'auto' ? selectedModel : undefined
-      const { updateMessage } = useAppStore.getState()
       const msgId = uid()
       let acc = ''
       let placed = false
@@ -415,7 +442,7 @@ export function ChatPanel() {
           if (stillActive()) setLastSteps([])
           const ctrl = new AbortController()
           abortRef.current = ctrl
-          const sres = await chatStreamApi(text, { sessionId: activeSession || undefined, model, agentId: (activeAgent && activeAgent !== 'default') ? activeAgent : undefined,
+          const sres = await chatStreamApi(text, { sessionId: sid || undefined, model, agentId: (activeAgent && activeAgent !== 'default') ? activeAgent : undefined,
             signal: ctrl.signal,
             onDelta: pushDelta,
             onStep: (s) => { if (stillActive()) setLastSteps(prev => [...(prev || []), s as any]) },
@@ -447,7 +474,7 @@ export function ChatPanel() {
         }
       }
       if (!streamed && !placed) {
-        const res: any = await chatApi(text, activeSession || undefined, undefined, model,
+        const res: any = await chatApi(text, sid || undefined, undefined, model,
           uploads.map(({ id, url, name, mime, is_image }) => ({ id, url, name, mime, is_image })),
           (activeAgent && activeAgent !== 'default') ? activeAgent : undefined)
         if (res.steps?.length && stillActive()) setLastSteps(res.steps)
@@ -467,10 +494,10 @@ export function ChatPanel() {
           else addMessage({ id: msgId, role: 'assistant', content: head + body, timestamp: now() })
         }
       }
-      if (streamed && stillActive() && activeSession) {
+      if (streamed && stillActive() && sid) {
         // El server ya persistió el turno: releer trae las tools como mensajes
         // (agrupadas en una línea), igual que al abrir la sesión de nuevo.
-        void useAppStore.getState().loadMessages(activeSession)
+        void useAppStore.getState().loadMessages(sid)
       }
       void useAppStore.getState().loadSessions()
     } catch (e) {
@@ -544,13 +571,13 @@ export function ChatPanel() {
   }, [activeSession, isStreaming, messages, loadMessages])
 
   const distillNow = useCallback(async () => {
-    const { activeSession } = useAppStore.getState()
-    if (!activeSession) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
+    const sid = resolveSid()
+    if (!sid) { setDistillMsg('sin sesión activa'); setTimeout(() => setDistillMsg(null), 2500); return }
     if (distilling) return
     setDistilling(true)
     setDistillMsg('destilando…')
     try {
-      const r = await apiFetch(`/api/sessions/${activeSession}/distill`, { method: 'POST' })
+      const r = await apiFetch(`/api/sessions/${sid}/distill`, { method: 'POST' })
       const j: any = await r.json().catch(() => ({}))
       if (!r.ok || j?.ok === false) throw new Error(j?.error || j?.detail || `HTTP ${r.status}`)
       const res = j?.result ?? j ?? {}
@@ -561,10 +588,10 @@ export function ChatPanel() {
       setDistilling(false)
     }
     setTimeout(() => setDistillMsg(null), 4000)
-  }, [distilling])
+  }, [distilling, resolveSid])
 
   const speakLast = useCallback(async () => {
-    const { messages: msgs } = useAppStore.getState()
+    const msgs = messages
     const last = [...msgs].reverse().find((m) => m.role === 'assistant')
     if (!last) { setAttachToast('no hay respuesta para leer'); setTimeout(() => setAttachToast(null), 2500); return }
     if (speaking) return
@@ -582,15 +609,15 @@ export function ChatPanel() {
       setAttachToast('TTS: ' + (e as Error).message.slice(0, 120))
       setTimeout(() => setAttachToast(null), 4000)
     }
-  }, [speaking])
+  }, [speaking, messages])
 
   /* ── exportar / compartir ─────────────────────────────────── */
 
   const nombreArchivo = useCallback(() => {
-    const s = useAppStore.getState().sessions.find((x) => x.id === useAppStore.getState().activeSession)
+    const s = useAppStore.getState().sessions.find((x) => x.id === resolveSid())
     const base = (s?.title || s?.id || 'sesion').replace(/[^\p{L}\p{N}\s._-]+/gu, '').trim().slice(0, 60)
     return base || 'sesion'
-  }, [])
+  }, [resolveSid])
 
   const descargarSesion = useCallback(async () => {
     if (!activeSession) return
@@ -614,7 +641,7 @@ export function ChatPanel() {
   }, [activeSession, nombreArchivo, toast])
 
   const copiarTranscripcion = useCallback(async () => {
-    const msgs = useAppStore.getState().messages
+    const msgs = messages
     const utiles = msgs.filter((m) => m.role !== 'tool' && (m.content || '').trim())
     if (!utiles.length) { toast('la sesión no tiene texto para copiar'); return }
     const cuerpo = utiles
@@ -627,7 +654,7 @@ export function ChatPanel() {
     } catch (e) {
       toast('no se pudo copiar: ' + (e as Error).message.slice(0, 100))
     }
-  }, [nombreArchivo, toast])
+  }, [nombreArchivo, toast, messages])
 
   /* ── arrastrar archivos al chat ───────────────────────────── */
 
@@ -660,6 +687,8 @@ export function ChatPanel() {
   return (
     <div
       className="relative flex h-full min-h-0 flex-col bg-[#15171B]"
+      data-pane={split ? paneId : undefined}
+      onMouseDown={split ? () => useAppStore.getState().setActivePane(paneId) : undefined}
       onDragEnter={onDragEnter}
       onDragOver={(e) => { if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault() }}
       onDragLeave={onDragLeave}
@@ -683,6 +712,7 @@ export function ChatPanel() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-[#9BA1AA]">
+          <ContextMeter sessionId={activeSession} refreshKey={`${messages.length}-${isStreaming}`} onToast={toast} />
           {usage && usage.tokens > 0 && (
             <span title={`${usage.messages} mensajes · ${usage.tokens} tokens`} className="hidden whitespace-nowrap tabular-nums sm:inline">
               {usage.tokens >= 1000 ? `${(usage.tokens / 1000).toFixed(1)} mil` : usage.tokens} tokens

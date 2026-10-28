@@ -378,7 +378,8 @@ class CompactionPipeline:
                 LLMMessage(role="system", content=(
                     "Sos el compactador de contexto de un agente de codigo. Resumi el historial "
                     "sin inventar nada. Usa EXACTAMENTE estas secciones:\n"
-                    "1. Pedido original y objetivo\n"
+                    "1. Pedido original y objetivo (copiá TEXTUAL el último pedido del usuario, "
+                    "entre comillas, sin parafrasear ni resumir: es lo que no se puede perder)\n"
                     "2. Decisiones tomadas y por que\n"
                     "3. Archivos leidos o modificados (rutas exactas)\n"
                     "4. Comandos ejecutados y resultados relevantes\n"

@@ -7,6 +7,7 @@ Single SQLite file: data/session.db with WAL + FTS5 + branching.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import threading
 import uuid
@@ -105,10 +106,20 @@ class Session:
     # Id del mensaje `system` que contiene el ultimo resumen de compactacion.
     # Sobrevive al reinicio: el historial se recarga desde aca (no se re-resume).
     summary_message_id: Optional[int] = None
+    # Request pinneada: el system prompt tal como se envió y el set de tools con
+    # sus schemas. Reanudar reconstruye la misma request en vez de re-armarla
+    # con el estado de hoy (AGENTS.md, skills, tools del registry).
+    system_prompt: str = ""
+    tools_pinned: str = ""  # JSON: {"names": [], "schemas": [], "hash": "", "model": "", "pinned_at": ""}
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_active: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
+        pin = {}
+        try:
+            pin = json.loads(self.tools_pinned) if self.tools_pinned else {}
+        except Exception:
+            pin = {}
         return {
             "id": self.id,
             "project": self.project,
@@ -119,6 +130,8 @@ class Session:
             "compact_count": self.compact_count,
             "total_tokens": self.total_tokens,
             "summary_message_id": self.summary_message_id,
+            "prompt_pinned": bool(self.system_prompt and pin),
+            "tools_pinned": pin.get("names", []),
             "created_at": self.created_at,
             "last_active": self.last_active,
         }
@@ -140,7 +153,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   summary TEXT DEFAULT '',
   compact_count INTEGER DEFAULT 0,
   total_tokens INTEGER DEFAULT 0,
-  summary_message_id INTEGER
+  summary_message_id INTEGER,
+  title TEXT DEFAULT '',
+  system_prompt TEXT DEFAULT '',
+  tools_pinned TEXT DEFAULT ''
 );
 -- alias for legacy code using parent_id
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
@@ -244,6 +260,10 @@ class SessionLog:
                     self._conn.execute("ALTER TABLE sessions ADD COLUMN summary_message_id INTEGER")
                 if "title" not in _cols:
                     self._conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT DEFAULT ''")
+                if "system_prompt" not in _cols:
+                    self._conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
+                if "tools_pinned" not in _cols:
+                    self._conn.execute("ALTER TABLE sessions ADD COLUMN tools_pinned TEXT DEFAULT ''")
             except Exception:
                 pass
             # Migracion: mensajes sinteticos (resumen de compactacion) necesitan
@@ -275,6 +295,7 @@ class SessionLog:
     def _row_to_session(self, row: sqlite3.Row | tuple) -> Session:
         # row: id, project, parent_session_id, created_at, last_active, summary, compact_count, total_tokens
         if isinstance(row, sqlite3.Row):
+            keys = row.keys()
             return Session(
                 id=row["id"],
                 project=row["project"],
@@ -282,11 +303,13 @@ class SessionLog:
                 created_at=row["created_at"],
                 last_active=row["last_active"],
                 summary=row["summary"] or "",
-                title=(row["title"] if "title" in row.keys() else "") or "",
+                title=(row["title"] if "title" in keys else "") or "",
                 compact_count=row["compact_count"] or 0,
                 total_tokens=row["total_tokens"] or 0,
                 summary_message_id=(row["summary_message_id"]
-                                    if "summary_message_id" in row.keys() else None),
+                                    if "summary_message_id" in keys else None),
+                system_prompt=(row["system_prompt"] if "system_prompt" in keys else "") or "",
+                tools_pinned=(row["tools_pinned"] if "tools_pinned" in keys else "") or "",
             )
         # tuple fallback
         return Session(
@@ -341,7 +364,8 @@ class SessionLog:
 
     def update_session(self, session_id: str, **fields) -> bool:
         """Generic update: summary, project, etc."""
-        allowed = {"summary", "project", "compact_count", "total_tokens", "summary_message_id", "title"}
+        allowed = {"summary", "project", "compact_count", "total_tokens", "summary_message_id", "title",
+                   "system_prompt", "tools_pinned"}
         sets = []
         vals = []
         for k, v in fields.items():
@@ -354,6 +378,58 @@ class SessionLog:
         with self._lock:
             cur = self._conn.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE id=?", vals)
             return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Request pinneada (prompt + tools)
+    # ------------------------------------------------------------------
+    def pin_request(self, session_id: str, system_prompt: str, tools=(),
+                    *, model: str = "", force: bool = False) -> dict:
+        """Fija el system prompt y el set de tools que se enviaron.
+
+        Sin esto, reanudar re-armaba la request con el estado de hoy: un
+        AGENTS.md editado, una skill nueva o una tool desregistrada cambiaban el
+        prompt a mitad de conversación y el modelo veía un contexto distinto al
+        que había construido. Con `force=False` no se pisa un pin existente.
+        """
+        prompt = str(system_prompt or "")
+        if not prompt:
+            return {}
+        existente = self.get_pin(session_id)
+        if existente and not force:
+            return existente
+        nombres: list[str] = []
+        schemas: list[dict] = []
+        for t in tools or []:
+            fn = (t or {}).get("function") or {}
+            nombre = str(fn.get("name") or "")
+            if nombre:
+                nombres.append(nombre)
+                schemas.append(t)
+        payload = {
+            "names": nombres,
+            "schemas": schemas,
+            "hash": hashlib.sha256(
+                json.dumps(schemas, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:16],
+            "model": model or "",
+            "pinned_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.update_session(session_id, system_prompt=prompt,
+                            tools_pinned=json.dumps(payload, ensure_ascii=False))
+        return {"system_prompt": prompt, **payload}
+
+    def get_pin(self, session_id: str) -> dict | None:
+        s = self.get_session(session_id)
+        if s is None or not (s.system_prompt or "").strip():
+            return None
+        try:
+            meta = json.loads(s.tools_pinned) if s.tools_pinned else {}
+        except Exception:
+            meta = {}
+        return {"system_prompt": s.system_prompt, **meta}
+
+    def clear_pin(self, session_id: str) -> bool:
+        return self.update_session(session_id, system_prompt="", tools_pinned="")
 
     # ------------------------------------------------------------------
     # Messages

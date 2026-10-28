@@ -434,6 +434,135 @@ export async function sessionExportApi(sessionId: string): Promise<Blob> {
   return res.blob()
 }
 
+/** Desglose real de lo que ocupará el próximo request de la sesión. */
+export type ContextBreakdown = { system: number; summary: number; tools: number; user: number; assistant: number; tool: number }
+export type SessionContext = {
+  session_id: string
+  pinned: boolean
+  tools: string[]
+  limit: number
+  threshold: number
+  compact_at: number
+  used: number
+  pct: number
+  breakdown: ContextBreakdown
+  messages_total: number
+  messages_replayed: number
+  window: number
+  heaviest: { role: string; tokens: number; preview: string }[]
+  note: string
+}
+
+export async function sessionContextApi(sessionId: string): Promise<SessionContext> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
+  if (!res.ok) throw new Error(await resError(res, "no se pudo leer el contexto"))
+  return res.json()
+}
+
+/** Request fijada: prompt y set de tools con los que se reanuda la sesión. */
+export type SessionPin = {
+  session_id: string
+  pinned: boolean
+  system_prompt_len?: number
+  tools?: string[]
+  hash?: string
+  model?: string
+  pinned_at?: string
+}
+
+export async function sessionPinApi(sessionId: string): Promise<SessionPin> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/pin`)
+  if (!res.ok) throw new Error(await resError(res, "no se pudo leer el pin"))
+  return res.json()
+}
+
+export async function pinSessionApi(
+  sessionId: string,
+  payload: { system_prompt: string; tools?: string[]; model?: string; force?: boolean; agent_id?: string; permission?: string },
+): Promise<SessionPin> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo fijar la request"))
+  return res.json()
+}
+
+export async function unpinSessionApi(sessionId: string): Promise<{ session_id: string; cleared: boolean }> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, { method: "DELETE" })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo quitar el pin"))
+  return res.json()
+}
+
+/** Sesiones ajenas detectadas en disco (JSONL de agentes CLI). */
+export type ImportedSession = {
+  handle: string
+  source: string
+  name: string
+  cwd: string
+  title: string
+  mtime: string
+  size: number
+  turns_aprox: number
+  lines_scanned?: number
+  error?: string
+}
+export type ImportList = {
+  sessions: ImportedSession[]
+  roots: Record<string, string[]>
+  available: Record<string, boolean>
+}
+
+export async function sessionImportListApi(source = "", limit = 50): Promise<ImportList> {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (source) q.set("source", source)
+  const res = await apiFetch(`/api/sessions/import/list?${q.toString()}`)
+  if (!res.ok) throw new Error(await resError(res, "no se pudieron listar las sesiones"))
+  return res.json()
+}
+
+export type ImportPreview = {
+  source: string
+  name: string
+  cwd: string
+  model: string
+  external_session: string
+  turns_total: number
+  truncated: boolean
+  skipped: Record<string, number>
+  turns: { role: string; content: string; chars: number; timestamp: string }[]
+  first: string
+}
+
+export async function sessionImportPreviewApi(handle: string, limit = 30): Promise<ImportPreview> {
+  const q = new URLSearchParams({ handle, limit: String(limit) })
+  const res = await apiFetch(`/api/sessions/import/preview?${q.toString()}`)
+  if (!res.ok) throw new Error(await resError(res, "no se pudo previsualizar"))
+  return res.json()
+}
+
+export type ImportResult = {
+  session_id: string
+  project: string
+  title: string
+  imported: number
+  skipped: Record<string, number>
+  truncated: boolean
+  source: string
+}
+
+export async function sessionImportApplyApi(payload: { handle: string; project?: string; limit?: number }): Promise<ImportResult> {
+  const res = await apiFetch("/api/sessions/import/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    timeoutMs: 120000,
+  })
+  if (!res.ok) throw new Error(await resError(res, "no se pudo importar la sesión"))
+  return res.json()
+}
+
 export type VoiceStatus = { tts_available: boolean; stt_available: boolean; stt_model?: string; tts_model?: string; tts_backend?: string; tts_voice?: string }
 
 export async function voiceStatusApi(): Promise<VoiceStatus> {

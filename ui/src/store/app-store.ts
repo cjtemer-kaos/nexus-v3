@@ -56,9 +56,19 @@ type AppState = {
   renameSession: (id: string, title: string) => void
   messages: ChatMessage[]
   messagesError: string | null
-  addMessage: (m: ChatMessage) => void
-  updateMessage: (id: string, content: string) => void
-  setMessages: (m: ChatMessage[]) => void
+  // Un buffer por sesión: dos paneles abiertos no comparten mensajes.
+  messagesBySession: Record<string, ChatMessage[]>
+  // Dos paneles keep-alive, cada uno con su sesión. `activePane` es el que
+  // recibe el foco (atajos, envíos del compositor global).
+  paneSessions: [string, string]
+  activePane: 0 | 1
+  split: boolean
+  setPaneSession: (pane: 0 | 1, id: string) => void
+  setActivePane: (pane: 0 | 1) => void
+  toggleSplit: () => void
+  addMessage: (m: ChatMessage, sessionId?: string) => void
+  updateMessage: (id: string, content: string, sessionId?: string) => void
+  setMessages: (m: ChatMessage[], sessionId?: string) => void
   loadMessages: (sessionId: string) => Promise<void>
   // editor
   tabs: FileTab[]
@@ -148,13 +158,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     guardarTabs(openTabs)
     if (st.activeSession !== id) { set({ openTabs }); return }
     const vecina = openTabs[Math.max(0, idx - 1)] ?? openTabs[0] ?? ''
-    set({ openTabs, activeSession: vecina, messages: [] })
+    set((s) => {
+      const paneSessions = [...s.paneSessions] as [string, string]
+      paneSessions.forEach((v, i) => { if (v === id) paneSessions[i] = vecina })
+      return {
+        openTabs,
+        activeSession: vecina,
+        paneSessions,
+        messages: s.messagesBySession[vecina] ?? [],
+      }
+    })
     if (vecina) void get().loadMessages(vecina)
   },
-  // Cambiar de sesión limpia el buffer local (evita ver mensajes de otra sesión
-  // mientras carga el historial desde el server).
+  // Cambiar de sesión usa el buffer de esa sesión (no lo vacía): volver a una
+  // pestaña no tiene que mostrar el chat en blanco mientras llega el server.
+  // En modo dividido, el cambio aplica al panel que tiene el foco.
   setActiveSession: (activeSession) => {
-    set((s) => (s.activeSession === activeSession ? s : { activeSession, messages: [] }))
+    set((s) => {
+      const paneSessions = [...s.paneSessions] as [string, string]
+      if (s.split) paneSessions[s.activePane] = activeSession
+      else paneSessions[0] = activeSession
+      return {
+        activeSession,
+        paneSessions,
+        messages: s.messagesBySession[activeSession] ?? [],
+      }
+    })
     get().openTab(activeSession)
   },
   setActiveAgent: (activeAgent) => set({ activeAgent }),
@@ -182,7 +211,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const tabsGuardadas = get().openTabs.filter((id) => vivos.has(id))
       const openTabs = tabsGuardadas.length ? tabsGuardadas : (activa ? [activa] : [])
       guardarTabs(openTabs)
-      set({ sessions, sessionsError: null, activeSession: activa, openTabs })
+      set((st) => {
+        const paneSessions = [...st.paneSessions] as [string, string]
+        if (!paneSessions[st.activePane] || !vivos.has(paneSessions[st.activePane])) {
+          paneSessions[st.activePane] = activa
+        }
+        return {
+          sessions, sessionsError: null, activeSession: activa, openTabs, paneSessions,
+          messages: st.messagesBySession[activa] ?? (activa === st.activeSession ? st.messages : []),
+        }
+      })
     } catch (e) {
       // server caído — conservar sesiones locales cargadas, pero decirlo
       set({ sessionsError: (e as Error).message ?? String(e) })
@@ -192,17 +230,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     const st = get()
     if (st.activeSession && st.sessions.some((s) => s.id === st.activeSession)) return st.activeSession
     if (st.sessions.length > 0) {
-      set({ activeSession: st.sessions[0].id })
+      set((x) => {
+        const paneSessions = [...x.paneSessions] as [string, string]
+        paneSessions[x.activePane] = x.sessions[0].id
+        return { activeSession: x.sessions[0].id, paneSessions,
+                 messages: x.messagesBySession[x.sessions[0].id] ?? [] }
+      })
       return st.sessions[0].id
     }
     if (_ensurePromise) return _ensurePromise
     _ensurePromise = (async () => {
     try {
       const s = await createSessionApi()
-        set((x) => ({
-          sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }, ...x.sessions],
-          activeSession: s.id,
-        }))
+        set((x) => {
+          const paneSessions = [...x.paneSessions] as [string, string]
+          paneSessions[x.activePane] = s.id
+          return {
+            sessions: [{ id: s.id, title: s.title || s.summary || s.project || 'Sesión 1', project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }, ...x.sessions],
+            activeSession: s.id,
+            paneSessions,
+            messages: [],
+          }
+        })
         get().openTab(s.id)
         return s.id
     } catch {
@@ -220,11 +269,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const s = await createSessionApi()
         const nuevoId = s.id
-        set((st) => ({
-          sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }],
-          activeSession: s.id,
-          messages: [],  // limpiar (evita filtrar la conversación de la sesión previa)
-        }))
+        set((st) => {
+          const paneSessions = [...st.paneSessions] as [string, string]
+          paneSessions[st.activePane] = s.id
+          return {
+            sessions: [...st.sessions, { id: s.id, title: s.title || s.summary || s.project || `Sesión ${st.sessions.length + 1}`, project: s.project, summary: s.summary, source: 'server' as const, created_at: s.created_at, last_active: s.last_active }],
+            activeSession: s.id,
+            paneSessions,
+            messages: [],
+            messagesBySession: { ...st.messagesBySession, [s.id]: [] },
+          }
+        })
         get().openTab(nuevoId)
       } catch (e) {
         // fallback local sin server (queda marcado como 'local' y con aviso de error)
@@ -248,7 +303,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const r = await forkSessionApi(id, true)
         await get().loadSessions()
-        set({ activeSession: r.id, messages: [], sessionsError: null })
+        set((st) => {
+          const paneSessions = [...st.paneSessions] as [string, string]
+          paneSessions[st.activePane] = r.id
+          return {
+            activeSession: r.id, paneSessions, messages: [], sessionsError: null,
+            messagesBySession: { ...st.messagesBySession, [r.id]: [] },
+          }
+        })
         get().openTab(r.id)
         await get().loadMessages(r.id)
       } catch (e) {
@@ -287,7 +349,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         const activeSession = wasActive ? (sessions[0]?.id ?? '') : st.activeSession
         const openTabs = st.openTabs.filter((x) => x !== id)
         guardarTabs(openTabs)
-        return { sessions, activeSession, openTabs, messages: wasActive ? [] : st.messages }
+        const messagesBySession = { ...st.messagesBySession }
+        delete messagesBySession[id]
+        const paneSessions = st.paneSessions.map((v) => (v === id ? activeSession : v)) as [string, string]
+        return {
+          sessions, activeSession, openTabs, paneSessions, messagesBySession,
+          messages: wasActive ? (messagesBySession[activeSession] ?? []) : st.messages,
+        }
       })
       // Si borramos la activa, cargar el historial de la nueva activa.
       const next = get().activeSession
@@ -296,14 +364,77 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   messages: [] as ChatMessage[],
   messagesError: null,
-  addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
-  updateMessage: (id, content) => set((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, content } : m)) })),
-  setMessages: (messages) => set({ messages }),
+  messagesBySession: {} as Record<string, ChatMessage[]>,
+  paneSessions: ['', ''] as [string, string],
+  activePane: 0 as 0 | 1,
+  split: false,
+  setPaneSession: (pane, id) => {
+    const st = get()
+    const paneSessions = [...st.paneSessions] as [string, string]
+    paneSessions[pane] = id
+    if (pane === st.activePane) {
+      set({ paneSessions, activeSession: id, activePane: pane, messages: st.messagesBySession[id] ?? [] })
+      if (id) void get().loadMessages(id)
+      return
+    }
+    set({ paneSessions })
+    if (id) void get().loadMessages(id)
+  },
+  setActivePane: (pane) => {
+    const st = get()
+    const id = st.paneSessions[pane]
+    if (!id) { set({ activePane: pane }); return }
+    set({ activePane: pane, activeSession: id, messages: st.messagesBySession[id] ?? [] })
+  },
+  toggleSplit: () => {
+    const st = get()
+    if (st.split) {
+      const id = st.paneSessions[st.activePane] || st.activeSession
+      set({ split: false, paneSessions: [id, ''], activePane: 0, activeSession: id,
+            messages: st.messagesBySession[id] ?? [] })
+      return
+    }
+    // El segundo panel arranca en otra pestaña abierta (o en la misma si no hay).
+    const otra = st.openTabs.find((x) => x !== st.activeSession)
+      || st.sessions.find((s) => s.id !== st.activeSession)?.id || ''
+    set({ split: true, paneSessions: [st.activeSession, otra], activePane: 0 })
+    if (otra) void get().loadMessages(otra)
+  },
+  addMessage: (m, sessionId) => {
+    const st = get()
+    const sid = sessionId || st.activeSession
+    if (!sid) return
+    const previo = st.messagesBySession[sid] ?? (sid === st.activeSession ? st.messages : [])
+    const lista = [...previo, m]
+    set({
+      messagesBySession: { ...st.messagesBySession, [sid]: lista },
+      ...(sid === st.activeSession ? { messages: lista } : {}),
+    })
+  },
+  updateMessage: (id, content, sessionId) => {
+    const st = get()
+    const sid = sessionId || st.activeSession
+    if (!sid) return
+    const previo = st.messagesBySession[sid] ?? (sid === st.activeSession ? st.messages : [])
+    const lista = previo.map((m) => (m.id === id ? { ...m, content } : m))
+    set({
+      messagesBySession: { ...st.messagesBySession, [sid]: lista },
+      ...(sid === st.activeSession ? { messages: lista } : {}),
+    })
+  },
+  setMessages: (messages, sessionId) => {
+    const st = get()
+    const sid = sessionId || st.activeSession
+    if (!sid) { set({ messages }); return }
+    set({
+      messagesBySession: { ...st.messagesBySession, [sid]: messages },
+      ...(sid === st.activeSession ? { messages } : {}),
+    })
+  },
   loadMessages: async (sessionId) => {
     if (!sessionId) return
     try {
       const raw = await sessionMessagesApi(sessionId)
-      if (get().activeSession !== sessionId) return // carrera: la sesión cambió
       const mapped: ChatMessage[] = raw
         // Un assistant que solo emitió tool_calls se persiste para emparejar el
         // resultado al reanudar, pero en el chat la llamada ya se ve en el bloque
@@ -325,19 +456,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => {
         const serverIds = new Set(mapped.map((m) => m.id))
         const sig = new Set(mapped.map((m) => `${m.role}\u0000${m.content}`))
-        const localOnly = s.messages.filter(
+        const localOnly = (s.messagesBySession[sessionId] ?? []).filter(
           (m) => !serverIds.has(m.id) && !m.id.startsWith(`${sessionId}-`) && !sig.has(`${m.role}\u0000${m.content}`),
         )
-        return { messages: [...mapped, ...localOnly], messagesError: null }
+        const lista = [...mapped, ...localOnly]
+        return {
+          messagesBySession: { ...s.messagesBySession, [sessionId]: lista },
+          ...(s.activeSession === sessionId ? { messages: lista } : {}),
+          messagesError: null,
+        }
       })
     } catch (e) {
       // server caído o sesión local (fallback) → buffer vacío, nunca mensajes ajenos
-      if (get().activeSession !== sessionId) return
       const isLocal = get().sessions.find((s) => s.id === sessionId)?.source === 'local'
-      set({
-        messages: [],
+      set((s) => ({
+        messagesBySession: { ...s.messagesBySession, [sessionId]: [] },
+        ...(s.activeSession === sessionId ? { messages: [] } : {}),
         messagesError: isLocal ? null : `no se pudo cargar el historial: ${(e as Error).message}`,
-      })
+      }))
     }
   },
   tabs: [] as FileTab[],

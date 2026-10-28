@@ -19,7 +19,9 @@ Integration:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 import time
 import logging
 from dataclasses import dataclass, field
@@ -127,6 +129,36 @@ def _replay_history(rows: list[dict]) -> list[LLMMessage]:
         # role=="system" se ignora: el system prompt fresco ya va arriba.
     cerrar_pendientes()
     return out
+
+
+def _tools_from_pin(current: list[dict] | None, pin: dict) -> list[dict] | None:
+    """Reconstruye el set de tools del turno pineado.
+
+    Se manda el schema que se envió entonces, en el mismo orden, para que el
+    modelo vea la misma lista de capacidades. Se prefiere el schema pineado; si
+    un pin viejo no lo guardó, se usa el actual con ese nombre. Un tool que ya
+    no existe en el registry se omite: mandarle un schema sin handler haría que
+    el modelo llame algo que no se puede ejecutar.
+    """
+    nombres = [str(n) for n in (pin.get("names") or []) if str(n).strip()]
+    if not nombres:
+        return None
+    pineados: dict[str, dict] = {}
+    for schema in (pin.get("schemas") or []):
+        nombre = str(((schema or {}).get("function") or {}).get("name") or "")
+        if nombre:
+            pineados[nombre] = schema
+    actuales: dict[str, dict] = {}
+    for schema in (current or []):
+        nombre = str(((schema or {}).get("function") or {}).get("name") or "")
+        if nombre:
+            actuales[nombre] = schema
+    out: list[dict] = []
+    for nombre in nombres:
+        schema = pineados.get(nombre) or actuales.get(nombre)
+        if schema:
+            out.append(schema)
+    return out or None
 
 
 # ---------------------------------------------------------------------------
@@ -792,7 +824,21 @@ class AgentLoop:
                 return out
         except Exception as e:
             logger.debug("cierre forzado fallo: %s", e)
-        return sintetizado
+        if sintetizado:
+            return sintetizado
+        # Sin resultados de herramientas no hay nada que sintetizar, pero el
+        # usuario igual necesita saber qué se hizo: antes recibía solo el tag del
+        # corte ("[bucle de herramienta...]") y ninguna explicación.
+        hechas: list[str] = []
+        for s in steps:
+            _t = getattr(s, "tool_used", None)
+            if _t and _t not in hechas:
+                hechas.append(_t)
+        if hechas:
+            return ("No llegué a una respuesta final: el turno se cortó antes. "
+                    f"Herramientas usadas: {', '.join(hechas[:8])}. "
+                    "Probá de nuevo con un pedido más acotado (una sola cosa a la vez).")
+        return ""
 
     async def run(self, task: str, session_id: str, hint: str | None = None, system_prompt: str | None = None, force_tools: bool = False, model: str | None = None, images: list[str] | None = None, trajectory: Trajectory | None = None, plan_mode=None, on_delta=None, on_reasoning=None, on_step=None, steer=None, extra_system: str | None = None) -> LoopResult:
         """Run TDAO loop until done, ABORT, or budget exhausted.
@@ -813,6 +859,17 @@ class AgentLoop:
         self._perf_hooks_ms = 0.0
         steps: list[LoopStep] = []
         _emitted = 0
+
+        # Si el pedido es explícito ("meté toda esa investigación en tu grafo"),
+        # el turno no está completo sin una escritura de memoria. Caso real: el
+        # agente investigó, se quedó sin contexto y respondió sin guardar nada.
+        _pedido = (task or "").lower()
+        _pide_guardar = bool(
+            re.search(r"\b(guard\w*|met[eé]\w*|aprend\w*|almacen\w*|persist\w*|"
+                      r"incorpor\w*|carg\w*|memoriz\w*|anot\w*|registr\w*)\b", _pedido)
+            and re.search(r"\b(grafo|memoria|brain|conocimiento|learn)\b", _pedido))
+        _uso_memoria = False
+        _avisado_guardar = False
 
         async def _flush_steps() -> None:
             """Reenvía al cliente los pasos nuevos (streaming en vivo de la trayectoria)."""
@@ -1003,6 +1060,34 @@ class AgentLoop:
                 messages.insert(1, LLMMessage(role="system", content=plan_mode.policy_guide()))
             except Exception:
                 pass
+        # Request pinneada: al reanudar hay que mandar el MISMO prompt y el MISMO
+        # set de tools que el turno anterior. Re-armarlo con el estado de hoy
+        # (AGENTS.md editado, skill nueva, tool desregistrada) cambia el contexto
+        # a mitad de sesión y el modelo ve algo distinto al que venía usando.
+        _pin: dict | None = None
+        _use_pin = False
+        if self.session_log is not None and session_id:
+            try:
+                _pinned_msgs = self.session_log.count_messages(session_id)
+                _pin = self.session_log.get_pin(session_id)
+                _use_pin = bool(_pin and _pinned_msgs > 1 and not system_prompt)
+            except Exception:
+                _pin = None
+                _use_pin = False
+        if _use_pin and messages and messages[0].role == "system":
+            messages[0] = LLMMessage(role="system", content=_pin["system_prompt"])
+
+        # Estado del agente (harness): va DESPUÉS del pin a propósito. El prompt
+        # pineado es la forma del request y no cambia; la memoria del agente sí,
+        # y tiene que reflejar lo que se creó en el turno anterior.
+        try:
+            from src.core.harness_state import digest_block as _harness_digest
+            _hblk = _harness_digest(session_id)
+            if _hblk and messages and messages[0].role == "system":
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _hblk)
+        except Exception as e:
+            logger.debug(f"digest del harness falló: {e}")
+
         # Load history from session_log if available
         history_limit = 20
         if self.session_log is not None:
@@ -1063,6 +1148,7 @@ class AgentLoop:
             pass
 
         # Compaction pre-check
+        _compactaciones = 0
         if self.compaction is not None:
             try:
                 dict_msgs = self._to_dicts(messages)
@@ -1070,6 +1156,7 @@ class AgentLoop:
                 # Presupuesto corregido por el usage real del provider (Cline).
                 max_tokens = self._effective_context_max_tokens(session_id)
                 if self._should_compact(session_id, dict_msgs, max_tokens):
+                    _compactaciones += 1
                     await self._distill(session_id)
                     _limit = int(max_tokens * self.compact_threshold)
                     _prev, _progress = self._summary_state(session_id)
@@ -1100,8 +1187,19 @@ class AgentLoop:
             except Exception:
                 openai_tools = None
 
+        if _use_pin:
+            openai_tools = _tools_from_pin(openai_tools, _pin)
+        elif self.session_log is not None and session_id and messages:
+            try:
+                self.session_log.pin_request(
+                    session_id, messages[0].content or "", openai_tools or [],
+                    model=str(model or ""), force=True)
+            except Exception as e:
+                logger.debug(f"pin de la request falló: {e}")
+
         # Main loop
         iteration = 0
+        _persistio_final = False
         max_iters = self.budget.max_iterations
         # Config error policy
         error_retry_limit = 3
@@ -1374,10 +1472,24 @@ class AgentLoop:
                     pass
 
             if not _tcs:
+                # Cierre sin haber guardado lo que el usuario pidió guardar: una
+                # sola vez se le recuerda, con las herramientas todavía activas.
+                if (_pide_guardar and not _uso_memoria and not _avisado_guardar
+                        and self.tools is not None and self.tools.get("learn") is not None):
+                    _avisado_guardar = True
+                    messages.append(LLMMessage(role="user", content=(
+                        "[recordatorio del sistema] El pedido incluye guardar lo investigado en el "
+                        "grafo y todavía no llamaste a 'learn'. Guardá lo que ya tenés (una entrada "
+                        "por tema, con la fuente) antes de responder; no vuelvas a investigar.")))
+                    steps.append(LoopStep(iteration=iteration, phase="decide",
+                                          content="recordatorio: falta guardar en el grafo"))
+                    await _flush_steps()
+                    continue
                 # Final answer
                 steps.append(LoopStep(iteration=iteration, phase="decide", content=f"respuesta final ({len(assistant_content)} caracteres)"))
                 final_output = assistant_content
                 success = True
+                _persistio_final = True
                 await _close_turn("stop")
                 break
             # ---- ACT: pre-dispatch paralelo de herramientas de SOLO LECTURA ----
@@ -1525,6 +1637,8 @@ class AgentLoop:
                         tool_result_str = str(raw_result)
                     tool_success = True
                     self.budget.add_tool_calls(1)
+                    if tool_name in ("learn", "brain_remember", "memory_set", "knowledge_add"):
+                        _uso_memoria = True
                     # Formateo-in-the-loop: dejar el archivo prolijo ANTES de
                     # diagnosticar, para que el linter opine sobre el texto final
                     # y el checkpoint guarde un diff sin ruido.
@@ -1635,6 +1749,40 @@ class AgentLoop:
                     except Exception:
                         pass
 
+                # Anti-bucle por RESULTADO repetido. Repetir la misma herramienta
+                # con argumentos distintos es legítimo (leer 9 archivos), pero si
+                # la salida es idéntica no hay progreso: el caso real fue
+                # `systeminfo | findstr`, que devolvía la misma línea y el modelo
+                # la pidió 10 veces hasta el corte por herramienta.
+                try:
+                    _txt = (tool_result_str or "").strip()
+                    _firma = ""
+                    if len(_txt) >= 40:
+                        _firma = hashlib.sha256(
+                            f"{tool_name}\x00{_txt}".encode("utf-8", "replace")
+                        ).hexdigest()[:16]
+                    if _firma:
+                        _rep = getattr(self, "_res_repeat", None)
+                        if _rep is None:
+                            _rep = {}
+                            self._res_repeat = _rep  # type: ignore[attr-defined]
+                        _rn = _rep.get(_firma, 0) + 1
+                        _rep[_firma] = _rn
+                        if _rn == 2:
+                            messages.append(LLMMessage(role="user", content=(
+                                f"[recordatorio del sistema] '{tool_name}' devolvió EXACTAMENTE el mismo "
+                                "resultado otra vez: no hay avance. No la repitas con un comando "
+                                "equivalente; responde con lo que ya tenés o cambiá de herramienta.")))
+                        elif _rn >= 3:
+                            final_output = (
+                                f"[bucle de herramienta: '{tool_name}' devolvió el mismo resultado "
+                                f"{_rn} veces sin avanzar — turno detenido]")
+                            success = False
+                            iteration = max_iters  # force exit
+                            break
+                except Exception:
+                    pass
+
             # ---- OBSERVE: budget check + compaction ----
             await _flush_steps()
             if self.budget.exhausted:
@@ -1651,7 +1799,15 @@ class AgentLoop:
                 try:
                     dict_msgs = self._to_dicts(messages)
                     max_tokens = self._effective_context_max_tokens(session_id)
-                    if self._should_compact(session_id, dict_msgs, max_tokens):
+                    # Una sola compactación por turno. Con `minimum_progress_messages=2`
+                    # cada par de resultados volvía a disparar el resumen, y como el
+                    # resumen previo se re-resumía, el pedido original se degradaba
+                    # ("pendiente: confirmar si AGENTS.md existe") hasta perderlo. Si
+                    # tras compactar sigue al límite, el problema es la ventana del
+                    # modelo, no el historial: se deja al provider fallar con datos
+                    # reales en vez de resumir en cascada.
+                    if _compactaciones == 0 and self._should_compact(session_id, dict_msgs, max_tokens):
+                        _compactaciones += 1
                         await self._distill(session_id)
                         # Solo compactar system+historial, mantener resultados de herramientas recientes
                         _limit = int(max_tokens * self.compact_threshold)
@@ -1728,6 +1884,17 @@ class AgentLoop:
                 await self.hooks.emit("session_end", {"session_id": session_id, "success": success, "iterations": iteration, "total_tokens": total_tokens})
             except Exception:
                 pass
+        # Un corte no se persistía: el assistant con tool_calls queda en la
+        # sesión, pero el texto del cierre (bucle, presupuesto) solo viajaba por
+        # el stream. Al reabrir la sesión el usuario veía la última tool y ninguna
+        # explicación. Se guarda el cierre una sola vez.
+        if final_output and final_output.strip() and not _persistio_final and self.session_log is not None:
+            try:
+                from .session_log import Message
+                self.session_log.append(session_id, Message(role="assistant", content=final_output))
+            except Exception:
+                pass
+
         # Session summary update
         if self.session_log is not None and final_output and success and not final_output.lstrip().startswith("["):
             try:

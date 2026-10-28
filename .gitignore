@@ -30,6 +30,8 @@ brain/*.db
 brain/*.db-*
 brain/*.bak*
 brain/learnings.md
+# Estado del harness (por proyecto): runtime, no se versiona
+.nexus/
 !brain/.gitkeep
 !brain/README.md
 # Semilla portable del sistema (conocimiento de nexus-v3, no datos de una PC)

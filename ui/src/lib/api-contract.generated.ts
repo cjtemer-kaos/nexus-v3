@@ -4,7 +4,7 @@
 
 
 /** Versión del contrato: hash del contenido. Cambia si cambia una ruta. */
-export const API_CONTRACT_VERSION = "c34b020c2352"
+export const API_CONTRACT_VERSION = "8b6877794403"
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -120,11 +120,15 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "GET", path: "/api/sessions/audit", handler: "sessions_audit", pathParams: [], query: ['legacy_spill'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "GET", path: "/api/sessions/catalog", handler: "sessions_catalog", pathParams: [], query: ['limit'], body: [], bodyOpen: false, response: ['count', 'sessions'], stream: false },
   { method: "GET", path: "/api/sessions/global/search", handler: "search_global", pathParams: [], query: ['q', 'limit'], body: [], bodyOpen: false, response: ['count', 'query', 'results'], stream: false },
+  { method: "POST", path: "/api/sessions/import/apply", handler: "session_import_apply", pathParams: [], query: [], body: ['handle', 'limit', 'project'], bodyOpen: false, response: [], stream: false },
+  { method: "GET", path: "/api/sessions/import/list", handler: "session_import_list", pathParams: [], query: ['source', 'limit'], body: [], bodyOpen: false, response: [], stream: false },
+  { method: "GET", path: "/api/sessions/import/preview", handler: "session_import_preview", pathParams: [], query: ['handle', 'limit'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/purge", handler: "sessions_purge", pathParams: [], query: [], body: ['apply', 'events', 'force', 'legacy_spill'], bodyOpen: false, response: [], stream: false },
   { method: "DELETE", path: "/api/sessions/{session_id}", handler: "delete_session_endpoint", pathParams: ['session_id'], query: ['events'], body: [], bodyOpen: false, response: ['artifacts', 'bytes_freed', 'deleted', 'errors', 'id', 'ok'], stream: false },
   { method: "PATCH", path: "/api/sessions/{session_id}", handler: "patch_session", pathParams: ['session_id'], query: [], body: ['title'], bodyOpen: false, response: ['id', 'ok', 'title'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/artifacts", handler: "session_artifacts", pathParams: ['session_id'], query: ['events'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/branch", handler: "branch_session_endpoint", pathParams: ['session_id'], query: ['copy_messages'], body: ['copy_messages'], bodyOpen: false, response: ['ok', 'session'], stream: false },
+  { method: "GET", path: "/api/sessions/{session_id}/context", handler: "session_context", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['breakdown', 'compact_at', 'heaviest', 'limit', 'messages_replayed', 'messages_total', 'note', 'pct', 'pinned', 'session_id', 'threshold', 'tools', 'used', 'window'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/distill", handler: "distill_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/end", handler: "end_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/export", handler: "export_session", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: [], stream: false },
@@ -133,7 +137,10 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "POST", path: "/api/sessions/{session_id}/messages", handler: "append_message", pathParams: ['session_id'], query: [], body: ['content', 'display_role', 'kind', 'role', 'tool_call_id', 'tool_calls', 'tool_name'], bodyOpen: false, response: ['id', 'session_id'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/mode", handler: "session_mode_get", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['mode'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/mode", handler: "session_mode_set", pathParams: ['session_id'], query: [], body: ['mode'], bodyOpen: false, response: ['mode', 'ok'], stream: false },
-  { method: "GET", path: "/api/sessions/{session_id}/replay", handler: "session_replay", pathParams: ['session_id'], query: ['limit'], body: [], bodyOpen: false, response: ['events'], stream: false },
+  { method: "DELETE", path: "/api/sessions/{session_id}/pin", handler: "unpin_session", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['cleared', 'session_id'], stream: false },
+  { method: "GET", path: "/api/sessions/{session_id}/pin", handler: "get_session_pin", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['hash', 'model', 'pinned', 'pinned_at', 'session_id', 'system_prompt_len', 'tools'], stream: false },
+  { method: "POST", path: "/api/sessions/{session_id}/pin", handler: "pin_session", pathParams: ['session_id'], query: [], body: ['agent_id', 'force', 'model', 'permission', 'system_prompt', 'tools'], bodyOpen: false, response: ['hash', 'pinned', 'session_id', 'system_prompt_len', 'tools'], stream: false },
+  { method: "GET", path: "/api/sessions/{session_id}/replay", handler: "session_replay", pathParams: ['session_id'], query: ['limit', 'since_seq', 'client_epoch'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/rewind", handler: "session_rewind", pathParams: ['session_id'], query: [], body: ['message_id'], bodyOpen: false, response: ['deleted', 'ok'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/search", handler: "search_session", pathParams: ['session_id'], query: ['q', 'limit'], body: [], bodyOpen: false, response: ['query', 'results'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/steer", handler: "session_steer", pathParams: ['session_id'], query: [], body: ['message'], bodyOpen: false, response: ['note', 'ok', 'queued'], stream: false },
@@ -254,16 +261,21 @@ export const API_PATHS: readonly string[] = [
   '/api/sessions/audit',
   '/api/sessions/catalog',
   '/api/sessions/global/search',
+  '/api/sessions/import/apply',
+  '/api/sessions/import/list',
+  '/api/sessions/import/preview',
   '/api/sessions/purge',
   '/api/sessions/{session_id}',
   '/api/sessions/{session_id}/artifacts',
   '/api/sessions/{session_id}/branch',
+  '/api/sessions/{session_id}/context',
   '/api/sessions/{session_id}/distill',
   '/api/sessions/{session_id}/end',
   '/api/sessions/{session_id}/export',
   '/api/sessions/{session_id}/fork',
   '/api/sessions/{session_id}/messages',
   '/api/sessions/{session_id}/mode',
+  '/api/sessions/{session_id}/pin',
   '/api/sessions/{session_id}/replay',
   '/api/sessions/{session_id}/rewind',
   '/api/sessions/{session_id}/search',
