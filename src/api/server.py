@@ -126,6 +126,49 @@ def _load_config_safe() -> dict:
         return {"_error": str(e), "_validation_errors": [str(e)]}
 
 
+def _aligerar_evidencia(res, json_mod, detalle: str = "breve") -> dict:
+    """Resume el sobre de evidencia que repiten los MCP de análisis (rea).
+
+    Medido en la sesión de eMule: cada `search_strings`/`binary_overview` de rea
+    vuelve con `subject` (ruta + sha256), `provider`, `authority` y un
+    `raw_result` que **duplica** el resultado. Con ~100 llamadas de análisis eso
+    pesa más que los hallazgos y la compactación se llevó justo las firmas del
+    protocolo. Se conserva lo que sirve para citar: `evidence_id`, `confidence`,
+    `operation` y los `parameters` de la consulta.
+    """
+    if str(detalle or "").strip().lower() == "completo":
+        return res
+    if not isinstance(res, dict):
+        return res
+    crudo = res.get("content")
+    if not isinstance(crudo, str):
+        return res
+    cabeza = crudo.lstrip()[:1]
+    if cabeza not in ("{", "["):
+        return res
+    try:
+        data = json_mod.loads(crudo)
+    except Exception:
+        return res
+    if not isinstance(data, dict):
+        return res
+    ev = data.get("evidence")
+    if isinstance(ev, dict):
+        resumen = {
+            "evidence_id": ev.get("evidence_id") or data.get("evidence_id"),
+            "confidence": ev.get("confidence"),
+            "operation": ev.get("operation"),
+            "parameters": ev.get("parameters"),
+        }
+        data["evidence"] = {k: v for k, v in resumen.items() if v not in (None, "", {}, [])}
+        data.pop("raw_result", None)
+        try:
+            res["content"] = json_mod.dumps(data, ensure_ascii=False)
+        except Exception:
+            return res
+    return res
+
+
 def _brain_info_safe() -> dict:
     try:
         from src.brain.link import get_brain_info, brain_path
@@ -6506,7 +6549,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
     )
 
     async def mcp_call(server: str, tool: str, arguments: dict | None = None,
-                       timeout: int = 600) -> str:
+                       timeout: int = 600, detalle: str = "breve") -> str:
         """Llama una tool de un servidor MCP del bundle (stdio, just-in-time)."""
         import json as _j
         from src.core.mcp_client import get_mcp_client
@@ -6594,18 +6637,21 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
                     f"las que no figuran no existen.")
             except Exception:
                 pass
-        return _j.dumps(res, ensure_ascii=False)
+        return _j.dumps(_aligerar_evidencia(res, _j, detalle), ensure_ascii=False)
     registry.register_function(
         mcp_call, name="mcp_call",
         description=("Llama una tool de un servidor MCP del bundle. Usa mcp_list para descubrir "
                      "server/tool/args. Si el nombre de la tool no existe, devuelve "
-                     "available_tools en vez de abortar."),
+                     "available_tools en vez de abortar. En servidores que devuelven evidencia "
+                     "(rea) la respuesta llega resumida; detalle=\"completo\" trae el sobre entero."),
         category="mcp",
         parameters={"type": "object", "properties": {
             "server": {"type": "string", "description": "Nombre del servidor MCP."},
             "tool": {"type": "string", "description": "Nombre de la tool."},
             "arguments": {"type": "object", "description": "Argumentos de la tool (JSON)."},
             "timeout": {"type": "integer", "description": "Segundos de espera (10-1800, por defecto 600). Subilo para análisis de binarios."},
+            "detalle": {"type": "string", "enum": ["breve", "completo"],
+                        "description": "breve (por defecto) resume el sobre de evidencia; completo lo deja entero."},
         }, "required": ["server", "tool"], "additionalProperties": False},
     )
 
