@@ -67,39 +67,45 @@ class CompactionMetrics:
         }
 
 
-def estimate_tokens(text: str) -> int:
-    return len(text) // 4 if text else 0
+def estimate_tokens(text: str, tokens_per_char: float = 0.25) -> int:
+    """Tokens de un texto. `tokens_per_char` viene de la densidad medida
+    (`token_anchor`): chars/4 subestima 17 % en este repo (medido 2026-10-28)."""
+    if not text:
+        return 0
+    if tokens_per_char == 0.25:
+        return len(text) // 4
+    return max(1, int(len(text) * float(tokens_per_char)))
 
 
-def _estimate_one(m: dict) -> int:
+def _estimate_one(m: dict, tokens_per_char: float = 0.25) -> int:
     """Tokens de UN mensaje. Sumar esto da el total de _estimate_messages_tokens."""
     total = 0
     c = m.get("content")
     if isinstance(c, str):
-        total += estimate_tokens(c)
+        total += estimate_tokens(c, tokens_per_char)
     elif isinstance(c, list):
         for part in c:
             if isinstance(part, dict) and "text" in part:
-                total += estimate_tokens(part["text"])
+                total += estimate_tokens(part["text"], tokens_per_char)
             elif isinstance(part, str):
-                total += estimate_tokens(part)
+                total += estimate_tokens(part, tokens_per_char)
     if m.get("tool_calls"):
-        total += len(str(m["tool_calls"])) // 4
+        total += estimate_tokens(str(m["tool_calls"]), tokens_per_char)
     return total + 4
 
 
-def _estimate_messages_tokens(messages: list[dict]) -> int:
-    return sum(_estimate_one(m) for m in messages)
+def _estimate_messages_tokens(messages: list[dict], tokens_per_char: float = 0.25) -> int:
+    return sum(_estimate_one(m, tokens_per_char) for m in messages)
 
 
-def _estimate_any(messages: list[Any]) -> int:
+def _estimate_any(messages: list[Any], tokens_per_char: float = 0.25) -> int:
     """Igual que `_estimate_messages_tokens` pero acepta dicts y LLMMessage."""
     total = 0
     for m in messages:
-        total += estimate_tokens(_msg_content(m)) + 4
+        total += estimate_tokens(_msg_content(m), tokens_per_char) + 4
         tc = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
         if tc:
-            total += len(str(tc)) // 4
+            total += estimate_tokens(str(tc), tokens_per_char)
     return total
 
 
@@ -654,6 +660,7 @@ class CompactionPipeline:
         keep_recent: int | None = None,
         max_chars: int | None = None,
         target_tokens: int = 0,
+        tokens_per_char: float = 0.25,
     ) -> list[Any]:
         """Poda el payload LLM sin tocar el historial persistido.
 
@@ -662,6 +669,10 @@ class CompactionPipeline:
         de 100 iteraciones reenviaba el historial entero en cada llamada: medido
         en la sesion c7e998050fb7, la misma corrida paso de 19k a 68k tokens por
         llamada y 2.301 llamadas costaron 87,2 M de tokens.
+
+        ``tokens_per_char`` es la densidad medida por `token_anchor`: el
+        presupuesto que llega desde el loop ya esta en tokens reales, asi que la
+        comparacion interna tiene que usar la misma unidad.
 
         Los ultimos ``keep_recent`` resultados quedan intactos: son el contexto
         vivo del turno.
@@ -733,7 +744,7 @@ class CompactionPipeline:
         for protegidos in niveles:
             for cap in caps:
                 out = _aplicar(cap, protegidos)
-                if _estimate_any(out) <= target_tokens:
+                if _estimate_any(out, tokens_per_char) <= target_tokens:
                     return out
         return out
 

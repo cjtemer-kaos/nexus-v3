@@ -31,6 +31,7 @@ from .provider_base import LLMMessage, ToolCall
 from .iteration_budget import IterationBudget
 from .error_classifier import ErrorAction, classify_error
 from .trajectory import Trajectory, TrajectoryStep
+from . import token_anchor
 
 import os as _os
 
@@ -376,6 +377,54 @@ class AgentLoop:
         except Exception:
             return 0
 
+    def _count_tools_chars(self, openai_tools) -> int:
+        """Caracteres de los schemas: el ancla de `token_anchor` cotiza por caracter."""
+        try:
+            if not openai_tools:
+                return 0
+            import json as _json
+            return len(_json.dumps(openai_tools, ensure_ascii=False))
+        except Exception:
+            return 0
+
+    def _request_chars(self, dict_msgs: list[dict]) -> int:
+        """Caracteres del request completo: mensajes + schemas de tools.
+
+        Es la unidad del ancla: `estimate()` escala los tokens reales por este
+        cociente, asi que medir distinto aca que en `record()` rompe la cuenta.
+        """
+        total = 0
+        for m in dict_msgs or []:
+            c = m.get("content")
+            total += len(c) if isinstance(c, str) else len(str(c or ""))
+            tc = m.get("tool_calls")
+            if tc:
+                total += len(str(tc))
+        return total + int(getattr(self, "_tools_chars", 0) or 0)
+
+    def _medir_request(self, session_id: str, dict_msgs: list[dict]) -> int:
+        """Tokens del request, anclados en lo que el proveedor conto la vez anterior.
+
+        Sin ancla devuelve la estimacion vieja (chars/4 + schemas), asi el primer
+        request de cada sesion sigue funcionando igual que antes.
+        """
+        fallback = 0
+        try:
+            if self.compaction is not None:
+                fallback = (int(self.compaction.estimate_tokens_for_messages(dict_msgs))
+                            + int(getattr(self, "_tools_tokens_n", 0) or 0))
+        except Exception:
+            fallback = 0
+        return token_anchor.estimate(session_id, self._request_chars(dict_msgs), fallback)
+
+    def _tools_tokens_reales(self, session_id: str) -> int:
+        """Tokens de los schemas a la densidad medida (chars/4 si no hay ancla)."""
+        return token_anchor.tokens_for(
+            session_id,
+            int(getattr(self, "_tools_chars", 0) or 0),
+            int(getattr(self, "_tools_tokens_n", 0) or 0),
+        )
+
     async def _prior_knowledge_block(self, task: str) -> str:
         """Lo que el grafo ya sabe de este pedido, listo para el system prompt.
 
@@ -457,7 +506,10 @@ class AgentLoop:
             # El modelo manda: pedirle mas ventana de la que tiene es un 400 de Ollama.
             base = min(base, model_window)
         factor = get_underestimate_factor(session_id)
-        if factor <= 1.0:
+        # Con ancla el numero real ya entra en la cuenta (`_medir_request` escala
+        # los tokens del proveedor). Aplicar ademas el factor dividiria el
+        # presupuesto dos veces por el mismo error.
+        if token_anchor.has_anchor(session_id) or factor <= 1.0:
             return base
         return max(1024, int(base / factor))
 
@@ -471,22 +523,30 @@ class AgentLoop:
         de mensajes es el mismo que usa el disparo y el total vuelve al budget.
         """
         threshold = max(0.05, float(self.compact_threshold or 0.75))
-        tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
-        return max(1024, int(round(max_tokens * threshold)) - tools_n)
+        sid = getattr(self, "_session_id", "") or ""
+        return max(1024, int(round(max_tokens * threshold)) - self._tools_tokens_reales(sid))
 
     def _should_compact(self, session_id: str, dict_msgs: list[dict], max_tokens: int,
                         est_tokens: int | None = None) -> bool:
         """Compactar sólo si se pasó el umbral Y se superó el piso de histéresis."""
         if self.compaction is None or not hasattr(self.compaction, "maybe_compact"):
             return False
+        threshold = max(0.05, float(self.compact_threshold or 0.75))
+        # Con ancla el numero es el REAL del proveedor escalado por caracteres,
+        # e incluye los schemas: se compara directo contra el umbral, sin el
+        # ajuste por `tools_n` que hacia falta cuando todo era chars/4.
+        anclado = token_anchor.has_anchor(session_id)
         if est_tokens is None:
-            try:
-                est_tokens = int(self.compaction.estimate_tokens_for_messages(dict_msgs))
-            except Exception:
-                est_tokens = 0
+            if anclado:
+                est_tokens = self._medir_request(session_id, dict_msgs)
+            else:
+                try:
+                    est_tokens = int(self.compaction.estimate_tokens_for_messages(dict_msgs))
+                except Exception:
+                    est_tokens = 0
+        tools_n = 0 if anclado else int(getattr(self, "_tools_tokens_n", 0) or 0)
         # Los schemas de tools ocupan contexto igual que los mensajes: sin sumarlos
         # el disparo de compactacion llega tarde y el request real desborda.
-        tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
         est_tokens += tools_n
         floor = int(self._no_recompact_below.get(session_id, 0) or 0)
         if floor and est_tokens <= floor:
@@ -495,11 +555,12 @@ class AgentLoop:
             self._last_est_tokens = est_tokens  # type: ignore[attr-defined]
         except Exception:
             pass
+        if anclado:
+            return est_tokens > int(max_tokens * threshold)
         if tools_n > 0:
             # `maybe_compact` estima SOLO los mensajes, asi que se le pasa un tope
             # equivalente que ya descuenta los schemas: mismo umbral, cuenta real.
-            _thr = max(0.05, float(self.compact_threshold or 0.75))
-            max_tokens = max(1, int(round(max_tokens - tools_n / _thr)))
+            max_tokens = max(1, int(round(max_tokens - tools_n / threshold)))
         return bool(self.compaction.maybe_compact(dict_msgs, max_tokens, self.compact_threshold))
 
     def _note_compaction(self, session_id: str, metrics: Any, dict_msgs: list[dict]) -> None:
@@ -661,8 +722,12 @@ class AgentLoop:
         if self.compaction is None or not hasattr(self.compaction, "prune_for_llm"):
             return messages
         try:
+            sid = getattr(self, "_session_id", "") or ""
             return self.compaction.prune_for_llm(
-                messages, target_tokens=self._payload_token_budget())  # type: ignore[arg-type]
+                messages,
+                target_tokens=self._payload_token_budget(),
+                tokens_per_char=token_anchor.tokens_per_char(sid),
+            )  # type: ignore[arg-type]
         except Exception as e:
             logger.debug("prune_for_llm falló: %s", e)
             return messages
@@ -674,14 +739,17 @@ class AgentLoop:
         tools. Con esto el payload queda plano durante todo el turno en vez de
         crecer con cada iteracion (el turno de 113 llamadas llego a 68k tokens
         por request). 0 = sin presupuesto (comportamiento viejo).
+
+        Los schemas se cotizan a la densidad medida (`token_anchor`), no a
+        chars/4: si se mezclan unidades el presupuesto queda 17 % corto.
         """
         try:
-            base = int(getattr(self, "context_max_tokens", 0) or 0)
+            sid = getattr(self, "_session_id", "") or ""
+            base = int(self._effective_context_max_tokens(sid))
             if base <= 0:
                 return 0
             thr = max(0.05, float(getattr(self, "compact_threshold", 0.75) or 0.75))
-            tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
-            return max(2048, int(round(base * thr)) - tools_n)
+            return max(2048, int(round(base * thr)) - self._tools_tokens_reales(sid))
         except Exception:
             return 0
 
@@ -1119,6 +1187,9 @@ class AgentLoop:
             images: optional vision attachments (data URIs) on the user message
         """
         t0 = time.monotonic()
+        # La sesion va en `self` porque `_prune_payload` / `_payload_token_budget`
+        # necesitan el ancla de tokens reales y no reciben session_id.
+        self._session_id = session_id  # type: ignore[attr-defined]
         # Perfilado del turno: cuánto se va en el LLM, en las tools y en el resto del
         # harness. Sin esto no se puede saber si un turno lento es culpa del modelo o nuestro.
         _perf_llm_ms = 0.0
@@ -1523,6 +1594,9 @@ class AgentLoop:
         # compactaba a los 6.6k de 24k y el resumen (800 tokens) se comia la lista
         # de tools que el agente acababa de pedir.
         self._tools_tokens_n = self._count_tools_tokens(openai_tools)  # type: ignore[attr-defined]
+        # Los chars son la unidad del ancla de tokens: si falta, el presupuesto
+        # de poda queda corto por todo el peso de los schemas.
+        self._tools_chars = self._count_tools_chars(openai_tools)  # type: ignore[attr-defined]
 
         # Main loop
         iteration = 0
@@ -1675,6 +1749,16 @@ class AgentLoop:
             _prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
             if _prompt_tokens > 0 and _request_estimate > 0:
                 record_usage_calibration(session_id, _request_estimate, _prompt_tokens)
+            if _prompt_tokens > 0:
+                # Ancla: el proximo request se cotiza escalando este numero real
+                # por el cociente de caracteres (`token_anchor`). Es lo que evita
+                # decidir poda/compactacion con chars/4 sobre un prompt que el
+                # proveedor ya conto distinto (17 % de error medido).
+                token_anchor.record(
+                    session_id,
+                    self._request_chars(self._to_dicts(_payload)),
+                    _prompt_tokens,
+                )
             if not _completion:
                 _completion = len((llm_resp.content or "")) // 4
             turn_tokens = int(usage.get("total_tokens", 0) or _completion)
