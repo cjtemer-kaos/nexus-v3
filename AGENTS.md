@@ -29,6 +29,8 @@ docs/                 CAPABILITY_MATRIX, NEXUS_ROADMAP, COMPETITOR_AUTOPSY, PI_I
   → Electron levanta el backend en un **puerto libre** (efímero) y sirve `ui/dist`.
   El puerto NO es fijo: se lee de `data/backend.log` o del propio Electron.
   Log del backend: **`data/backend.log`** (ahí va stdout/stderr del server).
+  Al **cerrar la ventana** la app apaga el backend (el puerto queda libre) y descarga los
+  modelos de Ollama de la VRAM (`keep_alive: 0`); no queda nada vivo en la bandeja.
 **Modo dev (backend + Vite + Electron)**: `npm run dev` (backend fijo :8765, Vite :5174).
 - Backend solo (dev, fijo): `wscript scripts\start_hidden_ft.vbs` (puerto **8765**).
 - Suite: `.venv-ft314\Scripts\python.exe -m pytest -q`

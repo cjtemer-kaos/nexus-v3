@@ -15,7 +15,7 @@
 
 import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell, screen } from "electron";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
-import { createServer as createNetServer } from "node:net";
+import { createServer as createNetServer, createConnection } from "node:net";
 import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -303,6 +303,63 @@ async function waitForBackend(url: string, timeoutMs = 15000): Promise<boolean> 
   return false;
 }
 
+// —————————————————————————————————————————————— 2026-10-28
+// Cierre de verdad: al cerrar la pantalla se apaga el backend y se libera la
+// VRAM. Ollama deja el modelo cargado ~5 minutos despues de la ultima peticion
+// (y con 8-9B eso son GB de VRAM y la GPU ocupada para nada). `keep_alive: 0`
+// lo descarga al instante, sin reiniciar el servicio ni perder el puerto.
+// ——————————————————————————————————————————————
+const OLLAMA_URL = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/+$/, "");
+
+async function modelosEnVram(): Promise<string[]> {
+  try {
+    const r = await fetch(`${OLLAMA_URL}/api/ps`, { signal: AbortSignal.timeout(2000) });
+    if (!r.ok) return [];
+    const d = (await r.json()) as { models?: Array<{ name?: string; model?: string }> };
+    return (d.models || []).map((m) => m.name || m.model || "").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function liberarOllama(): Promise<void> {
+  const modelos = await modelosEnVram();
+  for (const m of modelos) {
+    try {
+      await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: m, keep_alive: 0 }),
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch { /* si Ollama no esta, no hay nada que liberar */ }
+  }
+  const quedan = await modelosEnVram();
+  blog("[main]", `ollama: descargados=${modelos.length} en_vram=${quedan.length}` +
+    (quedan.length ? ` (${quedan.join(", ")})` : ""));
+}
+
+function puertoLibre(port: number): Promise<boolean> {
+  return new Promise((res) => {
+    const s = createConnection({ host: "127.0.0.1", port, timeout: 800 });
+    const fin = (libre: boolean) => { try { s.destroy(); } catch {} res(libre); };
+    s.once("connect", () => fin(false));
+    s.once("timeout", () => fin(true));
+    s.once("error", () => fin(true));
+  });
+}
+
+let cleanupDone = false;
+async function shutdown(): Promise<void> {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  isQuitting = true;
+  await killBackend();
+  const libre = await puertoLibre(backendPort);
+  blog("[main]", `shutdown: backend apagado puerto=${backendPort} libre=${libre}`);
+  await liberarOllama();
+}
+
 // ——————————————————————————————————————————————
 // Window & tray
 // ——————————————————————————————————————————————
@@ -445,15 +502,13 @@ function createWindow() {
     mainWindow?.show();
   });
 
-  mainWindow.on("close", (e) => {
-    // Minimize to tray instead of quit when closing window (tray keeps it alive)
-    // For "proper program" we keep tray: hide to tray on close, quit via tray or app quit
-    if (!isQuitting) {
-      e.preventDefault();
-      mainWindow?.hide();
-      // Show tray hint once
-      tray?.displayBalloon?.({ title: "Nexus v3", content: "Sigue ejecutandose en la bandeja. Click para mostrar." } as any);
-    }
+  mainWindow.on("close", () => {
+    // Cerrar la pantalla apaga la app. Antes se ocultaba a la bandeja: el
+    // backend seguia vivo con su puerto tomado y Ollama dejaba los GB del
+    // modelo en VRAM, aunque el lanzador prometia "al cerrar la ventana, la
+    // app apaga su backend". El cierre completo lo hace `shutdown()`.
+    blog("[main]", "ventana cerrada por el usuario -> apagando backend y liberando VRAM");
+    isQuitting = true;
   });
 
   // Handle renderer crashes
@@ -566,29 +621,37 @@ app.on("activate", () => {
   else mainWindow?.show();
 });
 
-// Window-all-closed: kill backend and quit (a real program, not a daemon)
-app.on("window-all-closed", async () => {
-  blog("[main]", "window-all-closed — killing backend and quitting");
-  await killBackend();
-  // On macOS, keep app alive only if tray wants it; otherwise quit when the last window closes
-  // Requirement: "kills it on window-all-closed" — so quit unconditionally
+// Window-all-closed: apagar el backend, liberar la VRAM y salir (programa real,
+// no un demonio que sigue ocupando puerto y GPU en la bandeja).
+app.on("window-all-closed", () => {
+  blog("[main]", "window-all-closed — apagando backend y saliendo");
+  isQuitting = true;
   app.quit();
 });
 
-app.on("before-quit", async (e) => {
-  if (pyProc && !isQuitting) {
-    e.preventDefault();
-    isQuitting = true;
-    await killBackend();
-    app.quit();
-  }
+// Un solo punto de limpieza: `shutdown()` es idempotente y se espera ANTES de
+// que el proceso muera, para que `taskkill /T` termine y Ollama reciba el
+// keep_alive=0. Sin esto, app.quit() salia y el backend quedaba huerfano.
+app.on("before-quit", (e) => {
+  if (cleanupDone) return;
+  e.preventDefault();
+  void shutdown().finally(() => app.quit());
 });
 
-// Ensure backend killed on unexpected exit
+// Ultimo recurso (salida abrupta, sin poder await): matar el arbol del backend
+// de forma sincronica. Si ya murio, taskkill falla y no pasa nada.
 process.on("exit", () => {
-  try { pyProc?.kill(); } catch {}
+  const pid = pyProc?.pid;
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+    } else {
+      pyProc?.kill("SIGKILL");
+    }
+  } catch {}
 });
-process.on("SIGINT", async () => { await killBackend(); process.exit(0); });
-process.on("SIGTERM", async () => { await killBackend(); process.exit(0); });
+process.on("SIGINT", async () => { await shutdown(); process.exit(0); });
+process.on("SIGTERM", async () => { await shutdown(); process.exit(0); });
 
 // Single-instance already handled at top
