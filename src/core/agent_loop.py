@@ -773,6 +773,56 @@ class AgentLoop:
                 break
         return out
 
+    def _sanear_historial(self, messages: list) -> list:
+        """Deja el historial en la forma que el wire OpenAI acepta.
+
+        Cada `assistant` con tool_calls necesita respuesta para TODOS sus ids
+        antes del mensaje siguiente, y un `tool` sin llamada previa no se puede
+        mandar. Los cortes del loop (guards, presupuesto) y la compactación
+        pueden dejar el par incompleto en medio del turno; con la sesión ya
+        grande el proveedor devolvía 400 «insufficient tool messages following
+        tool_calls» y mataba la corrida entera (pasó en la sesión de eMule, 630
+        mensajes). Acá se cierra cada hueco con el resultado sintético y se
+        degrada el `tool` huérfano a nota de assistant.
+        """
+        pend: list[str] = []
+        out: list = []
+        repair = 0
+
+        def cerrar() -> None:
+            nonlocal repair
+            for _id in pend:
+                out.append(LLMMessage(role="tool", content=_SIN_RESULTADO, tool_call_id=_id))
+                repair += 1
+            pend.clear()
+
+        for m in messages or []:
+            rol = str(getattr(m, "role", "") or "")
+            if rol == "tool":
+                _id = str(getattr(m, "tool_call_id", "") or "")
+                if _id and _id in pend:
+                    pend.remove(_id)
+                    out.append(m)
+                else:
+                    repair += 1
+                    _c = (getattr(m, "content", "") or "")[:2000]
+                    out.append(LLMMessage(
+                        role="assistant",
+                        content=f"[resultado de herramienta sin llamada previa] {_c}"))
+                continue
+            cerrar()
+            out.append(m)
+            if rol == "assistant":
+                for tc in (getattr(m, "tool_calls", None) or ()):
+                    pend.append(str(getattr(tc, "id", "") or ""))
+        cerrar()
+        if repair:
+            try:
+                logger.warning("historial saneado: %d huecos de tool_call reparados", repair)
+            except Exception:
+                pass
+        return out
+
     def _emit_cycle(self, trajectory: Trajectory, kind: str, iteration: int, content: str = "", duration_ms: float = 0.0, end_reason: str = "", tokens: int = 0, model: str = "") -> None:
         """Emite un evento del ciclo turn/step a trajectory + event_store + hooks (best-effort)."""
         try:
@@ -1390,7 +1440,7 @@ class AgentLoop:
                 if self.hooks is not None and self.hooks.has_handlers("pre_llm_call"):
                     await self.hooks.emit("pre_llm_call", {"iteration": iteration, "messages": len(messages), "hint": hint})
                 # Poda SOLO el payload: cabeza+cola de tool results viejos.
-                _payload = self._prune_payload(messages)
+                _payload = self._sanear_historial(self._prune_payload(messages))
                 _request_estimate = 0
                 if self.compaction is not None:
                     try:

@@ -7581,8 +7581,24 @@ async def chat(request: Request):
         # modelo cierre sin tools o marque LISTO:.
         _rondas = max(0, min(12, int(body.get("continue_rounds") or 0)))
         _ronda = 0
+        _reintentos_llm = 0
         while _ronda < _rondas:
-            if not _turno_hizo_trabajo(result):
+            # Un fallo del proveedor (timeout, 400 del wire, 429) no es "termine":
+            # es un corte externo en mitad del trabajo. Se reintenta la ronda con
+            # espera creciente en vez de dar la corrida por cerrada.
+            _cayo_el_llm = str(getattr(result, "final_output", "") or "").lower().startswith(
+                "[error llm")
+            if _cayo_el_llm:
+                if _reintentos_llm >= 3:
+                    logger.warning("continuacion: el proveedor fallo %d veces, se corta la sesion %s",
+                                   _reintentos_llm, session_id)
+                    break
+                _reintentos_llm += 1
+                _espera = 15 * _reintentos_llm
+                logger.info("continuacion: fallo del proveedor, reintento %d en %ds (sesion %s)",
+                            _reintentos_llm, _espera, session_id)
+                await asyncio.sleep(_espera)
+            elif not _turno_hizo_trabajo(result):
                 break
             _ronda += 1
             logger.info("continuacion %d/%d sesion %s: el turno uso %d tools",
