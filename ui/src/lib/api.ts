@@ -347,6 +347,56 @@ export async function deleteSessionApi(sessionId: string): Promise<{ ok: boolean
   return { ok: res.ok, deleted: res.ok, id: sessionId };
 }
 
+export type HallazgoAuditoria = {
+  code: string
+  severity: 'error' | 'warn' | 'info'
+  count: number
+  detail: string
+  samples: string[]
+  fixable: boolean
+}
+
+export type AuditoriaSesiones = {
+  ok: boolean
+  checked_at: string
+  database: string
+  sessions: number
+  messages: number
+  findings: HallazgoAuditoria[]
+  unattributed: { store: string; count: number; bytes: number }[]
+  totals: { errors: number; warnings: number; orphan_bytes: number }
+}
+
+export async function sessionAuditApi(): Promise<AuditoriaSesiones> {
+  const res = await apiFetch("/api/sessions/audit");
+  if (!res.ok) throw new Error(`audit ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export type PlanPurga = {
+  dry_run: boolean
+  plan: Record<string, number>
+  bytes: number
+  deleted?: Record<string, number>
+  errors?: string[]
+}
+
+export async function purgeSessionsApi(
+  opts: { apply?: boolean; events?: boolean; legacySpill?: boolean } = {},
+): Promise<PlanPurga> {
+  const res = await apiFetch("/api/sessions/purge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apply: opts.apply ?? false,
+      events: opts.events ?? false,
+      legacy_spill: opts.legacySpill ?? false,
+    }),
+  });
+  if (!res.ok) throw new Error(`purge ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 export type SessionMessage = { id?: number; role: string; content: string; tool_name?: string; created_at?: string; model?: string; tokens?: number; kind?: string; display_role?: string; tool_calls?: unknown[] }
 
 export async function sessionMessagesApi(sessionId: string, limit = 10000): Promise<SessionMessage[]> {

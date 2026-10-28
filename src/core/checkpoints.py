@@ -28,8 +28,18 @@ def _checkpoints_root() -> Path:
 _ROOT = _checkpoints_root()
 
 
-def _session_dir(session_id: str) -> Path:
+def checkpoints_root() -> Path:
+    """Raíz real donde se escribieron los snapshots (fijada al importar)."""
+    return _ROOT
+
+
+def session_dir(session_id: str) -> Path:
+    """Carpeta de checkpoints de una sesión: `data/checkpoints/<id>`."""
     return _ROOT / (session_id or "default")
+
+
+def _session_dir(session_id: str) -> Path:
+    return session_dir(session_id)
 
 
 def snapshot(session_id: str, path: str | Path) -> str | None:

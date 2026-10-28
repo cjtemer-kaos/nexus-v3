@@ -53,6 +53,22 @@ def _client(monkeypatch, router):
     return TestClient(srv.app)
 
 
+@pytest.fixture(autouse=True)
+def _base_temporal(tmp_path, monkeypatch):
+    """`/v1/chat/completions` persiste la sesión: que sea en tmp, no en `data/`.
+
+    Sin esto cada corrida dejaba una sesión `openai-compat` con "hola" en la
+    base real del usuario, que aparecía luego en la lista de la UI.
+    """
+    from src.api import server as srv
+    from src.core.session_log import SessionLog
+
+    log = SessionLog(str(tmp_path / "session.db"))
+    monkeypatch.setitem(srv._state, "session_log", log)
+    yield
+    log.close()
+
+
 # --- normalizacion de tools -------------------------------------------------
 
 def test_normaliza_tools_validas():

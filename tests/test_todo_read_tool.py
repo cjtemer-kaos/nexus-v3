@@ -21,6 +21,21 @@ from src.api import server as S  # noqa: E402
 from src.core.tool_registry import TOOL_ALIASES  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _base_temporal(tmp_path, monkeypatch):
+    """`todo_write`/`todo_read` escriben en la base del server: que sea en tmp.
+
+    Con la base real, cada corrida dejaba filas `test-todo-*` en `data/` que
+    quedaban para siempre porque `todos` no tiene FK.
+    """
+    from src.core.session_log import SessionLog
+
+    log = SessionLog(str(tmp_path / "session.db"))
+    monkeypatch.setitem(S._state, "session_log", log)
+    yield
+    log.close()
+
+
 @pytest.fixture()
 def registrar():
     cfg = S._load_config_safe()

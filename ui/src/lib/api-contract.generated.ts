@@ -4,7 +4,7 @@
 
 
 /** Versión del contrato: hash del contenido. Cambia si cambia una ruta. */
-export const API_CONTRACT_VERSION = "95816a741fb9"
+export const API_CONTRACT_VERSION = "c34b020c2352"
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -117,10 +117,13 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "GET", path: "/api/runtime", handler: "runtime_endpoint", pathParams: [], query: [], body: [], bodyOpen: false, response: [], stream: false },
   { method: "GET", path: "/api/sessions", handler: "list_sessions", pathParams: [], query: ['limit'], body: [], bodyOpen: false, response: ['sessions'], stream: false },
   { method: "POST", path: "/api/sessions", handler: "create_session", pathParams: [], query: [], body: ['parent_id', 'project', 'title'], bodyOpen: false, response: ['id', 'parent_id', 'project'], stream: false },
+  { method: "GET", path: "/api/sessions/audit", handler: "sessions_audit", pathParams: [], query: ['legacy_spill'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "GET", path: "/api/sessions/catalog", handler: "sessions_catalog", pathParams: [], query: ['limit'], body: [], bodyOpen: false, response: ['count', 'sessions'], stream: false },
   { method: "GET", path: "/api/sessions/global/search", handler: "search_global", pathParams: [], query: ['q', 'limit'], body: [], bodyOpen: false, response: ['count', 'query', 'results'], stream: false },
-  { method: "DELETE", path: "/api/sessions/{session_id}", handler: "delete_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['deleted', 'id', 'ok'], stream: false },
+  { method: "POST", path: "/api/sessions/purge", handler: "sessions_purge", pathParams: [], query: [], body: ['apply', 'events', 'force', 'legacy_spill'], bodyOpen: false, response: [], stream: false },
+  { method: "DELETE", path: "/api/sessions/{session_id}", handler: "delete_session_endpoint", pathParams: ['session_id'], query: ['events'], body: [], bodyOpen: false, response: ['artifacts', 'bytes_freed', 'deleted', 'errors', 'id', 'ok'], stream: false },
   { method: "PATCH", path: "/api/sessions/{session_id}", handler: "patch_session", pathParams: ['session_id'], query: [], body: ['title'], bodyOpen: false, response: ['id', 'ok', 'title'], stream: false },
+  { method: "GET", path: "/api/sessions/{session_id}/artifacts", handler: "session_artifacts", pathParams: ['session_id'], query: ['events'], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/branch", handler: "branch_session_endpoint", pathParams: ['session_id'], query: ['copy_messages'], body: ['copy_messages'], bodyOpen: false, response: ['ok', 'session'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/distill", handler: "distill_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/end", handler: "end_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
@@ -248,9 +251,12 @@ export const API_PATHS: readonly string[] = [
   '/api/roundtable',
   '/api/runtime',
   '/api/sessions',
+  '/api/sessions/audit',
   '/api/sessions/catalog',
   '/api/sessions/global/search',
+  '/api/sessions/purge',
   '/api/sessions/{session_id}',
+  '/api/sessions/{session_id}/artifacts',
   '/api/sessions/{session_id}/branch',
   '/api/sessions/{session_id}/distill',
   '/api/sessions/{session_id}/end',

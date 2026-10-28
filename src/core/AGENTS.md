@@ -15,6 +15,10 @@ Núcleo del harness. Cambios acá afectan a TODO. Reglas:
 - **diagnostics.py** + **lsp_client.py**: diagnóstico post-edit (py_compile + pylsp). Degrada si no hay server.
 - **checkpoints.py**: snapshot ANTES de write/edit. **diffutil.py**: diffs. **board.py**: tareas/claims.
 - **session_log.py**: WAL+FTS; `delete_session` tiene guard FK (no orfanar hijos → 409).
+- **session_janitor.py**: dueño del borrado y la auditoría completos. `delete_session()` de acá
+  (no el de `session_log`) es el que usa la API: se lleva `todos`, `goals`, grants y los
+  directorios derivados. Si agregás un artefacto por sesión (nueva DB, nuevo dir), sumalo a
+  `collect()`/`_orphan_plan()`/`delete_session()` y exponé su ruta desde el módulo dueño.
 - **event_store.py**: fuente de eventos; `append`/`get_events`. No lo bloquees.
 
 Regla de oro: corré `py_compile` + `pytest -q` tras tocar cualquier archivo de acá.

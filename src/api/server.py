@@ -156,6 +156,22 @@ def _session_log():
     return _state["session_log"]
 
 
+def _session_db_path() -> Path:
+    """Archivo del session log en uso: `todos` y `goals` viven en el mismo.
+
+    Antes cada store tenía la ruta fija `data/session.db`, así que un test que
+    apuntaba el `session_log` a un temporal seguía escribiendo tareas en la base
+    real (y quedaban filas de sesiones de prueba para siempre).
+    """
+    try:
+        p = getattr(_session_log(), "db_path", None)
+        if p:
+            return Path(p)
+    except Exception:
+        pass
+    return _PROJECT_ROOT / "data" / "session.db"
+
+
 def _event_store():
     if "event_store" not in _state:
         try:
@@ -190,9 +206,10 @@ def _assign_overrides(cfg: dict | None) -> dict:
 
 def _build_compaction(cfg: dict):
     from src.core.compaction import CompactionPipeline
+    from src.core.environment import data_home
     ccfg = dict((cfg or {}).get("compaction", {}) or {})
     budget = dict(ccfg.get("budget", {}) or {})
-    pp = Path(budget.get("persist_dir", "./data/spill"))
+    pp = Path(budget.get("persist_dir") or (data_home() / "spill"))
     if not pp.is_absolute():
         pp = _PROJECT_ROOT / pp
     budget["persist_dir"] = str(pp)
@@ -2187,17 +2204,70 @@ async def create_session(request: Request):
 
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session_endpoint(session_id: str):
-    """Borra una sesión y sus mensajes (FK ON DELETE CASCADE + triggers FTS)."""
-    slog = _session_log()
+async def delete_session_endpoint(session_id: str, events: bool = False):
+    """Borra la sesión y TODO su rastro, no sólo la fila.
+
+    Un `DELETE FROM sessions` limpia mensajes, FTS y compaction_state, pero deja
+    `todos`, `goals`, los grants de aprobación y los directorios de checkpoints y
+    spill: eso es lo que se veía como "borré desde la UI y sigue estando".
+    """
+    from src.core import session_janitor
+
     try:
-        deleted = slog.delete_session(session_id)
+        res = session_janitor.delete_session(
+            session_id, db_path=_session_db_path(), events=events)
+    except session_janitor.SessionNotFound:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    except session_janitor.SessionHasChildren as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"no se puede borrar {session_id}: {e} — borrá primero las "
+                   "sesiones hijas (fork/branch)")
     except Exception as e:
         raise HTTPException(status_code=409,
-                            detail=f"no se puede borrar {session_id}: {e} — borrá primero las sesiones hijas (fork/branch)")
-    if not deleted:
-        raise HTTPException(status_code=404, detail="sesión no encontrada")
-    return {"ok": True, "deleted": True, "id": session_id}
+                            detail=f"no se puede borrar {session_id}: {e}")
+
+    # Estado efímero en memoria: si no se limpia, la sesión "vuelve" hasta el reinicio.
+    _SESSION_MODES.pop(session_id, None)
+    _save_session_modes()
+    _RUNNING.pop(session_id, None)
+
+    return {"ok": True, "deleted": True, "id": session_id,
+            "artifacts": res["deleted"], "bytes_freed": res["bytes_freed"],
+            "errors": res["errors"]}
+
+
+@app.get("/api/sessions/audit")
+async def sessions_audit(legacy_spill: bool = True):
+    """Radiografía de la base y de los artefactos que dejaron sesiones borradas.
+
+    Sólo lectura (`mode=ro`): auditar no puede cambiar nada.
+    """
+    from src.core import session_janitor
+    return session_janitor.audit(db_path=_session_db_path(),
+                                 legacy_spill=legacy_spill)
+
+
+@app.post("/api/sessions/purge")
+async def sessions_purge(request: Request):
+    """Limpia huérfanos. Sin `apply=true` es dry-run y sólo informa."""
+    from src.core import session_janitor
+    body = await _json_body(request, required=False)
+    return session_janitor.purge(
+        apply=bool(body.get("apply", False)),
+        db_path=_session_db_path(),
+        events=bool(body.get("events", False)),
+        legacy_spill=bool(body.get("legacy_spill", False)),
+        force=bool(body.get("force", False)),
+    )
+
+
+@app.get("/api/sessions/{session_id}/artifacts")
+async def session_artifacts(session_id: str, events: bool = False):
+    """Qué dejó una sesión en disco (exista o no en la base)."""
+    from src.core import session_janitor
+    return session_janitor.collect(session_id, db_path=_session_db_path(),
+                                   events=events)
 
 
 @app.get("/api/sessions/{session_id}/messages")
@@ -2970,7 +3040,7 @@ async def todos_get(session_id: str = ""):
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
     from src.core.todo_store import TodoStore as _TS
-    return _TS(db_path=_PROJECT_ROOT / "data" / "session.db").read(session_id)
+    return _TS(db_path=_session_db_path()).read(session_id)
 
 @app.post("/api/todos")
 async def todos_post(request: Request):
@@ -2981,13 +3051,13 @@ async def todos_post(request: Request):
         raise HTTPException(status_code=400, detail="session_id and todos required")
     from src.core.todo_store import TodoStore as _TS2
     try:
-        return _TS2(db_path=_PROJECT_ROOT / "data" / "session.db").write(sid, todos)
+        return _TS2(db_path=_session_db_path()).write(sid, todos)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 def _goal_store():
     from src.core.goal_store import GoalStore
-    return GoalStore(_PROJECT_ROOT / "data" / "session.db")
+    return GoalStore(_session_db_path())
 
 @app.get("/api/goals")
 async def goals_get(session_id: str = ""):
@@ -5741,7 +5811,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         parameters={"type": "object", "properties": {}, "additionalProperties": False})
 
     # --- todo_write (harness parity whole-list replacement) ---
-    _todo_store = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db", allow_parallel=True)
+    _todo_store = TodoStore(db_path=_session_db_path(), allow_parallel=True)
     def todo_write(todos):
         """Record and update a structured task list. Send ENTIRE list every call — it REPLACES previous. statuses pending|in_progress|completed."""
         if not isinstance(todos, list):
@@ -7013,7 +7083,7 @@ async def chat(request: Request):
         # El asistente ya lo persiste el AgentLoop (session_log=slog). No duplicar.
 
         try:
-            _t = TodoStore(db_path=_PROJECT_ROOT / "data" / "session.db").read(session_id)
+            _t = TodoStore(db_path=_session_db_path()).read(session_id)
         except Exception:
             _t = {"todos": [], "counts": {"pending":0,"inProgress":0,"completed":0}}
         perm_snap = cfg.get("scope", {}).get("permission", "workspace_write") if "cfg" in locals() else "workspace_write"

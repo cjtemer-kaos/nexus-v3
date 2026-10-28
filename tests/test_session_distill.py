@@ -52,7 +52,7 @@ class _FakeCompaction:
         self.compacted = False
     def maybe_compact(self, msgs, max_tokens, threshold=0.75):
         return True
-    async def compact(self, msgs, limit):
+    async def compact(self, msgs, limit, **kwargs):
         self.compacted = True
         return msgs, None
 

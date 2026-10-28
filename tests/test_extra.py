@@ -2,20 +2,21 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from src.core.compaction import CompactionPipeline
+from src.core.environment import data_home
 from src.core.event_store import EventStore
 from src.core.hooks_engine import HookAction, HookResult, HooksEngine
 from src.core.trajectory import Trajectory
 
 
-def test_compaction_maybe_compact_and_compact():
+def test_compaction_maybe_compact_and_compact(tmp_path):
     async def run():
+        destino = tmp_path / "spill"
         pipe = CompactionPipeline(
             {
                 "snip": {"keep_recent": 2},
-                "budget": {"max_tool_result_chars": 50, "persist_dir": "./data/spill"},
+                "budget": {"max_tool_result_chars": 50, "persist_dir": str(destino)},
                 "micro": {"placeholder": "[colapsado]"},
                 "summary": {"model_hint": "simple"},
             }
@@ -26,9 +27,11 @@ def test_compaction_maybe_compact_and_compact():
             + [{"role": "tool", "content": "tool result " * 200} for _ in range(3)]
         )
         need = pipe.maybe_compact(msgs, max_tokens=200, threshold=0.75)
-        assert need == True
+        assert need is True
         out, metrics = await pipe.compact(msgs, limit=300)
         assert len(out) < len(msgs) and metrics.tokens_saved > 0
+        # El offload va a un directorio del test, no al `data/spill` del usuario.
+        assert list(destino.glob("spill_*.txt"))
 
     asyncio.run(run())
 
@@ -43,9 +46,20 @@ def test_compaction_reactive():
     asyncio.run(run())
 
 
-def test_compaction_spill_persistence():
-    spill_files = list(Path("./data/spill").glob("spill_*.txt")) if Path("./data/spill").exists() else []
-    assert len(spill_files) >= 0
+def test_compaction_spill_persistence(tmp_path):
+    """Sin `persist_dir` el volcado cae en el data home, nunca en el CWD.
+
+    Antes el default era `"./data/spill"` relativo: si el backend arrancaba desde
+    otra carpeta, los volcados quedaban fuera del proyecto y la auditoría no los
+    veía. Ahora es absoluto dentro de `data/`; acá se verifica que el default
+    apunte ahí y que un `persist_dir` explícito siga mandando.
+    """
+    desde_cwd = CompactionPipeline({}).persist_dir
+    assert desde_cwd is not None and desde_cwd.is_absolute()
+    assert desde_cwd == data_home() / "spill"
+
+    explicito = CompactionPipeline({"budget": {"persist_dir": str(tmp_path)}}).persist_dir
+    assert explicito == tmp_path
 
 
 def test_event_store_append_replay_stats():

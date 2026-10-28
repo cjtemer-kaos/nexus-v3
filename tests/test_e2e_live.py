@@ -345,12 +345,19 @@ def test_hooks_and_git_checkpoints_endpoints():
     assert r.status_code == 404
 
 
-def test_compaction_state_endpoint_roundtrip():
-    from src.api.server import _session_log
-    log = _session_log()
+def test_compaction_state_endpoint_roundtrip(tmp_path, monkeypatch):
+    """El estado de compactación se prueba contra una DB temporal.
+
+    Antes usaba `_session_log()` (la de `data/session.db`) con id fijo: cada corrida
+    de la suite dejaba una sesión vacía `e2e-compact-state` en la base del usuario.
+    """
+    from src.api import server
+    from src.core.session_log import SessionLog
+
+    log = SessionLog(str(tmp_path / "session.db"))
+    monkeypatch.setitem(server._state, "session_log", log)
     sid = "e2e-compact-state"
-    if log.get_session(sid) is None:
-        log.create_session(project="test", session_id=sid)
+    log.create_session(project="test", session_id=sid)
     log.save_compaction_state(sid, tokens_before=900, tokens_after=300, saved=600,
                               layers=["snip", "summary"], summary="[resumen de contexto] e2e")
     r = client.get("/api/compaction/state", params={"session_id": sid})
@@ -360,6 +367,7 @@ def test_compaction_state_endpoint_roundtrip():
     assert body["state"]["tokens_before"] >= 900
     assert body["state"]["layers"] == ["snip", "summary"]
     assert client.get("/api/compaction/state").status_code == 400
+    log.close()
 
 
 def test_mcp_server_handle():
@@ -449,6 +457,75 @@ def test_session_branching_error_codes():
         assert t.status_code == 200 and t.json()["exists"] is True
     finally:
         client.delete(f"/api/sessions/{sid}")
+
+
+def test_delete_session_limpia_todos_y_goals(tmp_path, monkeypatch):
+    """Borrar la sesión tiene que llevarse `todos` y `goals`, que no tienen FK.
+
+    Sin esto el DELETE de `sessions` deja las dos filas apuntando a un id que ya no
+    existe: en la base real había 198 `todos` de sesiones borradas hace días.
+    """
+    from src.api import server
+    from src.core.goal_store import GoalStore
+    from src.core.session_log import SessionLog
+    from src.core.todo_store import TodoStore
+
+    log = SessionLog(str(tmp_path / "session.db"))
+    monkeypatch.setitem(server._state, "session_log", log)
+    sid = log.create_session(project="pytest").id
+    TodoStore(db_path=log.db_path).write(sid, [{"content": "una tarea", "status": "pending"}])
+    GoalStore(log.db_path).set(sid, "un objetivo")
+    assert TodoStore(db_path=log.db_path).read(sid)["todos"]
+    assert GoalStore(log.db_path).get(sid)["exists"] is True
+
+    r = client.delete(f"/api/sessions/{sid}")
+    assert r.status_code == 200, r.text
+
+    assert TodoStore(db_path=log.db_path).read(sid)["todos"] == []
+    assert GoalStore(log.db_path).get(sid)["exists"] is False
+    log.close()
+
+
+def test_session_janitor_endpoints(tmp_path, monkeypatch):
+    """Auditoría, inventario y purga expuestos por HTTP, con dry-run por defecto.
+
+    La purga con `apply=true` es la única operación destructiva y no se dispara
+    sin pedirla explícitamente.
+    """
+    from src.api import server
+    from src.core.session_log import Message, SessionLog
+    from src.core.todo_store import TodoStore
+
+    log = SessionLog(str(tmp_path / "session.db"))
+    monkeypatch.setitem(server._state, "session_log", log)
+    sid = log.create_session(project="pytest").id
+    log.append(sid, Message(role="user", content="hola"))
+    TodoStore(db_path=log.db_path).write(
+        sid, [{"content": "una tarea", "status": "pending"}])
+
+    r = client.get(f"/api/sessions/{sid}/artifacts")
+    assert r.status_code == 200, r.text
+    cuerpo = r.json()
+    assert cuerpo["exists"] is True
+    assert "todos" in cuerpo["leftovers"]
+
+    r = client.get("/api/sessions/audit")
+    assert r.status_code == 200, r.text
+    audit = r.json()
+    assert audit["sessions"] >= 1
+    assert {"findings", "totals", "ok"} <= set(audit)
+
+    r = client.post("/api/sessions/purge", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is True
+    # dry-run no borra: la sesión viva y su tarea siguen ahí.
+    assert TodoStore(db_path=log.db_path).read(sid)["todos"]
+
+    r = client.post("/api/sessions/purge", json={"apply": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is False
+    assert client.get(f"/api/sessions/{sid}/artifacts").json()["exists"] is True
+    log.close()
 
 
 def test_plugins_reload_reports_what_loaded():

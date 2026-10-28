@@ -431,3 +431,12 @@ _APPROVALS = Approvals()
 
 def get_approvals() -> Approvals:
     return _APPROVALS
+
+
+def approvals_db_path() -> Path:
+    """Archivo real de grants (mismo que usa el singleton, no una ruta fija).
+
+    Lo consulta el borrado de sesiones: los grants viven en otra DB y sin esto
+    quedaban apuntando a sesiones inexistentes.
+    """
+    return Path(_APPROVALS.store.db_path)

@@ -31,11 +31,23 @@ def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)[:40] or "tool"
 
 
+def spill_dir(session_id: str) -> Path:
+    """Carpeta de spill de una sesión (el nombre es un hash, no el id).
+
+    Público porque quien borra una sesión necesita resolver la misma carpeta que
+    este módulo creó; recalcular el hash afuera es cómo se pierden archivos.
+    """
+    return _spill_root() / session_id_key(session_id)
+
+
+def session_id_key(session_id: str) -> str:
+    return hashlib.sha1((session_id or "default").encode("utf-8")).hexdigest()[:12]
+
+
 def save_text(session_id: str, tool: str, text: str, call_id: str = "") -> Path | None:
     """Persiste el texto completo. Best-effort: si falla, no rompe el turno."""
     try:
-        sess = hashlib.sha1((session_id or "default").encode("utf-8")).hexdigest()[:12]
-        folder = _spill_root() / sess
+        folder = spill_dir(session_id)
         folder.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
         suffix = f"_{_safe(call_id)[:12]}" if call_id else ""

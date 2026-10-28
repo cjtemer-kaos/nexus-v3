@@ -56,10 +56,24 @@ def _checkpoints_root() -> Path:
     return data_home() / "git_checkpoints"
 
 
-def _session_key(session_id: str) -> str:
+def session_key(session_id: str) -> str:
+    """Nombre del repo de checkpoints: `<id saneado>-<sha1[:8]>`.
+
+    Público porque borrar una sesión tiene que resolver la misma carpeta que
+    este módulo creó; recalcular el hash afuera es cómo quedan repos huérfanos.
+    """
     raw = session_id or "default"
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")[:40] or "default"
     return f"{safe}-{hashlib.sha1(raw.encode('utf-8', 'replace')).hexdigest()[:8]}"
+
+
+def repo_dir(session_id: str) -> Path:
+    """Repo git de checkpoints de una sesión."""
+    return _checkpoints_root() / session_key(session_id)
+
+
+def _session_key(session_id: str) -> str:
+    return session_key(session_id)
 
 
 def _lock_for(gitdir: Path) -> threading.Lock:

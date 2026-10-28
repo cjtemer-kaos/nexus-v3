@@ -1076,9 +1076,11 @@ class AgentLoop:
                     if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
                         dict_msgs, cmetrics = await self.compaction.summarize_with_llm(
                             dict_msgs, _limit, self.router,
-                            previous_summary=_prev, progress_messages=_progress)
+                            previous_summary=_prev, progress_messages=_progress,
+                            session_id=session_id)
                     else:
-                        dict_msgs, cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                        dict_msgs, cmetrics = await self.compaction.compact(
+                            dict_msgs, _limit, session_id=session_id)
                     self._note_compaction(session_id, cmetrics, dict_msgs)
                     self._persist_compaction_summary(session_id, dict_msgs)
                     self._persist_compaction_state(session_id, cmetrics, dict_msgs)
@@ -1210,6 +1212,7 @@ class AgentLoop:
                             # El resumen de emergencia tiene que entrar en la ventana nueva.
                             dict_msgs = await self.compaction.reactive_compact(
                                 dict_msgs, err_str, limit=self._model_ctx_tokens,
+                                session_id=session_id,
                             )
                             messages = self._rebuild_messages(dict_msgs)
                             await _close_turn("compact-retry")
@@ -1656,9 +1659,11 @@ class AgentLoop:
                         if getattr(self, "router", None) is not None and hasattr(self.compaction, "summarize_with_llm"):
                             dict_msgs, _cmetrics = await self.compaction.summarize_with_llm(
                                 dict_msgs, _limit, self.router,
-                                previous_summary=_prev, progress_messages=_progress)
+                                previous_summary=_prev, progress_messages=_progress,
+                                session_id=session_id)
                         else:
-                            dict_msgs, _cmetrics = await self.compaction.compact(dict_msgs, _limit)
+                            dict_msgs, _cmetrics = await self.compaction.compact(
+                                dict_msgs, _limit, session_id=session_id)
                         self._note_compaction(session_id, _cmetrics, dict_msgs)
                         self._persist_compaction_summary(session_id, dict_msgs)
                         self._persist_compaction_state(session_id, _cmetrics, dict_msgs)

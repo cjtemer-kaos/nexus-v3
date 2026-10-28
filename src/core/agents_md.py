@@ -1,4 +1,4 @@
-"""AGENTS.md jerárquico (estilo Claude Code).
+"""AGENTS.md jerárquico.
 
 Lee el AGENTS.md del root del proyecto + los AGENTS.md de los directorios ancestros de
 los paths relevantes, y los concatena para inyectar en el system prompt. Así el agente
@@ -26,8 +26,13 @@ def find_agents_md(paths, project_root, max_files: int = 8) -> list[tuple[str, s
             rel = str(md.relative_to(root)).replace("\\", "/")
         except Exception:
             return
-        if rel not in found:
-            found[rel] = _read(md)
+        if rel in found:
+            return
+        content = _read(md)
+        # Un AGENTS.md inexistente o vacío sólo aportaría un encabezado sin
+        # reglas: se omite para no gastar presupuesto en nada.
+        if content.strip():
+            found[rel] = content
 
     add(root / "AGENTS.md")
     for p in paths or []:
@@ -49,20 +54,33 @@ def find_agents_md(paths, project_root, max_files: int = 8) -> list[tuple[str, s
     return sorted(found.items())[:max_files]
 
 
-def system_block(paths, project_root, max_chars: int = 6000) -> str:
-    """Bloque para el system prompt ("" si no hay AGENTS.md)."""
+_HEADER = "\n\nGUIA DEL PROYECTO (AGENTS.md jerárquico; seguí estas reglas):\n"
+_MIN_CHUNK = 200
+
+
+def system_block(paths, project_root, max_chars: int = 12000) -> str:
+    """Bloque para el system prompt ("" si no hay AGENTS.md).
+
+    El presupuesto es total, pero **no descarta archivos en silencio**: si un
+    AGENTS.md no entra completo se recorta y se marca `(recortado)`. Antes, en
+    cuanto el del root crecía, el del subdirectorio desaparecía sin aviso y el
+    agente perdía justo las reglas de la carpeta que iba a tocar.
+    """
     items = find_agents_md(paths, project_root)
     if not items:
         return ""
     parts: list[str] = []
-    total = 0
+    total = len(_HEADER)
     for rel, content in items:
         chunk = f"## {rel}\n{content.strip()}\n"
-        if total + len(chunk) > max_chars:
+        restante = max_chars - total
+        if restante < _MIN_CHUNK:
             break
+        if len(chunk) > restante:
+            corte = chunk.rfind("\n", 0, restante - 1)
+            chunk = chunk[:corte if corte > 0 else restante - 1] + "\n(recortado)\n"
         parts.append(chunk)
         total += len(chunk)
     if not parts:
         return ""
-    return ("\n\nGUIA DEL PROYECTO (AGENTS.md jerárquico; seguí estas reglas):\n"
-            + "\n".join(parts))
+    return _HEADER + "\n".join(parts)

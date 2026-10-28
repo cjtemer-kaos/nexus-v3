@@ -41,16 +41,23 @@ def test_checkpoints_viven_en_el_proyecto(monkeypatch):
     from src.core import checkpoints
 
     monkeypatch.delenv("NEXUS_CHECKPOINTS_DIR", raising=False)
-    assert checkpoints._ROOT.is_absolute()
-    assert checkpoints._ROOT == _ROOT / "data" / "checkpoints"
+    # `_ROOT` se fija al importar y la suite redirige el data home a tmp; lo que
+    # se verifica es la decisión: sin env, la raíz cuelga del data home (que en
+    # producción es `<proyecto>/data`), nunca del CWD.
+    from src.core.environment import data_home
+
+    raiz = checkpoints._checkpoints_root()
+    assert raiz.is_absolute()
+    assert raiz == data_home() / "checkpoints"
 
 
 def test_provider_models_cache_vive_en_el_proyecto(monkeypatch):
     from src.core import provider_models
+    from src.core.environment import data_home
 
     monkeypatch.delenv("NEXUS_PROVIDER_MODELS_CACHE", raising=False)
     assert provider_models._cache_path().is_absolute()
-    assert provider_models._cache_path() == _ROOT / "data" / "provider_models.json"
+    assert provider_models._cache_path() == data_home() / "provider_models.json"
 
 
 def test_new_agent_loop_aplica_config():

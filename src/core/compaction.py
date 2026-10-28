@@ -170,7 +170,13 @@ class CompactionPipeline:
         self.prune_max_chars: int = int(
             prune_cfg.get("max_tool_result_chars", 4000))
 
-        persist_dir_raw = budget_cfg.get("persist_dir", "./data/spill")
+        persist_dir_raw = budget_cfg.get("persist_dir")
+        if persist_dir_raw is None:
+            # Default dentro de `data/` y absoluto: "./data/spill" relativo al
+            # CWD dejaba los volcados fuera del proyecto si el backend arrancaba
+            # desde otra carpeta (mismo bug que tuvieron los checkpoints).
+            from src.core.environment import data_home
+            persist_dir_raw = str(data_home() / "spill")
         self.persist_dir: Path | None = Path(persist_dir_raw) if persist_dir_raw else None
 
     # ------------------------------------------------------------------
@@ -179,6 +185,7 @@ class CompactionPipeline:
     async def compact(
         self, messages: list[dict], limit: int, *,
         include_summary_fallback: bool = True,
+        session_id: str = "",
     ) -> tuple[list[dict], CompactionMetrics]:
         t0 = time.monotonic()
         original_tokens = _estimate_messages_tokens(messages)
@@ -197,7 +204,7 @@ class CompactionPipeline:
         # L2 Micro
         if _estimate_messages_tokens(out) > limit:
             before = _estimate_messages_tokens(out)
-            out = self._micro(out)
+            out = self._micro(out, session_id)
             after = _estimate_messages_tokens(out)
             lm = LayerMetrics(name="micro", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail="placeholder collapsed")
             metrics.layers.append(lm)
@@ -206,7 +213,7 @@ class CompactionPipeline:
         # L3 Budget
         if _estimate_messages_tokens(out) > limit:
             before = _estimate_messages_tokens(out)
-            out = self._budget(out)
+            out = self._budget(out, session_id)
             after = _estimate_messages_tokens(out)
             lm = LayerMetrics(name="budget", input_tokens=before, output_tokens=after, tokens_saved=max(0, before - after), ratio=after / before if before else 1.0, applied=True, detail=f"max_chars={self.max_tool_result_chars}")
             metrics.layers.append(lm)
@@ -254,6 +261,7 @@ class CompactionPipeline:
         model_hint: str | None = None,
         previous_summary: str = "",
         progress_messages: int = 0,
+        session_id: str = "",
     ) -> tuple[list[dict], CompactionMetrics]:
         """L4 con LLM barato. Presupuesto dinamico, reuso y cooldown.
 
@@ -272,7 +280,7 @@ class CompactionPipeline:
         ]
         rest = [m for m in original if _msg_role(m) != "system"]
         if len(rest) <= self.keep_recent + 1:
-            return await self.compact(original, limit)
+            return await self.compact(original, limit, session_id=session_id)
         middle = rest[: -self.keep_recent]
         recent = rest[-self.keep_recent:]
         middle_count = len(middle)
@@ -301,7 +309,7 @@ class CompactionPipeline:
             and (time.monotonic() - self._summary_failed_at)
             < self.summary_failure_cooldown_s
         ):
-            return await self.compact(original, limit)
+            return await self.compact(original, limit, session_id=session_id)
 
         # Poco progreso desde el resumen anterior: reusarlo sin otra llamada.
         if prev and progress_messages < self.summary_min_progress:
@@ -311,7 +319,7 @@ class CompactionPipeline:
             if out is not None:
                 self._record_summary_metric(metrics, original, out, "reuse")
                 return out, metrics
-            return await self.compact(original, limit)
+            return await self.compact(original, limit, session_id=session_id)
 
         hint = model_hint or self.summary_model_hint
         budget = self.summary_budget(limit)
@@ -335,7 +343,7 @@ class CompactionPipeline:
                     except Exception:
                         routed = None
             if routed is None:
-                return await self.compact(original, limit)
+                return await self.compact(original, limit, session_id=session_id)
 
             # El material de entrada debe ser mayor que el resumen objetivo.
             middle_chars = max(12000, min(200000, budget * 8))
@@ -396,14 +404,14 @@ class CompactionPipeline:
                 system_msgs, summary_text, recent, reused=False, limit=limit,
                 omitted=middle_count, latest_prompt=latest_prompt)
             if out is None:
-                return await self.compact(original, limit)
+                return await self.compact(original, limit, session_id=session_id)
             self._summary_failed_at = 0.0
             self._record_summary_metric(metrics, original, out, f"llm={routed.model}")
             return out, metrics
         except Exception:
             # LLM summary failed — cooldown y fallback L1-L3.
             self._summary_failed_at = time.monotonic()
-            return await self.compact(original, limit)
+            return await self.compact(original, limit, session_id=session_id)
 
     def _build_summary_output(
         self, system_msgs: list[Any], summary_text: str, recent: list[Any], *,
@@ -590,7 +598,7 @@ class CompactionPipeline:
         marker = {"role": "system", "content": f"[recorte: {omitted} mensajes omitidos — compactado en {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}]"}
         return system + [marker] + keep
 
-    def _micro(self, messages: list[dict]) -> list[dict]:
+    def _micro(self, messages: list[dict], session_id: str = "") -> list[dict]:
         # Los últimos N resultados de tools son el contexto vivo del turno:
         # colapsarlos mata lo que el modelo acaba de pedir.
         tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
@@ -603,23 +611,27 @@ class CompactionPipeline:
                 continue
             if m.get("role") == "tool" and len(c) > self.max_tool_result_chars:
                 # Persist full if dir configured
-                if self.persist_dir is not None:
-                    self._persist_content(c, m)
+                if self.persist_dir is not None or session_id:
+                    self._persist_content(c, m, session_id)
                 out.append({**m, "content": self.micro_placeholder})
             else:
                 out.append(m)
         return out
 
-    def _budget(self, messages: list[dict]) -> list[dict]:
+    def _budget(self, messages: list[dict], session_id: str = "") -> list[dict]:
         out: list[dict] = []
         for m in messages:
             c = _content_str(m)
             if c and len(c) > self.max_tool_result_chars and m.get("role") != "system":
                 preview = c[: self.max_tool_result_chars]
                 remaining = len(c) - len(preview)
-                if self.persist_dir is not None:
-                    self._persist_content(c, m)
-                    suffix = f"\n[...truncado {remaining} caracteres — completo persistido en {self.persist_dir}/ — vista previa arriba]"
+                # El archivo se nombra en el mensaje: sin la ruta exacta el
+                # agente lee un "persistido en data/spill/" y no lo encuentra.
+                donde = self._persist_content(c, m, session_id) if (
+                    self.persist_dir is not None or session_id) else None
+                if donde is not None:
+                    suffix = (f"\n[...truncado {remaining} caracteres — completo en "
+                              f"{donde.as_posix()} — vista previa arriba]")
                 else:
                     suffix = f"\n[...truncado {remaining} caracteres]"
                 out.append({**m, "content": preview + suffix})
@@ -649,7 +661,23 @@ class CompactionPipeline:
         marker = {"role": "system", "content": f"[respaldo resumen emergencia: {len(rest)-len(keep)} mensajes descartados]"}
         return system + [marker] + trimmed
 
-    def _persist_content(self, content: str, msg: dict) -> Path | None:
+    def _persist_content(self, content: str, msg: dict,
+                         session_id: str = "") -> Path | None:
+        """Guarda el contenido completo descartado y devuelve su ruta.
+
+        Con `session_id` va a la carpeta de spill de esa sesión, así el borrado
+        de la sesión se lo lleva junto con el resto de su rastro. Antes caía
+        plano en `data/spill/spill_<ts>_<hash>.txt`, sin dueño: no había forma
+        de saber de qué sesión era ni de borrarlo con ella.
+        """
+        if session_id:
+            try:
+                from src.core.spill import save_text
+                p = save_text(session_id, "compaction", content)
+                if p is not None:
+                    return p
+            except Exception:
+                pass
         if self.persist_dir is None:
             return None
         try:
@@ -667,7 +695,8 @@ class CompactionPipeline:
     # Emergency reactive (BLUEPRINT §9.2)
     # ------------------------------------------------------------------
     async def reactive_compact(self, messages: list[dict], error: str,
-                               limit: int | None = None) -> list[dict]:
+                               limit: int | None = None,
+                               session_id: str = "") -> list[dict]:
         """Emergency: parse context_limit from error and compact aggressively.
 
         Handles patterns:
@@ -685,7 +714,7 @@ class CompactionPipeline:
 
             limit = limit_from_error(error)
         target = int(limit * 0.60) if limit else 8000
-        compacted, _ = await self.compact(messages, target)
+        compacted, _ = await self.compact(messages, target, session_id=session_id)
         # Cline exige que el request de recovery sea ESTRICTAMENTE menor antes
         # de reintentar: reintentar con el mismo tamano vuelve a fallar y quema
         # un turno. Longitud serializada es un proxy lineal suficiente.
