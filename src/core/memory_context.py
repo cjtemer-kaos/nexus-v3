@@ -216,7 +216,13 @@ def build_memory_context(
 
             memory = get_knowledge_memory()
         _t_search = time.monotonic()
-        hits = memory.search_terms(terms, limit=max(limit * 3, 8), per_term=24)
+        try:
+            # Los episodios de sesion repiten el pedido entero y ganaban el
+            # ranking; el conocimiento curado quedaba fuera del turno.
+            hits = memory.search_terms(terms, limit=max(limit * 3, 8), per_term=24,
+                                       exclude_sessions=True)
+        except TypeError:
+            hits = memory.search_terms(terms, limit=max(limit * 3, 8), per_term=24)
         _search_ms = (time.monotonic() - _t_search) * 1000.0
     except Exception as e:
         logger.debug("memory_context: busqueda omitida: %s", e)

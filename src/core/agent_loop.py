@@ -1095,9 +1095,15 @@ class AgentLoop:
         # Sin esto cada sesion empieza de cero: repite errores ya resueltos o
         # concluye "no esta disponible" cuando el grafo tiene la respuesta.
         try:
-            _pk = await self._prior_knowledge_block(task)
-            if _pk and messages and messages[0].role == "system":
-                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _pk)
+            # El server ya inyecta su bloque (memory_context, con rerank y
+            # telemetria); esto cubre a los loops que corren sin server (MCP,
+            # ACP, agent_run). Sin la guarda el prompt llevaba dos bloques de
+            # memoria con el mismo titulo y el modelo no sabia cual mandaba.
+            _sys_actual = (messages[0].content or "") if messages and messages[0].role == "system" else ""
+            if "MEMORIA DEL GRAFO (recuperada" not in _sys_actual:
+                _pk = await self._prior_knowledge_block(task)
+                if _pk and messages and messages[0].role == "system":
+                    messages[0] = LLMMessage(role="system", content=_sys_actual + _pk)
         except Exception as e:
             logger.debug("memoria proactiva no disponible: %s", e)
 
@@ -1667,9 +1673,19 @@ class AgentLoop:
                     if _tot is None:
                         _tot = {}
                         self._tool_total = _tot  # type: ignore[attr-defined]
-                    _tn = _tot.get(tool_name, 0) + 1
-                    _tot[tool_name] = _tn
-                    if _tn == self.anti_loop_tool_warn:
+                    # `mcp_call` es el transporte de 100+ tools distintas: contar
+                    # llamadas globales corta trabajo real (un analisis de binario
+                    # hace 10-20 mcp_call seguidos, cada una una tool diferente). El
+                    # bucle de verdad es la MISMA tool MCP con los MISMOS args, y eso
+                    # ya lo detecta `_fp` arriba.
+                    _clave = tool_name
+                    if tool_name == "mcp_call" and isinstance(tool_args, dict):
+                        _clave = f"mcp_call:{tool_args.get('server') or ''}"
+                    _tn = _tot.get(_clave, 0) + 1
+                    _tot[_clave] = _tn
+                    _warn = 40 if tool_name == "mcp_call" else self.anti_loop_tool_warn
+                    _stop = 80 if tool_name == "mcp_call" else self.anti_loop_tool_stop
+                    if _tn == _warn:
                         if tool_name in ("job_read", "job_wait"):
                             # Polling en incrementos minimos fue el bucle real
                             # observado: job_read(cursor=0), luego cursor=100, 200...
@@ -1681,6 +1697,12 @@ class AgentLoop:
                                 "`max_chars` (hasta 200000) o usa `job_wait` con ese mismo `cursor` para "
                                 "recibir todo junto cuando el proceso termine. Si ya tenes lo necesario, "
                                 "responde con eso.")
+                        elif tool_name == "mcp_call":
+                            _aviso = (
+                                f"[recordatorio del sistema] ya hiciste {_tn} llamadas MCP en este turno. "
+                                "Si no estas avanzando, deja de explorar: anota lo obtenido, usa lo que ya "
+                                "sabes y empeza a producir (escribir archivos, correr lo que creaste). No "
+                                "repitas la misma tool con los mismos argumentos.")
                         else:
                             _aviso = (
                                 f"[recordatorio del sistema] ya llamaste '{tool_name}' {_tn} veces en este "
@@ -1689,7 +1711,7 @@ class AgentLoop:
                                 "resumir en un comando, code_search para buscar) en vez de repetir la misma "
                                 "herramienta, y responde con lo que ya tengas.")
                         messages.append(LLMMessage(role="user", content=_aviso))
-                    elif _tn >= self.anti_loop_tool_stop:
+                    elif _tn >= _stop:
                         final_output = (
                             f"[bucle de herramienta: '{tool_name}' llamada {_tn} veces sin llegar a una "
                             "respuesta final — turno detenido para no agotar el presupuesto]")
