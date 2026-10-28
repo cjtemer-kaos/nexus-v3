@@ -6412,7 +6412,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         except Exception:
             return []
 
-    async def mcp_list(server: str = "") -> str:
+    async def mcp_list(server: str = "", filter: str = "", full: bool = False) -> str:
         """Lista los servidores MCP del bundle y sus tools (server vacío = solo servidores)."""
         import json as _j
         from src.core.mcp_client import get_mcp_client
@@ -6437,13 +6437,47 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if nombres and server not in nombres:
             raise ValueError(f"servidor MCP desconocido: {server}. "
                              f"Disponibles: {', '.join(sorted(nombres))}")
-        return _j.dumps({"server": server, "tools": await asyncio.to_thread(cli.list_tools, server)}, ensure_ascii=False)
+        tools = await asyncio.to_thread(cli.list_tools, server)
+        # Los schemas completos de un servidor grande no entran en el contexto:
+        # `rea` son 138 tools y 569 KB (~142k tokens). El modelo no podia leerlos,
+        # asi que inventaba nombres ("analyze") y el run abortaba. Por defecto va
+        # nombre + resumen corto; los schemas quedan en full=True o con filter.
+        filtro = (filter or "").strip().lower()
+        total_servidor = len(tools)
+        if filtro:
+            def _coincide(t: dict) -> bool:
+                texto = f"{t.get('name') or ''} {t.get('description') or ''}".lower()
+                return filtro in texto
+            tools = [t for t in tools if _coincide(t)]
+        if full:
+            return _j.dumps({
+                "server": server, "total": total_servidor, "mostradas": len(tools), "tools": tools,
+                "como_usar": f'mcp_call(server="{server}", tool="<tool>", arguments={{...}})',
+            }, ensure_ascii=False)
+
+        def _resumen(t: dict) -> str:
+            d = " ".join(str(t.get("description") or "").split())
+            return d[:70] + ("…" if len(d) > 70 else "")
+
+        return _j.dumps({
+            "server": server,
+            "total": total_servidor,
+            "mostradas": len(tools),
+            "tools": [{"name": t.get("name"), "resumen": _resumen(t)} for t in tools],
+            "como_usar": (f'mcp_call(server="{server}", tool="<tool>", arguments={{...}}). '
+                          f'Para los argumentos de una tool puntual: '
+                          f'mcp_list(server="{server}", filter="<texto>", full=true).'),
+        }, ensure_ascii=False)
     registry.register_function(
         mcp_list, name="mcp_list",
-        description="Lista servidores MCP del bundle portable y sus tools. server='' lista servidores; server='<nombre>' lista sus tools (arranca el servidor just-in-time).",
+        description=("Lista servidores MCP del bundle y sus tools. server='' lista servidores; "
+                     "server='<nombre>' lista sus tools en formato compacto (nombre + resumen). "
+                     "filter acota por texto y full=True devuelve los schemas completos."),
         category="mcp",
         parameters={"type": "object", "properties": {
             "server": {"type": "string", "description": "Nombre del servidor MCP (vacío = listar servidores)."},
+            "filter": {"type": "string", "description": "Texto para acotar tools por nombre o descripción."},
+            "full": {"type": "boolean", "description": "Devolver los JSON Schema completos (usar con filter)."},
         }, "required": [], "additionalProperties": False},
     )
 
@@ -6460,6 +6494,28 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
         except KeyError as e:
             raise ValueError(str(e).strip("'\"")) from None
+        except Exception as e:
+            # Una tool mal escrita no puede matar el run: el modelo necesita la
+            # lista para corregir el nombre y seguir (antes el error "Tool
+            # analyze not found" se clasificaba fatal y abortaba todo).
+            texto_err = str(e)
+            if "not found" in texto_err.lower() or "unknown tool" in texto_err.lower():
+                disponibles: list = []
+                try:
+                    disponibles = [t.get("name") for t in
+                                   await asyncio.to_thread(cli.list_tools, server)]
+                except Exception:
+                    pass
+                return _j.dumps({
+                    "server": server, "tool": tool, "isError": True,
+                    "content": texto_err,
+                    "available_tools": disponibles,
+                    "como_usar": (f'la tool no existe en {server}. Elegi un nombre de '
+                                  f'available_tools y repeti mcp_call; los argumentos de una '
+                                  f'tool puntual: mcp_list(server="{server}", filter="<texto>", '
+                                  f'full=true)'),
+                }, ensure_ascii=False)
+            raise
         # "Tool ... not found" sin la lista obliga al modelo a adivinar el nombre
         # correcto (y con 45 tools en playwright, adivinar es caro).
         texto = str(res.get("content") if isinstance(res, dict) else res or "")
@@ -6472,7 +6528,9 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         return _j.dumps(res, ensure_ascii=False)
     registry.register_function(
         mcp_call, name="mcp_call",
-        description="Llama una tool de un servidor MCP del bundle. Usa mcp_list para descubrir server/tool/args.",
+        description=("Llama una tool de un servidor MCP del bundle. Usa mcp_list para descubrir "
+                     "server/tool/args. Si el nombre de la tool no existe, devuelve "
+                     "available_tools en vez de abortar."),
         category="mcp",
         parameters={"type": "object", "properties": {
             "server": {"type": "string", "description": "Nombre del servidor MCP."},

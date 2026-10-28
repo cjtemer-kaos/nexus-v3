@@ -65,6 +65,12 @@ def classify_error(tool: str, err: str, *, context: dict | None = None) -> Error
         # "red" como subcadena matchea 'rendered'/'redacted': exigir frase de red.
         _is_net = (" de red" in _low) or ("permitir_red" in _low) or ("network" in _low)
         return ErrorAction.ABORT if (_is_net or "permission" in _low) else ErrorAction.SKIP
+    # "Tool X not found" NO es fatal: es un nombre mal escrito. Si cae en
+    # _FATAL_PATTERNS el run aborta en vez de dejar que el agente corrija el
+    # nombre (paso con mcp_call -> "Tool analyze not found" en REA).
+    if re.search(r"tool\b[^\n]{0,80}\bnot found|unknown tool|herramienta\b[^\n]{0,80}\bno encontrada",
+                 err.lower()):
+        return ErrorAction.REPLAN
     if _matches(err, _FATAL_PATTERNS):
         # Some fatals are SKIP if tool is optional
         if context and context.get("optional"):

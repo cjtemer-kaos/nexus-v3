@@ -109,3 +109,64 @@ def test_pista_cuando_cmd_lee_la_ruta_como_modificador():
     assert "list_dir" in pista
     # Un error de modificador sin barra en el comando no inventa esa pista.
     assert _cmd_shell_hint("dir C:\\x", out) == ""
+
+
+def test_mcp_list_compacto_y_con_filtro():
+    """`rea` son 138 tools y 569 KB de schemas: el modelo no podia leerlos, asi que
+    inventaba nombres ("analyze") y el run abortaba. Por defecto va nombre + resumen."""
+    async def run():
+        from src.api.server import _build_approval_context
+        cfg, reg = _registry()
+        appr = _build_approval_context(cfg, "t", source="chat", interactive=True)
+        reg.approval = appr
+
+        out = await reg.dispatch("mcp_list", {"server": "rea"}, approval=appr, session_id="t")
+        d = json.loads(out)
+        assert len(out) < 20000, f"el listado compacto no puede pesar {len(out)} chars"
+        assert d["total"] >= 50, d["total"]
+        assert all("name" in t for t in d["tools"])
+        assert "mcp_call" in d["como_usar"]
+
+        out2 = await reg.dispatch("mcp_list", {"server": "rea", "filter": "annotate"},
+                                  approval=appr, session_id="t")
+        d2 = json.loads(out2)
+        assert 0 < d2["mostradas"] < d2["total"], d2["mostradas"]
+        assert len(out2) < 3000, len(out2)
+
+        out3 = await reg.dispatch("mcp_list", {"server": "rea", "filter": "annotate_native_function",
+                                               "full": True}, approval=appr, session_id="t")
+        d3 = json.loads(out3)
+        assert d3["mostradas"] == 1
+        # full=True trae el schema de argumentos, no solo el nombre.
+        assert (d3["tools"][0].get("input_schema") or {}).get("properties")
+
+    asyncio.run(run())
+
+
+def test_mcp_call_con_tool_inexistente_devuelve_la_lista_y_no_aborta():
+    """En la corrida real el modelo llamo mcp_call(tool='analyze') y el run murio con
+    "[abortado: mcp_call -> Tool analyze not found]". Un nombre mal escrito tiene que
+    devolver available_tools para que el agente corrija y siga."""
+    async def run():
+        from src.api.server import _build_approval_context
+        cfg, reg = _registry()
+        appr = _build_approval_context(cfg, "t", source="chat", interactive=True)
+        reg.approval = appr
+        out = await reg.dispatch("mcp_call",
+                                 {"server": "rea", "tool": "analyze", "arguments": {}},
+                                 approval=appr, session_id="t")
+        d = json.loads(out)
+        assert d["isError"] is True
+        assert d["available_tools"], "sin la lista el modelo vuelve a adivinar"
+        assert "analyze" not in d["available_tools"]
+
+    asyncio.run(run())
+
+
+def test_tool_not_found_no_es_error_fatal():
+    """El clasificador mandaba "Tool X not found" a ABORT (matchea `not found`)."""
+    from src.core.error_classifier import ErrorAction, classify_error
+    assert classify_error("mcp_call", "Tool analyze not found") == ErrorAction.REPLAN
+    assert classify_error("mcp_call", "Unknown tool: analyze") == ErrorAction.REPLAN
+    # Un archivo inexistente sigue siendo fatal: no se reintenta a ciegas.
+    assert classify_error("read_file", "no such file: C:\\x") == ErrorAction.ABORT
