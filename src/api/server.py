@@ -337,29 +337,11 @@ def _wordset(s: str) -> set[str]:
 def _fts_search_tolerant(km, query: str, limit: int = 20) -> list[dict]:
     """Busca en el grafo sin perder nodos por culpa del AND de `fts_search`.
 
-    `fts_search` envuelve cada token y los une con AND, asi que una consulta de
-    varias palabras ("barrido prueba dedupe") devuelve 0 aunque el nodo exista y
-    el RAG lo encuentre. Si la busqueda estricta viene vacia y hay 2+ terminos
-    utiles, se cae a `search_terms` (consulta por termino, fusion RRF + IDF).
+    La implementacion vive en core/knowledge_memory para que el loop tambien la
+    use al consultar la memoria antes de empezar un turno.
     """
-    import re as _re
-    q = (query or "").strip()
-    if not q:
-        return []
-    limit = max(1, min(100, int(limit)))
-    try:
-        hits = km.fts_search(q, limit=limit) or []
-    except Exception:
-        hits = []
-    if hits:
-        return hits
-    terms = [t for t in _re.findall(r"\w{3,}", q.lower())]
-    if len(terms) < 2:
-        return []
-    try:
-        return km.search_terms(terms, limit=limit) or []
-    except Exception:
-        return []
+    from src.core.knowledge_memory import fts_search_tolerant
+    return fts_search_tolerant(km, query, limit)
 
 
 def _near_dup(km, content: str, threshold: float = 0.5) -> bool:
@@ -6481,7 +6463,8 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         }, "required": [], "additionalProperties": False},
     )
 
-    async def mcp_call(server: str, tool: str, arguments: dict | None = None) -> str:
+    async def mcp_call(server: str, tool: str, arguments: dict | None = None,
+                       timeout: int = 600) -> str:
         """Llama una tool de un servidor MCP del bundle (stdio, just-in-time)."""
         import json as _j
         from src.core.mcp_client import get_mcp_client
@@ -6490,8 +6473,27 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
         if nombres and server not in nombres:
             raise ValueError(f"servidor MCP desconocido: {server}. "
                              f"Disponibles: {', '.join(sorted(nombres))}")
+        # 180s (el default del cliente) no alcanza para analisis de binarios:
+        # `binary_overview` de emule.exe tarda ~220s en Ghidra y el agente recibia
+        # un timeout como si el servidor estuviera roto.
         try:
-            res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
+            _to = max(10, min(int(timeout or 600), 1800))
+        except Exception:
+            _to = 600
+        # Clientes viejos o dobles de test no aceptan el 4o argumento: se llama
+        # sin timeout en vez de reventar el turno por un detalle de firma.
+        try:
+            import inspect as _inspect
+            _params = _inspect.signature(cli.call).parameters
+            _acepta_to = ("timeout" in _params
+                          or any(p.kind == p.VAR_POSITIONAL for p in _params.values()))
+        except Exception:
+            _acepta_to = True
+        try:
+            if _acepta_to:
+                res = await asyncio.to_thread(cli.call, server, tool, arguments or {}, _to)
+            else:
+                res = await asyncio.to_thread(cli.call, server, tool, arguments or {})
         except KeyError as e:
             raise ValueError(str(e).strip("'\"")) from None
         except Exception as e:
@@ -6536,6 +6538,7 @@ def _build_registry(scope, session_id: str, cfg: dict | None = None, router=None
             "server": {"type": "string", "description": "Nombre del servidor MCP."},
             "tool": {"type": "string", "description": "Nombre de la tool."},
             "arguments": {"type": "object", "description": "Argumentos de la tool (JSON)."},
+            "timeout": {"type": "integer", "description": "Segundos de espera (10-1800, por defecto 600). Subilo para análisis de binarios."},
         }, "required": ["server", "tool"], "additionalProperties": False},
     )
 

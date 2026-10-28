@@ -53,6 +53,50 @@ _STOPWORDS = {
     "con", "que", "se", "no", "es", "en",
 }
 
+# Nodos que el propio harness crea por sesion (episodios). Contienen el pedido
+# textual completo, asi que en cualquier busqueda por frase ganan por cantidad de
+# coincidencias y tapan el conocimiento real: se excluyen al consultar memoria.
+_SESSION_CATEGORIES = {"episodio", "episode", "sesion", "session"}
+_SESSION_TITLE_PREFIXES = ("sesion ", "session ", "episodio ")
+
+# Palabras que no discriminan en un pedido (verbos de encargo y muletillas).
+_QUERY_STOPWORDS = _STOPWORDS | {
+    "quiero", "quiere", "queres", "necesito", "necesita", "podes", "puedes",
+    "podrias", "ayuda", "ayudame", "hace", "hacer", "hacelo", "hagas", "usar",
+    "uses", "usando", "utiliza", "version", "programa", "aplicacion", "app",
+    "algo", "todo", "todos", "toda", "todas", "nada", "muy", "mas", "menos",
+    "sigue", "recibe", "viva", "vivo", "viejo", "vieja", "lento", "lenta",
+    "mejor", "mejorada", "mejorar", "actualizaciones", "actualizacion",
+    "servidores", "servidor", "red", "pero", "porque", "sobre", "desde",
+    "entre", "hasta", "cuando", "donde", "quien", "cual", "esto", "esta",
+    "este", "estos", "estas", "esos", "esas", "ese", "esa", "otro", "otra",
+    "sus", "tus", "mis", "nuestro", "nuestra", "nuestros", "nuestras",
+    "segun", "ademas", "tambien", "solo", "sino", "aunque", "mientras",
+}
+
+
+def _is_session_node(category: Any, title: Any) -> bool:
+    """True si el nodo lo genero una sesion (no es conocimiento curado)."""
+    c = _fold_text(str(category or "")).strip()
+    if c in _SESSION_CATEGORIES:
+        return True
+    t = _fold_text(str(title or "")).strip()
+    return any(t.startswith(p) for p in _SESSION_TITLE_PREFIXES)
+
+
+def query_terms(text: str, limit: int = 8) -> list[str]:
+    """Terminos utiles de un pedido: 3+ letras, sin muletillas, sin repetir."""
+    folded = _fold_text(text or "")
+    out: list[str] = []
+    for t in re.findall(r"[a-z0-9_]{3,}", folded):
+        if t in _QUERY_STOPWORDS or t.isdigit() or t in out:
+            continue
+        out.append(t[:40])
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
 _ENTITY_PATTERNS = [
     re.compile(r'"([^"\n]{3,60})"'),
     re.compile(r"'([^'\n]{3,60})'"),
@@ -710,7 +754,8 @@ class KnowledgeMemory:
         finally:
             con.close()
 
-    def search_terms(self, terms: list[str], limit: int = 10, per_term: int = 24) -> list[dict]:
+    def search_terms(self, terms: list[str], limit: int = 10, per_term: int = 24,
+                     *, exclude_sessions: bool = False) -> list[dict]:
         """Busca terminos sueltos y fusiona por rango reciproco ponderado por IDF.
 
         `fts_search` une todos los tokens con AND, asi que una frase larga en
@@ -718,6 +763,9 @@ class KnowledgeMemory:
         una coincidencia fuerte no se pierde porque otra palabra no este en el
         nodo. `matches` se verifica sobre el contenido completo del candidato,
         no sobre el top de cada termino (con LIMIT chico la interseccion daba 0).
+
+        `exclude_sessions` descarta los episodios que el harness crea por sesion:
+        repiten el pedido entero y siempre ganan, tapando el nodo que responde.
         """
         clean: list[str] = []
         for t in terms or []:
@@ -728,6 +776,9 @@ class KnowledgeMemory:
             return []
         limit = max(1, min(50, int(limit)))
         per_term = max(1, min(40, int(per_term)))
+        if exclude_sessions:
+            # al filtrar se descartan filas: hay que mirar mas hondo por termino
+            per_term = min(40, per_term * 3)
         scores: dict[int, float] = {}
         meta: dict[int, dict] = {}
         con = self._connect()
@@ -744,7 +795,7 @@ class KnowledgeMemory:
                 idf = math.log(1.0 + total / (1.0 + df))
                 rows = con.execute(
                     """SELECT n.id, n.title, n.category, n.topic_key, n.revision_count,
-                              n.updated_at, n.content_hash,
+                              n.updated_at, n.content_hash, n.importance,
                               snippet(nodes_fts, 1, '«', '»', '...', 12) AS snip,
                               bm25(nodes_fts) AS rank
                        FROM nodes_fts JOIN nodes n ON n.id = nodes_fts.rowid
@@ -752,6 +803,8 @@ class KnowledgeMemory:
                     (f'"{term}"', per_term),
                 ).fetchall()
                 for pos, r in enumerate(rows):
+                    if exclude_sessions and _is_session_node(r["category"], r["title"]):
+                        continue
                     nid = int(r["id"])
                     scores[nid] = scores.get(nid, 0.0) + idf / (60.0 + pos)
                     if nid not in meta:
@@ -765,6 +818,7 @@ class KnowledgeMemory:
                             "content_hash": r["content_hash"],
                             "snippet": r["snip"],
                             "rank": float(r["rank"] or 0.0),
+                            "importance": int(r["importance"] or 5),
                         }
             ranked = sorted(scores, key=lambda nid: scores[nid], reverse=True)[: max(limit * 4, 24)]
             contents: dict[int, str] = {}
@@ -774,6 +828,18 @@ class KnowledgeMemory:
                     f"SELECT id, content FROM nodes WHERE id IN ({marks})", ranked
                 ):
                     contents[int(r["id"])] = _fold_text(r["content"] or "")
+
+            # RRF comprime las diferencias (1/(60+pos) casi no varia entre puestos),
+            # asi que el nodo que responde quedaba empatado con el que solo nombra
+            # la palabra. Se desempata por cobertura de terminos e importancia.
+            def _ajustado(nid: int) -> float:
+                text = contents.get(nid, "")
+                cov = sum(1 for t in clean
+                          if re.search(rf"\b{re.escape(t)}\b", text)) if text else 1
+                imp = int(meta[nid].get("importance") or 5)
+                return scores[nid] * (1.0 + 0.75 * (cov - 1)) * (1.0 + 0.03 * (imp - 5))
+
+            ranked.sort(key=_ajustado, reverse=True)
         finally:
             con.close()
         out: list[dict] = []
@@ -1319,3 +1385,38 @@ def reset_knowledge_memory() -> None:
         _km = None
         _SCHEMA_DONE.clear()
         _hybrid_backends.clear()
+
+
+def fts_search_tolerant(km, query: str, limit: int = 20,
+                        *, exclude_sessions: bool = False) -> list[dict]:
+    """Busca en el grafo sin perder nodos por culpa del AND de `fts_search`.
+
+    `fts_search` envuelve cada token y los une con AND, asi que una consulta de
+    varias palabras ("analizar binario con rea") devuelve 0 aunque el nodo exista.
+    Si la busqueda estricta no alcanza y hay 2+ terminos utiles, se cae a
+    `search_terms` (consulta por termino, fusion RRF + IDF) con los terminos ya
+    limpiados de muletillas: "quiero que uses rea para analizarlo" buscaba
+    "quiero", "uses" y "para" antes que "rea".
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    limit = max(1, min(100, int(limit)))
+    try:
+        hits = km.fts_search(q, limit=limit) or []
+    except Exception:
+        hits = []
+    if exclude_sessions:
+        hits = [h for h in hits if not _is_session_node(h.get("category"), h.get("title"))]
+    if hits:
+        return hits
+    terms = query_terms(q)
+    if len(terms) < 2:
+        return []
+    try:
+        return km.search_terms(terms, limit=limit, exclude_sessions=exclude_sessions) or []
+    except TypeError:
+        # un km viejo/fake sin el parametro nuevo: no romper el turno
+        return km.search_terms(terms, limit=limit) or []
+    except Exception:
+        return []

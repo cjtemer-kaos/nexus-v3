@@ -336,6 +336,51 @@ class AgentLoop:
         # las iteraciones (y cada compactación disparaba destilado + LLM de resumen).
         self._no_recompact_below: dict[str, int] = {}
 
+    def _count_tools_tokens(self, openai_tools) -> int:
+        """Tokens de los JSON Schema de las tools (viajan en cada request)."""
+        try:
+            if not openai_tools:
+                return 0
+            import json as _json
+            return len(_json.dumps(openai_tools, ensure_ascii=False)) // 4
+        except Exception:
+            return 0
+
+    async def _prior_knowledge_block(self, task: str) -> str:
+        """Lo que el grafo ya sabe de este pedido, listo para el system prompt.
+
+        Nexus es autonomo si arranca sabiendo. Se consulta la memoria siempre (no
+        solo cuando el usuario dice "grafo"): si hay nodos, se citan con su id para
+        que el modelo use esos valores; si no hay, se le pide investigar y guardar,
+        porque aprender es parte de la tarea, no un extra.
+        """
+        texto = " ".join((task or "").split())
+        if len(texto) < 12:
+            return ""
+        from .knowledge_memory import fts_search_tolerant, get_knowledge_memory
+        km = get_knowledge_memory()
+        # exclude_sessions: los episodios que el harness crea por sesion repiten el
+        # pedido entero y ganaban siempre, tapando el nodo con la respuesta.
+        hits = await asyncio.to_thread(
+            fts_search_tolerant, km, texto[:400], 6, exclude_sessions=True)
+        filas: list[str] = []
+        for h in (hits or [])[:3]:
+            titulo = " ".join(str(h.get("title") or "").split())[:120]
+            snip = " ".join(str(h.get("snippet") or "").replace("[", "").replace("]", "")
+                            .replace("«", "").replace("»", "").split())[:320]
+            if not titulo and not snip:
+                continue
+            filas.append(f"- {titulo} (nodo {h.get('id')}): {snip}")
+        if filas:
+            return ("\n\nMEMORIA DEL GRAFO (consultada automaticamente para este pedido; "
+                    "si un dato contradice lo que ves ahora, comprobalo y corregi el nodo):\n"
+                    + "\n".join(filas)
+                    + "\nSi al resolver aparecen datos nuevos o corregidos, guardalos con learn.")
+        return ("\n\nMEMORIA DEL GRAFO: no hay entradas para este pedido. Si la tarea depende "
+                "de como funciona una herramienta, un protocolo o una API que no esta en el "
+                "grafo, buscala en internet (web_search/web_fetch), verifica el dato y guardalo "
+                "con learn (una entrada por tema, con la fuente) antes de cerrar el turno.")
+
     async def _resolve_model_context_window(self, hint: str | None) -> None:
         """Anota la ventana de contexto real del modelo que va a atender el turno.
 
@@ -396,6 +441,10 @@ class AgentLoop:
                 est_tokens = int(self.compaction.estimate_tokens_for_messages(dict_msgs))
             except Exception:
                 est_tokens = 0
+        # Los schemas de tools ocupan contexto igual que los mensajes: sin sumarlos
+        # el disparo de compactacion llega tarde y el request real desborda.
+        tools_n = int(getattr(self, "_tools_tokens_n", 0) or 0)
+        est_tokens += tools_n
         floor = int(self._no_recompact_below.get(session_id, 0) or 0)
         if floor and est_tokens <= floor:
             return False
@@ -403,6 +452,11 @@ class AgentLoop:
             self._last_est_tokens = est_tokens  # type: ignore[attr-defined]
         except Exception:
             pass
+        if tools_n > 0:
+            # `maybe_compact` estima SOLO los mensajes, asi que se le pasa un tope
+            # equivalente que ya descuenta los schemas: mismo umbral, cuenta real.
+            _thr = max(0.05, float(self.compact_threshold or 0.75))
+            max_tokens = max(1, int(round(max_tokens - tools_n / _thr)))
         return bool(self.compaction.maybe_compact(dict_msgs, max_tokens, self.compact_threshold))
 
     def _note_compaction(self, session_id: str, metrics: Any, dict_msgs: list[dict]) -> None:
@@ -1037,6 +1091,16 @@ class AgentLoop:
         except Exception:
             pass
 
+        # Memoria proactiva: el agente arranca sabiendo lo que ya se aprendio.
+        # Sin esto cada sesion empieza de cero: repite errores ya resueltos o
+        # concluye "no esta disponible" cuando el grafo tiene la respuesta.
+        try:
+            _pk = await self._prior_knowledge_block(task)
+            if _pk and messages and messages[0].role == "system":
+                messages[0] = LLMMessage(role="system", content=(messages[0].content or "") + _pk)
+        except Exception as e:
+            logger.debug("memoria proactiva no disponible: %s", e)
+
         # Ayudantes + gemas disponibles (lo inyecta el server para que el agente delegue).
         if extra_system and messages and messages[0].role == "system":
             try:
@@ -1197,6 +1261,12 @@ class AgentLoop:
             except Exception as e:
                 logger.debug(f"pin de la request falló: {e}")
 
+        # Los schemas de las tools viajan en CADA request y no estaban contados:
+        # con 53 tools son ~7.3k tokens, asi que el arnes se creia 4x mas holgado,
+        # compactaba a los 6.6k de 24k y el resumen (800 tokens) se comia la lista
+        # de tools que el agente acababa de pedir.
+        self._tools_tokens_n = self._count_tools_tokens(openai_tools)  # type: ignore[attr-defined]
+
         # Main loop
         iteration = 0
         _persistio_final = False
@@ -1258,7 +1328,7 @@ class AgentLoop:
                 if self.compaction is not None:
                     try:
                         _request_estimate = self.compaction.estimate_tokens_for_messages(
-                            self._to_dicts(_payload))
+                            self._to_dicts(_payload)) + int(getattr(self, "_tools_tokens_n", 0) or 0)
                     except Exception:
                         _request_estimate = 0
                 _perf_prep_ms += (time.monotonic() - _t_prep) * 1000.0

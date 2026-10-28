@@ -413,6 +413,14 @@ class CompactionPipeline:
             summary_text = summary_text.strip()
             if not summary_text:
                 raise ValueError("resumen vacio")
+            # Los resultados de tools no se pierden aunque el modelo se corte a
+            # mitad de frase: van como indice determinista al final del resumen.
+            try:
+                _duros = self._datos_duros(middle)
+                if _duros:
+                    summary_text = summary_text.rstrip() + "\n\n" + _duros
+            except Exception:
+                pass
             out = self._build_summary_output(
                 system_msgs, summary_text, recent, reused=False, limit=limit,
                 omitted=middle_count, latest_prompt=latest_prompt)
@@ -497,6 +505,41 @@ class CompactionPipeline:
         budget = max(self.summary_min_tokens, budget)
         budget = min(self.summary_max_tokens, budget)
         return max(128, budget)
+
+    def _datos_duros(self, middle: list[dict]) -> str:
+        """Indice deterministico de lo que el resumen NO puede perder.
+
+        El resumen lo escribe un modelo chico y se corta a mitad de frase: en la
+        sesion 66a0f1e3972c quedo "Se lista" y desaparecio la lista de 138 tools
+        de REA que el agente acababa de pedir. Esto se calcula del historial (no
+        se genera), asi que sobrevive a cualquier recorte del texto del modelo.
+        """
+        nombres: dict[str, str] = {}
+        for m in middle:
+            for tc in (m.get("tool_calls") or []):
+                _fn = tc.get("function") or {}
+                _id = str(tc.get("id") or "")
+                _n = str(_fn.get("name") or "")
+                if _id and _n:
+                    nombres[_id] = _n
+        vistos: dict[str, str] = {}
+        orden: list[str] = []
+        for m in middle:
+            if _msg_role(m) != "tool":
+                continue
+            nombre = nombres.get(str(m.get("tool_call_id") or ""), "") or "tool"
+            texto = " ".join(_msg_content(m).split())
+            if not texto:
+                continue
+            if nombre not in vistos:
+                orden.append(nombre)
+            # el ULTIMO resultado de cada tool es el que el agente tenia a mano
+            vistos[nombre] = texto[:160]
+        if not orden:
+            return ""
+        lineas = [f"- {n}: {vistos[n]}" for n in orden[-12:]]
+        return ("[resultados de tools del tramo resumido — copiados del historial, no resumidos]\n"
+                + "\n".join(lineas))
 
     def _summary_msg(self, omitted: int, summary_text: str, *, reused: bool) -> dict:
         label = "reutilizado" if reused else "actualizado"
