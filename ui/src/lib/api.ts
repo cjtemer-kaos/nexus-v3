@@ -227,6 +227,37 @@ export async function chatStreamApi(
 }
 
 
+export type SesionEvento =
+  | { type: 'hello'; session_id: string; running: boolean }
+  | { type: 'start'; task: string }
+  | { type: 'delta'; text: string }
+  | { type: 'step'; iteration: number; phase: string; content: string; tool_used?: string | null; result?: string | null }
+  | { type: 'round'; n: number; total: number; tools: number }
+  | { type: 'done'; success: boolean; iterations: number; reply: string; error?: string | null }
+
+/**
+ * Espejo en vivo de una sesión: el turno puede haberlo lanzado otro cliente
+ * (la API, un script, un sub-agente, otra ventana). Sin esto la UI sólo se
+ * enteraba recargando la página, con el run corriendo a ciegas durante horas.
+ */
+export async function sesionEventosApi(
+  sessionId: string,
+  onEvento: (e: SesionEvento) => void,
+): Promise<() => void> {
+  const base = await getBackendUrl()
+  const url = `${base}/api/sessions/${encodeURIComponent(sessionId)}/events`
+  const es = new EventSource(url)
+  es.onmessage = (m) => {
+    if (!m.data || m.data === '[DONE]') return
+    try {
+      onEvento(JSON.parse(m.data) as SesionEvento)
+    } catch {
+      /* evento no-JSON: ignorar */
+    }
+  }
+  return () => es.close()
+}
+
 export async function healthApi(): Promise<{ status: string; version: string; brain: unknown; providers: Record<string, unknown> }> {
   const res = await apiFetch("/api/health");
   if (!res.ok) throw new Error(`health ${res.status}`);

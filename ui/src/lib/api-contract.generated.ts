@@ -4,7 +4,7 @@
 
 
 /** Versión del contrato: hash del contenido. Cambia si cambia una ruta. */
-export const API_CONTRACT_VERSION = "8eb8b9520516"
+export const API_CONTRACT_VERSION = "aae53420902e"
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -131,6 +131,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "GET", path: "/api/sessions/{session_id}/context", handler: "session_context", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['breakdown', 'compact_at', 'heaviest', 'limit', 'messages_replayed', 'messages_total', 'note', 'pct', 'pinned', 'session_id', 'threshold', 'tools', 'used', 'window'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/distill", handler: "distill_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/end", handler: "end_session_endpoint", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: ['ok', 'result'], stream: false },
+  { method: "GET", path: "/api/sessions/{session_id}/events", handler: "session_events", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: [], stream: true },
   { method: "GET", path: "/api/sessions/{session_id}/export", handler: "export_session", pathParams: ['session_id'], query: [], body: [], bodyOpen: false, response: [], stream: false },
   { method: "POST", path: "/api/sessions/{session_id}/fork", handler: "session_fork", pathParams: ['session_id'], query: [], body: ['copy_messages'], bodyOpen: false, response: ['id', 'ok'], stream: false },
   { method: "GET", path: "/api/sessions/{session_id}/messages", handler: "get_messages", pathParams: ['session_id'], query: ['limit', 'offset'], body: [], bodyOpen: false, response: ['count', 'messages', 'session_id'], stream: false },
@@ -271,6 +272,7 @@ export const API_PATHS: readonly string[] = [
   '/api/sessions/{session_id}/context',
   '/api/sessions/{session_id}/distill',
   '/api/sessions/{session_id}/end',
+  '/api/sessions/{session_id}/events',
   '/api/sessions/{session_id}/export',
   '/api/sessions/{session_id}/fork',
   '/api/sessions/{session_id}/messages',

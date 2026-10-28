@@ -7568,12 +7568,29 @@ async def chat(request: Request):
         except Exception:
             pass
         _perf["kb"] = _time.monotonic()
+        # Lo que corre por API tambien se ve en la UI: cada paso/delta se publica en
+        # el bus de la sesion (SSE /api/sessions/{id}/events). Antes el turno lanzado
+        # desde un script no emitia nada y habia que recargar para ver el avance.
+        async def _publicar_paso(step: dict) -> None:
+            if step:
+                _publicar_sesion(session_id, type="step", **step)
+
+        async def _publicar_delta(texto: str) -> None:
+            if texto:
+                _publicar_sesion(session_id, type="delta", text=texto)
+
+        _publicar_sesion(session_id, type="start", task=message[:400])
+        # Registro del turno en curso: /api/status y el "hello" del SSE lo usan para
+        # decir "hay un run andando" incluso durante los silencios del modelo.
+        _RUNNING[session_id] = {"steer": [], "started": _time.time(), "source": "api"}
         result = await loop.run(task=message, session_id=session_id, hint=hint,
                                 force_tools=bool(body.get("force_tools", False)),
                                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
                                 images=images or None,
                                 system_prompt=_sys or None,
-                                extra_system=(_extra or None))
+                                extra_system=(_extra or None),
+                                steer=(lambda: _steer_drain(session_id)) if session_id else None,
+                                on_step=_publicar_paso, on_delta=_publicar_delta)
         # Continuacion por rondas: una tarea de ingenieria no entra en un turno y
         # el modelo tiende a cerrar con "que falta" en vez de seguir trabajando.
         # Con continue_rounds el harness vuelve a entrar mientras la ronda
@@ -7620,6 +7637,8 @@ async def chat(request: Request):
             logger.info("continuacion %d/%d sesion %s: el turno uso %d tools",
                         _ronda, _rondas, session_id,
                         sum(1 for s in result.steps if getattr(s, "phase", "") == "act"))
+            _publicar_sesion(session_id, type="round", n=_ronda, total=_rondas,
+                             tools=sum(1 for s in result.steps if getattr(s, "phase", "") == "act"))
             result = await loop.run(
                 # El pedido original va textual: la continuacion decia "segui con
                 # la tarea" sin objeto, y despues de una compactacion "la tarea"
@@ -7636,6 +7655,8 @@ async def chat(request: Request):
                 force_tools=bool(body.get("force_tools", False)),
                 model=body.get("model") or (_agent_cfg or {}).get("model") or None,
                 system_prompt=_sys or None,
+                steer=(lambda: _steer_drain(session_id)) if session_id else None,
+                on_step=_publicar_paso, on_delta=_publicar_delta,
             )
         _perf["loop"] = _time.monotonic()
 
@@ -7655,6 +7676,9 @@ async def chat(request: Request):
         )
         _memory_audit_close(session_id, _batch, result)
         _spawn_bg(_memory_extract(cfg, session_id, message, result))
+        _publicar_sesion(session_id, type="done", success=bool(result.success),
+                         iterations=int(getattr(result, "iterations", 0) or 0),
+                         reply=(result.final_output or "")[:2000])
 
         # El asistente ya lo persiste el AgentLoop (session_log=slog). No duplicar.
 
@@ -7688,6 +7712,8 @@ async def chat(request: Request):
         fallback = f"[offline echo] Recibido: {message}\n\n(Providers no disponibles o error: {e}. El arnés está en modo offline. Configura Ollama :11434 y reintenta.)"
         slog.append(session_id, Message(role="assistant", content=fallback))
         return {"session_id": session_id, "reply": fallback, "success": False, "mode": "echo_fallback", "error": str(e)}
+    finally:
+        _RUNNING.pop(session_id, None)
 
 
 @app.get("/api/gemas")
@@ -8378,6 +8404,21 @@ async def ws_chat(ws: WebSocket):
     except Exception:
         try: await ws.close()
         except Exception: pass
+def _publicar_sesion(session_id: str, **event) -> None:
+    """Publica un evento del turno en el bus de la sesion (nunca lanza).
+
+    Un run puede durar horas y puede haberlo lanzado cualquier cliente: sin esto
+    la UI solo veia el resultado recargando la pagina.
+    """
+    if not session_id:
+        return
+    try:
+        from src.core import session_bus as _bus
+        _bus.publish(session_id, event)
+    except Exception:
+        pass
+
+
 async def _turn_events(message: str, session_id: str, model: str, agent_id: str = "",
                        level: int | None = None, level_note: str = "",
                        gema: str | None = None, hint: str | None = None):
@@ -8388,10 +8429,14 @@ async def _turn_events(message: str, session_id: str, model: str, agent_id: str 
     """
     import asyncio as _aio
     q: _aio.Queue = _aio.Queue()
+    # El id real recien se conoce cuando se reusa/crea la sesion: el bus se
+    # actualiza ahi y los espectadores ven el turno en vivo desde el primer paso.
+    _sid: dict = {"v": session_id}
 
     async def _on_delta(text: str):
         if text:
             await q.put({"delta": text})
+            _publicar_sesion(_sid["v"], type="delta", text=text)
 
     async def _on_reasoning(text: str):
         if text:
@@ -8400,6 +8445,7 @@ async def _turn_events(message: str, session_id: str, model: str, agent_id: str 
     async def _on_step(step: dict):
         if step:
             await q.put({"step": step})
+            _publicar_sesion(_sid["v"], type="step", **step)
 
     task = None
     sess = None
@@ -8417,6 +8463,8 @@ async def _turn_events(message: str, session_id: str, model: str, agent_id: str 
         sess = slog.get_session(session_id) if session_id else None
         if sess is None:
             sess = slog.create_session(project="sse")
+        _sid["v"] = sess.id
+        _publicar_sesion(sess.id, type="start", task=message[:400])
         _RUNNING[sess.id] = {"steer": [], "started": __import__("time").time()}
         task = _aio.create_task(_run_agent_once(
             message,
@@ -8472,6 +8520,8 @@ async def _turn_events(message: str, session_id: str, model: str, agent_id: str 
             import contextlib as _ctx
             with _ctx.suppress(BaseException):
                 await task
+    _publicar_sesion(_sid["v"], type="done", success=bool(ok), error=(err or None),
+                     iterations=int(iters_out or 0), reply=(reply or "")[:2000])
     yield {
         "reply": reply,
         "session_id": (sess.id if sess is not None else session_id),
@@ -8529,6 +8579,43 @@ async def sse_chat_post(request: Request):
         level=lvl,
         level_note=note,
     )
+
+@app.get("/api/sessions/{session_id}/events")
+async def session_events(session_id: str):
+    """SSE con el trabajo de la sesion, venga de donde venga.
+
+    La UI se suscribe por `session_id`, asi ve en vivo el turno aunque lo haya
+    lanzado otro cliente (API, script, sub-agente, otra ventana) en vez de tener
+    que recargar para descubrir que paso.
+    """
+    from src.core import session_bus as _bus
+
+    sub = _bus.subscribe(session_id)
+
+    async def gen():
+        import json as _js
+        corriendo = session_id in _RUNNING
+        yield "data: " + _js.dumps(
+            {"type": "hello", "session_id": session_id, "running": corriendo},
+            ensure_ascii=False) + "\n\n"
+        try:
+            while True:
+                try:
+                    ev = await asyncio.wait_for(sub.queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield "data: " + _js.dumps(ev, ensure_ascii=False) + "\n\n"
+                if ev.get("type") == "done":
+                    break
+        finally:
+            _bus.unsubscribe(session_id, sub)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def _spa_fallback(full_path: str, request: Request):

@@ -7,7 +7,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useAppStore, type ChatMessage } from '@/store/app-store'
 import { cn } from '@/lib/utils'
-import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, rewindSessionApi, sessionExportApi, type UploadResult, type Usage } from '@/lib/api'
+import { chatApi, chatStreamApi, steerSessionApi, sessionModeApi, apiFetch, uploadApi, voiceTtsApi, usageApi, rewindSessionApi, sessionExportApi, sesionEventosApi, type UploadResult, type Usage } from '@/lib/api'
 import { VoiceMic } from '@/components/chat/VoiceMic'
 import { ApplyPatchResult } from '@/components/chat/ApplyPatchResult'
 import { Markdown } from '@/components/chat/Markdown'
@@ -144,6 +144,9 @@ export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isStreaming, setIsStreaming] = useState(false)
+  // Run ajeno a esta ventana (API, script, sub-agente): se sigue por SSE para no
+  // tener que recargar la pagina para ver que esta pasando.
+  const [vivo, setVivo] = useState<{ ronda: number; total: number; herramienta: string; chars: number } | null>(null)
   const [reasoning, setReasoning] = useState('')
   const [showReasoning, setShowReasoning] = useState(false)
   const busyRef = useRef(false)  // guard anti doble-send (el state no es sincrónico)
@@ -196,6 +199,42 @@ export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
     busyRef.current = false
     void loadMessages(activeSession)
   }, [activeSession, loadMessages])
+
+  // Espejo en vivo del turno: si lo lanzó otro cliente (API, script, otra ventana)
+  // esta ventana no recibía nada y había que recargar a mano para ver el avance.
+  useEffect(() => {
+    if (!activeSession || isStreaming) { setVivo(null); return }
+    let cerrado = false
+    let limpiar: (() => void) | undefined
+    let refresco: ReturnType<typeof setTimeout> | undefined
+    void sesionEventosApi(activeSession, (e) => {
+      if (cerrado) return
+      if (e.type === 'hello') {
+        // El turno puede llevar minutos sin publicar (una sola llamada al modelo):
+        // el "hello" alcanza para mostrar que hay un run andando desde el arranque.
+        if (e.running) setVivo((prev) => prev || { ronda: 0, total: 0, herramienta: '', chars: 0 })
+      } else if (e.type === 'start') {
+        setVivo({ ronda: 0, total: 0, herramienta: '', chars: 0 })
+      } else if (e.type === 'step') {
+        setVivo((prev) => ({ ronda: prev?.ronda ?? 0, total: prev?.total ?? 0, herramienta: e.tool_used || e.phase || '', chars: prev?.chars ?? 0 }))
+        setLastSteps((prev) => [...(prev || []), e as any])
+      } else if (e.type === 'delta') {
+        setVivo((prev) => ({ ronda: prev?.ronda ?? 0, total: prev?.total ?? 0, herramienta: prev?.herramienta ?? '', chars: (prev?.chars ?? 0) + e.text.length }))
+      } else if (e.type === 'round') {
+        setVivo({ ronda: e.n, total: e.total, herramienta: '', chars: 0 })
+        // La ronda anterior ya quedó persistida: traerla para que se lea el avance
+        // sin esperar a que termine el pedido entero (puede durar horas).
+        if (refresco) clearTimeout(refresco)
+        refresco = setTimeout(() => { void loadMessages(activeSession) }, 600)
+      } else if (e.type === 'done') {
+        setVivo(null)
+        // El turno lo cerró otro cliente: traer lo persistido sin recargar la app.
+        refresco = setTimeout(() => { void loadMessages(activeSession) }, 400)
+      }
+    }).then((fn) => { if (cerrado) fn(); else limpiar = fn })
+      .catch(() => { /* sin SSE (backend viejo): queda el refresh manual */ })
+    return () => { cerrado = true; if (refresco) clearTimeout(refresco); limpiar?.() }
+  }, [activeSession, isStreaming, loadMessages])
 
   // Tokens/costo de la sesión en el header.
   useEffect(() => {
@@ -941,7 +980,7 @@ export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
         )}
         {(lastSteps && lastSteps.length>0) && (
           <div className="rounded-xl border border-[#2C3037] bg-[#1E2127] p-3 text-xs">
-            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trayectoria: {lastSteps.length} pasos {isStreaming && <span className="text-[#FFB86B]">· en vivo</span>} {showTraj? '▾':'▸'}</button>
+            <button onClick={()=>setShowTraj(v=>!v)} className="flex items-center gap-2 font-semibold text-[#EDEEF0]"><Eye className="h-3.5 w-3.5" /> Trayectoria: {lastSteps.length} pasos {(isStreaming || !!vivo) && <span className="text-[#FFB86B]">· en vivo</span>} {showTraj? '▾':'▸'}</button>
             {showTraj && <div className="mt-2 space-y-2 max-h-64 overflow-auto">{lastSteps.map((s:any,i:number)=>(<div key={i} className="rounded-lg border border-[#2C3037] bg-[#15171B] p-2"><div className="flex gap-2 text-[#9BA1AA]">#{s.iteration} <span className="text-[#4C9DFF]">{s.phase}</span> {s.tool_used && <span className="text-[#FFB86B]">{s.tool_used}</span>}</div><div className="mt-1 whitespace-pre-wrap text-[#EDEEF0]">{String(s.content||'').slice(0,600)}</div></div>))}</div>}
           </div>
         )}
@@ -957,6 +996,17 @@ export function ChatPanel({ sessionId, paneId = 0 }: ChatPanelProps = {}) {
             {showReasoning && (
               <div className="max-h-60 overflow-auto border-t border-[#2C3037] px-3 py-2 text-xs leading-relaxed text-[#C9D2E0] whitespace-pre-wrap break-words">{reasoning}</div>
             )}
+          </div>
+        )}
+        {vivo && !isStreaming && (
+          <div className="flex items-center gap-2 self-start rounded-xl border border-[#4C9DFF]/25 bg-[#4C9DFF]/10 px-3 py-2 text-xs text-[#8CC1FF]">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#4C9DFF]" />
+            <span>
+              Nexus está trabajando
+              {vivo.ronda > 0 && vivo.total > 0 ? ` · ronda ${vivo.ronda}/${vivo.total}` : ''}
+              {vivo.herramienta ? ` · ${vivo.herramienta}` : ''}
+            </span>
+            {vivo.chars > 0 && <span className="text-[#9BA1AA]">({vivo.chars} caracteres)</span>}
           </div>
         )}
         {isStreaming && (
