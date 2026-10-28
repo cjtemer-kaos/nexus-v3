@@ -735,6 +735,42 @@ class AgentLoop:
                 continue
             if len(out) >= 5:
                 break
+        # 2) Escáner de invocaciones en XML, la otra forma en que los modelos
+        # escriben la llamada como texto (visto con deepseek-v4.1-flash tras una
+        # compactación): <invoke name="repl"><parameter name="code">…</parameter>
+        # </invoke>. Sin esto el turno cerraba con el XML crudo como respuesta
+        # final y el trabajo quedaba a medias, sin error visible.
+        for _bm in _re2.finditer(
+                r"(?is)<(?:antml:)?invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)</(?:antml:)?invoke>",
+                content):
+            _nm = _bm.group(1).strip()
+            if names and _nm not in names:
+                _lc = {n.lower(): n for n in names}
+                if _nm.lower() not in _lc:
+                    continue
+                _nm = _lc[_nm.lower()]
+            _body = _bm.group(2)
+            _args: dict = {}
+            for _pm in _re2.finditer(
+                    r"(?is)<(?:antml:)?parameter\s+name\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:antml:)?parameter>",
+                    _body):
+                _val = _pm.group(2)
+                for _a, _b in (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'),
+                               ("&apos;", "'"), ("&amp;", "&")):
+                    _val = _val.replace(_a, _b)
+                _args[_pm.group(1).strip()] = _val
+            if not _args:
+                # Variante corta: <invoke name="repl"><code>…</code></invoke>
+                for _km in _re2.finditer(r"(?is)<([a-zA-Z_]\w*)\s*>(.*?)</\1>", _body):
+                    _args[_km.group(1)] = _km.group(2)
+            if not _args:
+                continue
+            try:
+                out.append(ToolCall(id=f"text-{len(out)}", name=_nm, arguments=_args))
+            except Exception:
+                continue
+            if len(out) >= 5:
+                break
         return out
 
     def _emit_cycle(self, trajectory: Trajectory, kind: str, iteration: int, content: str = "", duration_ms: float = 0.0, end_reason: str = "", tokens: int = 0, model: str = "") -> None:
